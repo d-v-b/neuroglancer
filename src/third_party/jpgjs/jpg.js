@@ -927,8 +927,10 @@ var PDFJS;
         return data;
       },
       _isColorConversionNeeded: function isColorConversionNeeded() {
-        if (this.adobe && this.adobe.transformCode) {
-          return true;
+        // An Adobe marker decides: transform 0 means the components are
+        // stored as RGB (or CMYK), with no colour conversion.
+        if (this.adobe) {
+          return !!this.adobe.transformCode;
         } else if (this.numComponents === 3) {
           return true;
         } else {
@@ -1100,7 +1102,9 @@ var PDFJS;
         }
         var data = this._getLinearizedBlockData(width, height);
         if (this.numComponents === 3) {
-          return this._convertYccToRgb(data);
+          return this._isColorConversionNeeded()
+            ? this._convertYccToRgb(data)
+            : data;
         } else if (this.numComponents === 4) {
           if (this._isColorConversionNeeded()) {
             if (forceRGBoutput) {
