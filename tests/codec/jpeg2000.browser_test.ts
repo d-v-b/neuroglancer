@@ -62,6 +62,25 @@ test("decodes like OpenJPEG", async () => {
   }
 });
 
+test("converts subsampled YCbCr (Aperio 33003) to RGB like OpenJPEG", async () => {
+  // Three components, the second and third subsampled 2:1 horizontally, no
+  // colour transform signalled: OpenJPEG (imagecodecs, which wrote the
+  // expected pixels) converts them from YCbCr. The codestream is lossy (9/7
+  // wavelet), which hayro-jpeg2000 0.4 decodes within a few levels of
+  // OpenJPEG on average (about 3.5, with no bias); unconverted YCbCr would
+  // differ by about 100.
+  const { encoded, expected, info } = await fixture("aperio_33003_ycc");
+  const decoded = await decompressJpeg2000(encoded, 1, false);
+  expect([decoded.height, decoded.width, decoded.numComponents]).toEqual(
+    info.shape,
+  );
+  let total = 0;
+  for (let i = 0; i < expected.length; ++i) {
+    total += Math.abs(decoded.data[i] - expected[i]);
+  }
+  expect(total / expected.length).toBeLessThan(6);
+});
+
 test("decoded images fill chunks ending in [h, w] or [h, w, c]", () => {
   for (const [chunkShape, width, height, numComponents] of [
     [[1024, 1024], 1024, 1024, 1],

@@ -69,18 +69,31 @@ fn codestream(data: &[u8]) -> Option<&[u8]> {
     None
 }
 
-/// Whether each component is signed, from the SIZ marker segment.
-/// hayro-jpeg2000 0.4 ignores this, and always undoes the DC level shift of
-/// unsigned samples (adds 2^(precision - 1)).
-fn signed_components(data: &[u8]) -> Option<Vec<(bool, u32)>> {
+/// Each component's signedness, precision and subsampling (XRsiz, YRsiz),
+/// from the SIZ marker segment. hayro-jpeg2000 0.4 ignores signedness, and
+/// always undoes the DC level shift of unsigned samples (adds
+/// 2^(precision - 1)).
+fn component_info(data: &[u8]) -> Option<Vec<(bool, u32, u8, u8)>> {
     let cs = codestream(data)?;
     let count = u16::from_be_bytes(cs.get(40..42)?.try_into().ok()?) as usize;
     (0..count)
         .map(|i| {
             let ssiz = *cs.get(42 + 3 * i)?;
-            Some((ssiz & 0x80 != 0, (ssiz & 0x7f) as u32 + 1))
+            Some((ssiz & 0x80 != 0, (ssiz & 0x7f) as u32 + 1, *cs.get(43 + 3 * i)?, *cs.get(44 + 3 * i)?))
         })
         .collect()
+}
+
+/// Whether three components are YCbCr by OpenJPEG's rule: the first at full
+/// resolution and the other two subsampled. Such codestreams (Aperio's
+/// "JPEG 2000 YCbCr", TIFF compression 33003) do not signal the colour
+/// transform otherwise, and OpenJPEG (as used by imagecodecs and tifffile)
+/// converts them to RGB.
+fn is_sycc(info: &[(bool, u32, u8, u8)]) -> bool {
+    info.len() == 3
+        && info[0].2 == 1
+        && info[0].3 == 1
+        && info[1..].iter().all(|c| c.2 > 1 || c.3 > 1)
 }
 
 fn decode_samples(
@@ -119,16 +132,33 @@ fn decode_samples(
         }
     }
     let n = components.len();
-    let signedness = signed_components(data)
+    let info = component_info(data)
         .filter(|s| s.len() == n)
         .ok_or("cannot read the SIZ marker segment")?;
+    let mut planes: Vec<Vec<f32>> = components
+        .iter()
+        .zip(&info)
+        .map(|(c, &(is_signed, precision, _, _))| {
+            let shift = if is_signed { (1u32 << (precision - 1)) as f32 } else { 0.0 };
+            c.samples().iter().map(|&v| v - shift).collect()
+        })
+        .collect();
+    if is_sycc(&info) && !info[0].0 {
+        // YCbCr to RGB, as OpenJPEG's sycc_to_rgb (chroma centred on
+        // 2^(precision - 1)).
+        let half = (1u32 << (info[0].1 - 1)) as f32;
+        for i in 0..pixels {
+            let (y, cb, cr) = (planes[0][i], planes[1][i] - half, planes[2][i] - half);
+            planes[0][i] = y + 1.402 * cr;
+            planes[1][i] = y - 0.344 * cb - 0.714 * cr;
+            planes[2][i] = y + 1.772 * cb;
+        }
+    }
     let size = bytes_per_sample as usize;
     let mut out = vec![0u8; pixels * n * size];
-    for (ci, c) in components.iter().enumerate() {
-        let (is_signed, precision) = signedness[ci];
-        let shift = if is_signed { (1u32 << (precision - 1)) as f32 } else { 0.0 };
-        for (i, &v) in c.samples().iter().enumerate() {
-            let v = (v - shift).round().clamp(lo, hi);
+    for (ci, plane) in planes.iter().enumerate() {
+        for (i, &v) in plane.iter().enumerate() {
+            let v = v.round().clamp(lo, hi);
             let at = (i * n + ci) * size;
             match (bytes_per_sample, signed) {
                 (1, false) => out[at] = v as u8,
