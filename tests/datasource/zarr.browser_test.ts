@@ -62,3 +62,27 @@ test("vzip:// scheme gives the same datasource as |vzip:", async () => {
     ).replaceAll(/vzip:\/\/([^"|]*?\.vzip)\/?/g, "$1|vzip:");
   expect(normalize(viaScheme)).toEqual(normalize(viaPipeline));
 });
+
+test("transpose: each chunk dimension maps to the array dimension it holds", async () => {
+  // The array is [t, c, y, x] = [4, 3, 5, 6], stored as [t, y, x, c]
+  // (transpose order [0, 2, 3, 1], a 3-cycle, as in interleaved image
+  // frames). A permutation that is its own inverse would not catch a
+  // transposed mapping.
+  const metadata: any = await getDatasourceMetadata(
+    dataSourceProvider,
+    `${TEST_DATA_SERVER}datasource/zarr/zarr_v3/examples/transpose_cycle/|zarr3:`,
+  );
+  const source = metadata.subsources[0].subsource.volume.sources[0][0];
+  // Chunk dimensions are the stored ones, fastest first: c, x, y, t.
+  expect(Array.from(source.chunkSource.spec.chunkDataSize)).toEqual([
+    3, 6, 5, 1,
+  ]);
+  // Rows: array dimensions t, c, y, x. Columns: chunk dimensions.
+  expect(source.chunkToMultiscaleTransform).toEqual([
+    [0, 0, 0, 1, 0],
+    [1, 0, 0, 0, 0],
+    [0, 0, 1, 0, 0],
+    [0, 1, 0, 0, 0],
+    [0, 0, 0, 0, 1],
+  ]);
+});
