@@ -18,7 +18,9 @@
 
 import "#src/kvstore/http/register_frontend.js";
 import "#src/kvstore/vzip/register_frontend.js";
-import { describe, expect, test } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
+import { describe, expect, test, vi } from "vitest";
 import { parsePipelineUrlComponent } from "#src/kvstore/url.js";
 import { expandVzipSchemeUrl } from "#src/kvstore/vzip/scheme.js";
 import { constantFixture } from "#tests/fixtures/fixture.js";
@@ -95,6 +97,26 @@ describe("pins over HTTP", () => {
   ] as const)("%s fails closed", async ([key, error]) => {
     await expect(read("pins.vzip", key)).rejects.toThrow(error);
   });
+});
+
+test("nearby ranges of a url source are fetched in one request", async () => {
+  const blob = fs.readFileSync(path.join(TEST_DATA_DIR, "vzip", "files.blob"));
+  const expected = Buffer.concat(
+    Array.from({ length: 10 }, (_, i) => blob.subarray(5 * i, 5 * i + 4)),
+  );
+  const spy = vi.spyOn(globalThis, "fetch");
+  try {
+    const value = await read("rows.vzip", "rows");
+    expect(value).toEqual(new TextDecoder().decode(expected));
+    const blobRequests = spy.mock.calls.filter(([input]) =>
+      String(input instanceof Request ? input.url : input).endsWith(
+        "/files.blob",
+      ),
+    );
+    expect(blobRequests.length).toEqual(1);
+  } finally {
+    spy.mockRestore();
+  }
 });
 
 describe("errors", () => {

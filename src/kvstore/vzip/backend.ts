@@ -61,6 +61,13 @@ import { defaultStringCompare } from "#src/util/string.js";
 /** Largest value this reader assembles in memory (spec §10). */
 const MAX_REQUEST_BYTES = 1 << 30;
 
+/**
+ * Reads of the same url source at most this far apart are combined into one
+ * request (spec §6.2 allows it). A Concat of many short ranges, such as one
+ * per image row, would otherwise cost one request per range.
+ */
+export const MERGE_GAP = 1 << 16;
+
 function makeReader(base: FileHandle) {
   return async (
     offset: number,
@@ -428,7 +435,8 @@ export class VzipKvStore implements KvStore {
         );
       }
     }
-    const pieces: Promise<Uint8Array>[] = [];
+    type Read = { range: VzipRange; start: number; end: number };
+    const pieces: (Promise<Uint8Array> | Read)[] = [];
     let pos = 0;
     for (const range of reference) {
       const size = toSafeNumber(rangeSize(range), "range size");
@@ -439,20 +447,59 @@ export class VzipKvStore implements KvStore {
           pieces.push(Promise.resolve(range.data.subarray(lo - pos, hi - pos)));
         } else {
           const offset = toSafeNumber(range.offset, "range offset");
+          const read = {
+            range,
+            start: offset + lo - pos,
+            end: offset + hi - pos,
+          };
           pieces.push(
-            this.readSource(
-              metadata,
-              range,
-              offset + lo - pos,
-              offset + hi - pos,
-              options,
-            ),
+            metadata.sources[range.source].kind === "url"
+              ? read
+              : this.readSource(metadata, range, read.start, read.end, options),
           );
         }
       }
       pos += size;
     }
-    const parts = await Promise.all(pieces);
+    // Combine nearby reads of each url source into runs, fetch each run once,
+    // and slice the reads back out of it.
+    const reads = pieces.filter((p): p is Read => !(p instanceof Promise));
+    const sorted = [...reads].sort(
+      (x, y) => x.range.source - y.range.source || x.start - y.start,
+    );
+    type Run = { read: Read; end: number; data?: Promise<Uint8Array> };
+    const runs: Run[] = [];
+    const runOf = new Map<Read, Run>();
+    for (const read of sorted) {
+      const last = runs[runs.length - 1];
+      if (
+        last !== undefined &&
+        last.read.range.source === read.range.source &&
+        read.start - last.end <= MERGE_GAP
+      ) {
+        last.end = Math.max(last.end, read.end);
+      } else {
+        runs.push({ read, end: read.end });
+      }
+      runOf.set(read, runs[runs.length - 1]);
+    }
+    for (const run of runs) {
+      run.data = this.readSource(
+        metadata,
+        run.read.range,
+        run.read.start,
+        run.end,
+        options,
+      );
+    }
+    const parts = await Promise.all(
+      pieces.map(async (p) => {
+        if (p instanceof Promise) return p;
+        const run = runOf.get(p)!;
+        const from = p.start - run.read.start;
+        return (await run.data!).subarray(from, from + (p.end - p.start));
+      }),
+    );
     const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
     let o = 0;
     for (const p of parts) {

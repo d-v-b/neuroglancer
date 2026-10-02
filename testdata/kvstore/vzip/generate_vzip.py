@@ -114,6 +114,18 @@ def write_errors() -> None:
     (HERE / "errors.vzip").write_bytes(buf.getvalue())
 
 
+def write_rows() -> None:
+    """rows.vzip: one value made of 10 short ranges of files.blob with 1-byte
+    gaps between them, like the rows of an image with padded rows. A reader
+    that combines nearby reads fetches them in one request."""
+    buf = io.BytesIO()
+    w = VZipWriter(buf)
+    blob = w.url("files.blob")
+    w.add_ranges("rows", [Range(source=blob, offset=5 * i, length=4) for i in range(10)])
+    w.close()
+    (HERE / "rows.vzip").write_bytes(buf.getvalue())
+
+
 def write_future_version() -> None:
     buf = io.BytesIO()
     w = VZipWriter(buf)
@@ -146,6 +158,7 @@ if __name__ == "__main__":
     write_files("files_paged.vzip", layout, page_size=64)
     write_pins(layout)
     write_errors()
+    write_rows()
     write_future_version()
     write_ome_zarr()
     print("wrote", sorted(p.name for p in HERE.glob("*.vzip")), "and simple_0.5.vzip")
