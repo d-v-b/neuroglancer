@@ -31,6 +31,7 @@ import type {
 } from "#src/datasource/index.js";
 import { getKvStorePathCompletions } from "#src/datasource/kvstore_completions.js";
 import { VolumeChunkSourceParameters } from "#src/datasource/zarr/base.js";
+import { spanChannelDimensions } from "#src/datasource/zarr/metadata/chunk_grid.js";
 import type {
   ArrayMetadata,
   DimensionSeparator,
@@ -72,6 +73,7 @@ import {
   applyCompletionOffset,
   completeQueryStringParametersFromTable,
 } from "#src/util/completion.js";
+import { getDependentTransformInputDimensions } from "#src/util/geom.js";
 import {
   parseQueryStringParameters,
   verifyObject,
@@ -140,6 +142,18 @@ export class MultiscaleVolumeChunkSource extends GenericMultiscaleVolumeChunkSou
           rank + 1,
           rank + 1,
           rank + 1,
+        );
+        // A channel dimension must lie within one Neuroglancer chunk: where
+        // zarr chunks it more finely (one channel per chunk, as for planar
+        // images), the chunk spans it whole, assembled by the backend.
+        spanChannelDimensions(
+          permutedChunkShape,
+          permutedDataShape,
+          getDependentTransformInputDimensions(
+            transform,
+            rank,
+            volumeSourceOptions.modelChannelDimensionIndices,
+          ),
         );
         return makeDefaultVolumeChunkSpecifications({
           rank,

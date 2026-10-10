@@ -120,6 +120,11 @@ Supported chunk grids:
   regular but for a shorter last one, as clipped pyramid levels are, read
   each chunk once.
 
+A dimension shown as a channel dimension (such as ``c^``) may be chunked
+more finely than its extent, as a planar image with one channel per chunk
+is: Neuroglancer's chunks then span it whole, each assembled from the zarr
+chunks it overlaps. Other arrays read one zarr chunk per Neuroglancer chunk.
+
 Auto detection
 --------------
 

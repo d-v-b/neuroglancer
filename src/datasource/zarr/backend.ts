@@ -38,9 +38,9 @@ import "#src/datasource/zarr/codec/resolvers.js";
 import { parseCodecChainSpec } from "#src/datasource/zarr/codec/resolve.js";
 import type { ChunkExtent } from "#src/datasource/zarr/metadata/chunk_grid.js";
 import {
-  copyBox,
-  getCoveringChunks,
+  assembleChunk,
   RectilinearDimension,
+  regularDimension,
 } from "#src/datasource/zarr/metadata/chunk_grid.js";
 import { ChunkKeyEncoding } from "#src/datasource/zarr/metadata/index.js";
 import { WithSharedKvStoreContextCounterpart } from "#src/kvstore/backend.js";
@@ -62,9 +62,37 @@ export class ZarrVolumeChunkSource extends WithParameters(
     this.sharedKvStoreContext.kvStoreContext.getKvStore(this.parameters.url),
   );
 
+  // Whether Neuroglancer's chunks are the zarr read chunks (the common case),
+  // or span several of them along channel dimensions (see
+  // `spanChannelDimensions`), and are assembled.
+  private spansReadChunks = (() => {
+    const { rank, chunkDataSize } = this.spec;
+    const { readChunkShape, physicalToLogicalDimension } =
+      this.parameters.metadata.codecs.layoutInfo[0];
+    for (let i = 0; i < rank; ++i) {
+      const arrayDim = physicalToLogicalDimension[rank - 1 - i];
+      if (chunkDataSize[i] !== readChunkShape[arrayDim]) return true;
+    }
+    return false;
+  })();
+
   async download(chunk: VolumeChunk, signal: AbortSignal) {
     if (this.parameters.metadata.chunkGrid !== undefined) {
-      return this.downloadRectilinear(chunk, signal);
+      return this.downloadAssembled(
+        chunk,
+        signal,
+        this.rectilinearDimensions!,
+        (extents, arrayDims) =>
+          this.readRectilinearChunk(extents, arrayDims, signal),
+      );
+    }
+    if (this.spansReadChunks) {
+      return this.downloadAssembled(
+        chunk,
+        signal,
+        this.regularDimensions,
+        (extents) => this.readRegularChunk(extents, signal),
+      );
     }
     chunk.chunkDataSize = this.spec.chunkDataSize;
     const { parameters } = this;
@@ -146,13 +174,21 @@ export class ZarrVolumeChunkSource extends WithParameters(
     return codecs;
   }
 
-  // Reads and decodes the zarr chunk `keyCoords` of shape `chunkShape`
-  // (both by array dimension), or returns undefined if it is missing.
+  // Reads and decodes the zarr chunk with the extents `extents` (by chunk
+  // dimension, Fortran order; chunk dimension `i` is array dimension
+  // `arrayDims[i]`), or returns undefined if it is missing.
   private async readRectilinearChunk(
-    keyCoords: number[],
-    chunkShape: number[],
+    extents: ChunkExtent[],
+    arrayDims: number[],
     signal: AbortSignal,
   ) {
+    const rank = extents.length;
+    const keyCoords = new Array<number>(rank);
+    const chunkShape = new Array<number>(rank);
+    for (let i = 0; i < rank; ++i) {
+      keyCoords[arrayDims[i]] = extents[i].index;
+      chunkShape[arrayDims[i]] = extents[i].length;
+    }
     const { kvStore, getChunkKey } = this.chunkKvStore;
     const response = await kvStore.read(
       getChunkKey(keyCoords, this.getBaseKey(keyCoords)),
@@ -164,6 +200,10 @@ export class ZarrVolumeChunkSource extends WithParameters(
       new Uint8Array(await response.response.arrayBuffer()),
       signal,
     );
+    return this.typedView(decoded);
+  }
+
+  private typedView(decoded: ArrayBufferView<ArrayBuffer>) {
     return makeDataTypeArrayView(
       this.parameters.metadata.dataType,
       decoded.buffer,
@@ -172,11 +212,60 @@ export class ZarrVolumeChunkSource extends WithParameters(
     ) as TypedArray<ArrayBuffer>;
   }
 
-  private async downloadRectilinear(chunk: VolumeChunk, signal: AbortSignal) {
+  // The read chunks of a regular grid along each array dimension.
+  private regularDimensions =
+    this.parameters.metadata.codecs.layoutInfo[0].readChunkShape.map(
+      (length, i) =>
+        regularDimension(length, this.parameters.metadata.shape[i]),
+    );
+
+  // Reads and decodes the read chunk of a regular grid with the extents
+  // `extents` (by chunk dimension, Fortran order), as `download` reads the
+  // one at a chunk grid position, or returns undefined if it is missing.
+  private async readRegularChunk(extents: ChunkExtent[], signal: AbortSignal) {
+    const { metadata } = this.parameters;
+    const rank = extents.length;
+    const { physicalToLogicalDimension, readChunkShape } =
+      metadata.codecs.layoutInfo[0];
+    const { chunkShape } = metadata;
+    const position = extents.map((e) => e.index);
+    const keyCoords = new Array<number>(rank);
+    for (let i = 0; i < rank; ++i) {
+      const arrayDim = physicalToLogicalDimension[rank - 1 - i];
+      keyCoords[arrayDim] = Math.floor(
+        (position[i] * readChunkShape[arrayDim]) / chunkShape[arrayDim],
+      );
+    }
+    const { kvStore, getChunkKey, decodeCodecs } = this.chunkKvStore;
+    const response = await kvStore.read(
+      getChunkKey(position, this.getBaseKey(keyCoords)),
+      { signal },
+    );
+    if (response === undefined) return undefined;
+    return this.typedView(
+      await decodeArray(
+        decodeCodecs,
+        new Uint8Array(await response.response.arrayBuffer()),
+        signal,
+      ),
+    );
+  }
+
+  // Downloads a chunk that is not one zarr chunk: it is assembled from the
+  // zarr chunks it overlaps, found along each array dimension in
+  // `dimensions` and read by `read` (see `assembleChunk`).
+  private async downloadAssembled(
+    chunk: VolumeChunk,
+    signal: AbortSignal,
+    dimensions: RectilinearDimension[],
+    read: (
+      extents: ChunkExtent[],
+      arrayDims: number[],
+    ) => Promise<TypedArray<ArrayBuffer> | undefined>,
+  ) {
     const { metadata } = this.parameters;
     const { spec } = this;
     const { rank } = spec;
-    const dimensions = this.rectilinearDimensions!;
     const { physicalToLogicalDimension } = metadata.codecs.layoutInfo[0];
     const { chunkGridPosition } = chunk;
     // Chunk dimension `i` (Fortran order) is array dimension
@@ -184,91 +273,37 @@ export class ZarrVolumeChunkSource extends WithParameters(
     const arrayDims = new Array<number>(rank);
     const lower = new Array<number>(rank);
     const upper = new Array<number>(rank);
-    // The zarr chunks covering [lower, upper), as {index, start, length}.
-    const covering: ChunkExtent[][] = [];
-    let single = true;
     for (let i = 0; i < rank; ++i) {
       const arrayDim = physicalToLogicalDimension[rank - 1 - i];
       arrayDims[i] = arrayDim;
-      const lo = chunkGridPosition[i] * spec.chunkDataSize[i];
-      const hi = Math.min(lo + spec.chunkDataSize[i], metadata.shape[arrayDim]);
-      if (hi <= lo) return;
-      lower[i] = lo;
-      upper[i] = hi;
-      const chunks = getCoveringChunks(dimensions[arrayDim], lo, hi);
-      covering.push(chunks);
-      if (chunks.length !== 1 || chunks[0].start !== lo) single = false;
+      lower[i] = chunkGridPosition[i] * spec.chunkDataSize[i];
+      upper[i] = Math.min(
+        lower[i] + spec.chunkDataSize[i],
+        metadata.shape[arrayDim],
+      );
     }
-
-    // Visits every zarr chunk covering this chunk.
-    const zarrChunks: ChunkExtent[][] = [];
-    const visit = (i: number, current: ChunkExtent[]) => {
-      if (i === rank) {
-        zarrChunks.push(current.slice());
-        return;
-      }
-      for (const c of covering[i]) {
-        current[i] = c;
-        visit(i + 1, current);
-      }
-    };
-    visit(0, new Array(rank));
-
-    const read = (chunks: ChunkExtent[]) => {
-      const keyCoords = new Array<number>(rank);
-      const chunkShape = new Array<number>(rank);
-      for (let i = 0; i < rank; ++i) {
-        keyCoords[arrayDims[i]] = chunks[i].index;
-        chunkShape[arrayDims[i]] = chunks[i].length;
-      }
-      return this.readRectilinearChunk(keyCoords, chunkShape, signal);
-    };
-
-    if (single) {
-      // Exactly one zarr chunk, aligned with this one: decode it in place.
-      const chunks = zarrChunks[0];
-      const data = await read(chunks);
-      if (data === undefined) return;
-      const size = Uint32Array.from(chunks, (c) => c.length);
-      chunk.chunkDataSize = size.every((n, i) => n === spec.chunkDataSize[i])
-        ? spec.chunkDataSize
-        : size;
-      await postProcessRawData(chunk, signal, data);
-      return;
-    }
-
-    // Assemble the chunk from the parts of the zarr chunks it overlaps.
-    const size = Uint32Array.from(lower, (lo, i) => upper[i] - lo);
-    const numElements = size.reduce((a, b) => a * b, 1);
     const { dataType, fillValue } = metadata;
-    const output = makeDataTypeArrayView(
-      dataType,
-      new ArrayBuffer(numElements * DATA_TYPE_BYTES[dataType]),
-    ) as TypedArray<ArrayBuffer>;
-    if (fillValue !== 0 && fillValue !== 0n) {
-      (output as any).fill(fillValue);
-    }
-    const parts = await Promise.all(zarrChunks.map(read));
-    for (let k = 0; k < zarrChunks.length; ++k) {
-      const data = parts[k];
-      if (data === undefined) continue;
-      const chunks = zarrChunks[k];
-      const destStart = new Array<number>(rank);
-      const srcStart = new Array<number>(rank);
-      const srcShape = new Array<number>(rank);
-      const boxSize = new Array<number>(rank);
-      for (let i = 0; i < rank; ++i) {
-        const { start, length } = chunks[i];
-        const begin = Math.max(lower[i], start);
-        const end = Math.min(upper[i], start + length);
-        destStart[i] = begin - lower[i];
-        srcStart[i] = begin - start;
-        srcShape[i] = length;
-        boxSize[i] = end - begin;
-      }
-      copyBox(output, size, destStart, data, srcShape, srcStart, boxSize);
-    }
-    chunk.chunkDataSize = size;
-    await postProcessRawData(chunk, signal, output);
+    const assembled = await assembleChunk(
+      lower,
+      upper,
+      arrayDims.map((d) => dimensions[d]),
+      (extents) => read(extents, arrayDims),
+      (numElements) => {
+        const output = makeDataTypeArrayView(
+          dataType,
+          new ArrayBuffer(numElements * DATA_TYPE_BYTES[dataType]),
+        ) as TypedArray<ArrayBuffer>;
+        if (fillValue !== 0 && fillValue !== 0n) {
+          (output as any).fill(fillValue);
+        }
+        return output;
+      },
+    );
+    if (assembled === undefined) return;
+    const { data, size } = assembled;
+    chunk.chunkDataSize = size.every((n, i) => n === spec.chunkDataSize[i])
+      ? spec.chunkDataSize
+      : size;
+    await postProcessRawData(chunk, signal, data);
   }
 }
