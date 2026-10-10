@@ -15,7 +15,9 @@
  */
 
 /**
- * @file Registers the resolver of every supported codec.
+ * @file Registers the resolver of every supported codec. The frontend
+ * resolves an array's codecs once; the backend resolves them again for
+ * each distinct chunk shape of a rectilinear chunk grid.
  */
 
 import "#src/datasource/zarr/codec/blosc/resolve.js";

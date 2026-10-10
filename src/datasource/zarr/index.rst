@@ -108,6 +108,15 @@ Supported codecs:
 - zlib
 - zstd
 
+Supported chunk grids:
+
+- regular
+- rectilinear (the zarr-extensions chunk grid whose chunk lengths vary along
+  each dimension; not combined with sharding_indexed). It is read through a
+  regular grid of the largest chunk lengths, so arrays whose chunks are
+  regular but for a shorter last one, as clipped pyramid levels are, read
+  each chunk once.
+
 Auto detection
 --------------
 
