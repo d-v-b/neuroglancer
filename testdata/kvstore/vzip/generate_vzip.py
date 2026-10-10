@@ -27,7 +27,7 @@ import struct
 from pathlib import Path
 
 from vzip.archive import VZipWriter
-from vzip.pb import Concat, Range, Source
+from vzip.pb import Range, Source
 
 HERE = Path(__file__).parent
 FILES = HERE.parent / "files"  # the files the generic kvstore tests expect
@@ -55,8 +55,13 @@ def write_files(name: str, layout: dict[str, tuple[int, int]], page_size=None) -
     for key, (offset, length) in layout.items():
         data = content[key]
         if key == "a":  # Concat: a literal byte, then a url range
-            w.add_ranges(key, [Range(data=data[:1]),
-                               Range(source=blob, offset=offset + 1, length=length - 1)])
+            w.add_ranges(
+                key,
+                [
+                    Range(data=data[:1]),
+                    Range(source=blob, offset=offset + 1, length=length - 1),
+                ],
+            )
         elif key == "c":  # a plain bytes entry (pinned when paged)
             w.add_bytes(key, data, late=page_size is not None)
         elif key == "empty":  # an empty Concat
@@ -109,7 +114,9 @@ def write_errors() -> None:
     w.add_ranges("missing_key", [Range(source=ghost, offset=0, length=1)])
     w.add_ranges("past_end", [Range(source=ok, offset=0, length=10**6)])
     # the window [0, 2) touches only the literal part: no resolution happens
-    w.add_ranges("partial", [Range(data=b"hi"), Range(source=missing, offset=0, length=4)])
+    w.add_ranges(
+        "partial", [Range(data=b"hi"), Range(source=missing, offset=0, length=4)]
+    )
     w.close()
     (HERE / "errors.vzip").write_bytes(buf.getvalue())
 
@@ -121,7 +128,9 @@ def write_rows() -> None:
     buf = io.BytesIO()
     w = VZipWriter(buf)
     blob = w.url("files.blob")
-    w.add_ranges("rows", [Range(source=blob, offset=5 * i, length=4) for i in range(10)])
+    w.add_ranges(
+        "rows", [Range(source=blob, offset=5 * i, length=4) for i in range(10)]
+    )
     w.close()
     (HERE / "rows.vzip").write_bytes(buf.getvalue())
 

@@ -98,10 +98,27 @@ Supported codecs:
   and JP2 files; a chunk's shape must end in ``[height, width]``, or
   ``[height, width, components]`` for multi-component images, with all other
   dimensions 1)
+- imagecodecs_jpegxr (decoding of JPEG XR files of gray, RGB, BGR, RGBA and
+  BGRA pixels of ``uint8``, ``uint16`` or ``float32`` samples, as jxrlib
+  decodes them, color in R, G, B (A) order; the chunk shape is as for
+  imagecodecs_jpeg2k)
+- n5_default (one N5 default-mode block per chunk, header included, its
+  body encoded with the inner codecs; edge blocks of another size are
+  truncated or padded with zeros to the chunk's shape)
+- numcodecs.shuffle (numcodecs' byte shuffle, as zarr-python 3 names it)
 - sharding_indexed
 - transpose
 - zlib
 - zstd
+
+Supported chunk grids:
+
+- regular
+- rectilinear (the zarr-extensions chunk grid whose chunk lengths vary along
+  each dimension; not combined with sharding_indexed). It is read through a
+  regular grid of the largest chunk lengths, so arrays whose chunks are
+  regular but for a shorter last one, as clipped pyramid levels are, read
+  each chunk once.
 
 Auto detection
 --------------

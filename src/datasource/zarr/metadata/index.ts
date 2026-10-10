@@ -15,6 +15,7 @@
  */
 
 import type { CodecChainSpec } from "#src/datasource/zarr/codec/index.js";
+import type { RectilinearChunkGrid } from "#src/datasource/zarr/metadata/chunk_grid.js";
 import type { DataType } from "#src/util/data_type.js";
 
 export enum ChunkKeyEncoding {
@@ -31,7 +32,11 @@ export interface ArrayMetadata {
   nodeType: "array";
   rank: number;
   shape: number[];
+  // For a rectilinear chunk grid, the largest chunk length along each
+  // dimension, and the chunk shape \`codecs\` is resolved for.
   chunkShape: number[];
+  // Set for a rectilinear chunk grid, undefined for a regular one.
+  chunkGrid?: RectilinearChunkGrid;
   dataType: DataType;
   fillValue: number | bigint;
   dimensionNames: (string | null)[];

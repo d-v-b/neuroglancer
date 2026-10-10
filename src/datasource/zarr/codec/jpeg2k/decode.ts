@@ -36,6 +36,7 @@ export function checkJpeg2kChunkShape(
   width: number,
   height: number,
   numComponents: number,
+  format = "JPEG 2000",
 ) {
   const imageShape =
     numComponents === 1 ? [height, width] : [height, width, numComponents];
@@ -46,7 +47,7 @@ export function checkJpeg2kChunkShape(
     imageShape.some((n, i) => chunkShape[lead + i] !== n)
   ) {
     throw new Error(
-      `JPEG 2000 image of shape [${imageShape.join(", ")}] (height, width` +
+      `${format} image of shape [${imageShape.join(", ")}] (height, width` +
         `${numComponents === 1 ? "" : ", components"}) does not fill a chunk ` +
         `of shape [${chunkShape.join(", ")}]`,
     );

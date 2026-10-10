@@ -15,6 +15,11 @@
  */
 
 import { parseCodecChainSpec } from "#src/datasource/zarr/codec/resolve.js";
+import type { RectilinearChunkGrid } from "#src/datasource/zarr/metadata/chunk_grid.js";
+import {
+  getMaxChunkShape,
+  parseRectilinearChunkGrid,
+} from "#src/datasource/zarr/metadata/chunk_grid.js";
 import type {
   ArrayMetadata,
   DimensionSeparator,
@@ -225,18 +230,41 @@ export function parseV3Metadata(
       verifyEnumString(x, DataType, /^[a-z0-9]+$/),
     );
 
-    const { configuration: chunkShape } = verifyObjectProperty(
+    const { chunkShape, chunkGrid } = verifyObjectProperty(
       obj,
       "chunk_grid",
       (chunkGrid) =>
         parseNameAndConfiguration(
           chunkGrid,
-          (name) => verifyConstant(name, "regular"),
-          (configuration) =>
-            verifyObjectProperty(configuration, "chunk_shape", (chunks) =>
-              parseChunkShape(chunks, rank),
-            ),
-        ),
+          (name) => {
+            if (name !== "regular" && name !== "rectilinear") {
+              throw new Error(
+                `Expected "regular" or "rectilinear", but received: ${JSON.stringify(name)}`,
+              );
+            }
+            return name;
+          },
+          (
+            configuration,
+            name,
+          ): { chunkShape: number[]; chunkGrid?: RectilinearChunkGrid } => {
+            if (name === "regular") {
+              return {
+                chunkShape: verifyObjectProperty(
+                  configuration,
+                  "chunk_shape",
+                  (chunks) => parseChunkShape(chunks, rank),
+                ),
+              };
+            }
+            const chunkGrid = parseRectilinearChunkGrid(
+              configuration,
+              shape,
+              verifyObjectProperty(obj, "codecs", (codecs) => codecs),
+            );
+            return { chunkShape: getMaxChunkShape(chunkGrid), chunkGrid };
+          },
+        ).configuration,
     );
 
     const { userAttributes, dimensionUnits } = verifyObjectProperty(
@@ -278,6 +306,11 @@ export function parseV3Metadata(
     const codecs = verifyObjectProperty(obj, "codecs", (value) =>
       parseCodecChainSpec(value, { dataType, chunkShape }),
     );
+    if (chunkGrid !== undefined && codecs.shardingInfo !== undefined) {
+      throw new Error(
+        "sharding_indexed is not supported with a rectilinear chunk grid",
+      );
+    }
 
     return {
       zarrVersion: 3,
@@ -285,6 +318,7 @@ export function parseV3Metadata(
       rank,
       shape,
       chunkShape,
+      chunkGrid,
       dataType,
       fillValue,
       dimensionNames,

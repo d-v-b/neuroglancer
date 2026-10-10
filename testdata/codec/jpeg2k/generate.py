@@ -25,8 +25,12 @@ gradient = (x * 3 + y * 2).astype(np.uint16)
 
 images = {
     "uint8_gray": (gradient % 256).astype(np.uint8),
-    "uint8_rgb": np.stack([(gradient + 40 * i) % 256 for i in range(3)], axis=-1).astype(np.uint8),
-    "uint16_gray": (gradient * 300 + rng.integers(0, 50, gradient.shape)).astype(np.uint16),
+    "uint8_rgb": np.stack(
+        [(gradient + 40 * i) % 256 for i in range(3)], axis=-1
+    ).astype(np.uint8),
+    "uint16_gray": (gradient * 300 + rng.integers(0, 50, gradient.shape)).astype(
+        np.uint16
+    ),
     "int16_gray": (gradient.astype(np.int32) * 40 - 3000).astype(np.int16),
 }
 for name, image in images.items():
@@ -39,7 +43,9 @@ for path in sorted(HERE.glob("*.j2k")):
     name = path.stem
     if name in images:
         assert np.array_equal(decoded, images[name]), name
-    path.with_suffix(".raw").write_bytes(decoded.astype(decoded.dtype.newbyteorder("<")).tobytes())
+    path.with_suffix(".raw").write_bytes(
+        decoded.astype(decoded.dtype.newbyteorder("<")).tobytes()
+    )
     path.with_suffix(".json").write_text(
         json.dumps({"shape": list(decoded.shape), "dtype": decoded.dtype.name}) + "\n"
     )
