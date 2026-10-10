@@ -37,14 +37,20 @@ def set_format(b: bytes, guid: bytes) -> bytes:
 
 
 def color(scale, dtype):
-    return np.stack([gradient * scale + 40 * i * scale for i in range(3)], axis=-1).astype(dtype)
+    return np.stack(
+        [gradient * scale + 40 * i * scale for i in range(3)], axis=-1
+    ).astype(dtype)
 
 
 images = {
     # name: (image, level, GUID or None)
     "gray8": ((gradient % 256).astype(np.uint8), 1.0, None),
     "gray8_lossy": ((gradient % 256).astype(np.uint8), 0.8, None),
-    "gray16": ((gradient * 300 + rng.integers(0, 50, gradient.shape)).astype(np.uint16), 1.0, None),
+    "gray16": (
+        (gradient * 300 + rng.integers(0, 50, gradient.shape)).astype(np.uint16),
+        1.0,
+        None,
+    ),
     "gray32float": ((gradient / 7 - 3).astype(np.float32), 1.0, None),
     "rgb24": (color(1, np.uint8), 1.0, None),
     "bgr24": (color(1, np.uint8), 1.0, WIC + b"\x0c"),
@@ -52,7 +58,9 @@ images = {
     "bgr48": (color(150, np.uint16), 1.0, None),
     "bgr96float": (color(0.01, np.float32), 1.0, None),
     "bgra32": (
-        np.concatenate([color(1, np.uint8), (gradient % 256).astype(np.uint8)[..., None]], axis=-1),
+        np.concatenate(
+            [color(1, np.uint8), (gradient % 256).astype(np.uint8)[..., None]], axis=-1
+        ),
         1.0,
         WIC + b"\x0f",
     ),
@@ -66,7 +74,9 @@ for name, (image, level, guid) in images.items():
 for path in sorted(HERE.glob("*.jxr")):
     decoded = imagecodecs.jpegxr_decode(path.read_bytes())
     name = path.stem
-    path.with_suffix(".raw").write_bytes(decoded.astype(decoded.dtype.newbyteorder("<")).tobytes())
+    path.with_suffix(".raw").write_bytes(
+        decoded.astype(decoded.dtype.newbyteorder("<")).tobytes()
+    )
     path.with_suffix(".json").write_text(
         json.dumps({"shape": list(decoded.shape), "dtype": decoded.dtype.name}) + "\n"
     )
