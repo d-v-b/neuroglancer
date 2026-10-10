@@ -14,8 +14,7 @@
  * limitations under the License.
  */
 
-import "#src/datasource/zarr/codec/blosc/resolve.js";
-import "#src/datasource/zarr/codec/zstd/resolve.js";
+import "#src/datasource/zarr/codec/resolvers.js";
 
 import { makeDataBoundsBoundingBoxAnnotationSet } from "#src/annotation/index.js";
 import { WithParameters } from "#src/chunk_manager/frontend.js";
@@ -32,13 +31,6 @@ import type {
 } from "#src/datasource/index.js";
 import { getKvStorePathCompletions } from "#src/datasource/kvstore_completions.js";
 import { VolumeChunkSourceParameters } from "#src/datasource/zarr/base.js";
-import "#src/datasource/zarr/codec/bytes/resolve.js";
-import "#src/datasource/zarr/codec/crc32c/resolve.js";
-import "#src/datasource/zarr/codec/gzip/resolve.js";
-import "#src/datasource/zarr/codec/jpeg/resolve.js";
-import "#src/datasource/zarr/codec/jpeg2k/resolve.js";
-import "#src/datasource/zarr/codec/sharding_indexed/resolve.js";
-import "#src/datasource/zarr/codec/transpose/resolve.js";
 import type {
   ArrayMetadata,
   DimensionSeparator,

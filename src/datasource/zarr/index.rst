@@ -98,6 +98,7 @@ Supported codecs:
   and JP2 files; a chunk's shape must end in ``[height, width]``, or
   ``[height, width, components]`` for multi-component images, with all other
   dimensions 1)
+- numcodecs.shuffle (numcodecs' byte shuffle, as zarr-python 3 names it)
 - sharding_indexed
 - transpose
 - zlib
