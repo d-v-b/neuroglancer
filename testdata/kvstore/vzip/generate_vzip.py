@@ -27,7 +27,7 @@ import struct
 from pathlib import Path
 
 from vzip.archive import VZipWriter
-from vzip.pb import Concat, Range, Source
+from vzip.pb import Range, Source
 
 HERE = Path(__file__).parent
 FILES = HERE.parent / "files"  # the files the generic kvstore tests expect
