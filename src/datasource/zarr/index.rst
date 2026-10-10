@@ -102,6 +102,9 @@ Supported codecs:
   BGRA pixels of ``uint8``, ``uint16`` or ``float32`` samples, as jxrlib
   decodes them, color in R, G, B (A) order; the chunk shape is as for
   imagecodecs_jpeg2k)
+- n5_default (one N5 default-mode block per chunk, header included, its
+  body encoded with the inner codecs; edge blocks of another size are
+  truncated or padded with zeros to the chunk's shape)
 - numcodecs.shuffle (numcodecs' byte shuffle, as zarr-python 3 names it)
 - sharding_indexed
 - transpose
