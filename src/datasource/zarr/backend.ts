@@ -28,6 +28,7 @@ import {
 import "#src/datasource/zarr/codec/gzip/decode.js";
 import "#src/datasource/zarr/codec/jpeg/decode.js";
 import "#src/datasource/zarr/codec/jpeg2k/decode.js";
+import "#src/datasource/zarr/codec/jpegxr/decode.js";
 import "#src/datasource/zarr/codec/numcodecs_shuffle/decode.js";
 import "#src/datasource/zarr/codec/sharding_indexed/decode.js";
 import "#src/datasource/zarr/codec/transpose/decode.js";

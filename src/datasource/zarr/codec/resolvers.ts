@@ -24,6 +24,7 @@ import "#src/datasource/zarr/codec/crc32c/resolve.js";
 import "#src/datasource/zarr/codec/gzip/resolve.js";
 import "#src/datasource/zarr/codec/jpeg/resolve.js";
 import "#src/datasource/zarr/codec/jpeg2k/resolve.js";
+import "#src/datasource/zarr/codec/jpegxr/resolve.js";
 import "#src/datasource/zarr/codec/numcodecs_shuffle/resolve.js";
 import "#src/datasource/zarr/codec/sharding_indexed/resolve.js";
 import "#src/datasource/zarr/codec/transpose/resolve.js";
