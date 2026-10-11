@@ -12,6 +12,12 @@ Refer to the documentation website at https://neuroglancer-docs.web.app for more
 
 This is not an official Google product.
 
+## About this fork
+
+This is [d-v-b/neuroglancer](https://github.com/d-v-b/neuroglancer), a fork of [google/neuroglancer](https://github.com/google/neuroglancer). Its viewer shows a thin banner above the layer bar, such as "Neuroglancer fork: d-v-b/neuroglancer · vzip @ 2e3c799 (not google/neuroglancer)", that links to the repository and the commit it was built from, with "-dirty" when the tree had uncommitted changes. The help panel's "Build info" section repeats it. The banner can't be dismissed.
+
+The build reads these from git: the `origin` remote, the branch and the commit. A detached checkout is named after the `origin` branch at HEAD, as in "vzip (detached)", or else after `git describe`. Builds without git, or that want other values, can set `NEUROGLANCER_FORK_REPO` (`owner/name` or a remote URL), `NEUROGLANCER_FORK_BRANCH` and `NEUROGLANCER_FORK_COMMIT`; fields that are neither found nor set show as "unknown". See `build_tools/fork_info.js`.
+
 # Getting started
 
 A live demo is hosted at <https://neuroglancer-demo.appspot.com>. (The prior link opens the viewer without any preloaded dataset.) Use the viewer links below to open the viewer preloaded with an example dataset.

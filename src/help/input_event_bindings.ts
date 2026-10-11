@@ -18,6 +18,7 @@ import "#src/help/input_event_bindings.css";
 import type { LayerManager } from "#src/layer/index.js";
 import { UserLayer } from "#src/layer/index.js";
 import { formatKeyStroke } from "#src/ui/command.js";
+import { appendForkIdentity, getForkInfo } from "#src/ui/fork_banner.js";
 import type { SidePanelManager } from "#src/ui/side_panel.js";
 import { SidePanel } from "#src/ui/side_panel.js";
 import type { SidePanelLocation } from "#src/ui/side_panel_location.js";
@@ -184,9 +185,20 @@ export class InputEventBindingHelpDialog extends SidePanel {
     const { scroll, bindings, toolBinder } = this;
     removeChildren(scroll);
 
-    if (typeof NEUROGLANCER_BUILD_INFO !== "undefined") {
+    {
       const header = document.createElement("h2");
       header.textContent = "Build info";
+      scroll.appendChild(header);
+      const forkElement = document.createElement("div");
+      forkElement.classList.add(
+        "neuroglancer-build-info",
+        "neuroglancer-build-fork",
+      );
+      forkElement.append("Fork: ");
+      appendForkIdentity(forkElement, getForkInfo());
+      scroll.appendChild(forkElement);
+    }
+    if (typeof NEUROGLANCER_BUILD_INFO !== "undefined") {
       const buildInfoElement = document.createElement("div");
       buildInfoElement.classList.add("neuroglancer-build-info");
       const tagElement = document.createElement("a");
@@ -196,7 +208,6 @@ export class InputEventBindingHelpDialog extends SidePanel {
       if (url !== undefined) {
         tagElement.href = url;
       }
-      scroll.appendChild(header);
       buildInfoElement.appendChild(tagElement);
       if (timestamp !== undefined) {
         const timestampElement = document.createElement("div");
