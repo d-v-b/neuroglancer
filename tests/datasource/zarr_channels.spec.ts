@@ -87,7 +87,7 @@ test("spans channel dimensions and assembles their zarr chunks", async () => {
       for (let x = 2; x < 4; ++x) expected.push(value(x, y, c));
     }
   }
-  expect(Array.from(out!.data)).toEqual(expected);
+  expect(Array.from(out!.data as ArrayLike<number>)).toEqual(expected);
 
   // A missing zarr chunk (channels 2 and 3) leaves the fill value.
   const sparse = reader(["0,0,1"]);
@@ -98,7 +98,7 @@ test("spans channel dimensions and assembles their zarr chunks", async () => {
     sparse.read,
     makeOutput,
   );
-  expect(Array.from(filled!.data)).toEqual([
+  expect(Array.from(filled!.data as ArrayLike<number>)).toEqual([
     ...[0, 1, 10, 11, 20, 21],
     ...[100, 101, 110, 111, 120, 121],
     ...new Array(6).fill(7),
