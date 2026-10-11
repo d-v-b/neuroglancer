@@ -265,3 +265,113 @@ export function copyBox(
     if (d >= rank) return;
   }
 }
+
+/**
+ * Widens `chunkShape` to `dataShape` along each of `channelDimensions`
+ * (indices into both), in place. Neuroglancer reads every channel of a
+ * voxel from one chunk, so a chunk must span its channel dimensions whole.
+ */
+export function spanChannelDimensions(
+  chunkShape: Uint32Array,
+  dataShape: ArrayLike<number>,
+  channelDimensions: readonly number[],
+) {
+  for (const i of channelDimensions) {
+    chunkShape[i] = Math.max(chunkShape[i], dataShape[i]);
+  }
+}
+
+/**
+ * The chunks along one dimension of a regular grid of chunks of `length`
+ * covering `extent`, as a rectilinear dimension (the last chunk may overflow
+ * the extent).
+ */
+export function regularDimension(length: number, extent: number) {
+  return new RectilinearDimension([
+    [length, Math.max(1, Math.ceil(extent / length))],
+  ]);
+}
+
+/** A chunk read by `assembleChunk`: its data and its size. */
+export interface AssembledChunk {
+  data: TypedArray<ArrayBuffer>;
+  size: Uint32Array;
+}
+
+/**
+ * Reads the box `[lower, upper)` of an array (Fortran order) from the zarr
+ * chunks it overlaps along each dimension, in `dimensions`, each read by
+ * `read` from its extents (undefined if it is missing).
+ *
+ * When the box is exactly one zarr chunk along each dimension, starting at
+ * `lower`, that chunk is returned as decoded, at its own size (which may
+ * extend past `upper`), or undefined if it is missing. Otherwise the chunks
+ * are read concurrently and their parts within the box copied into
+ * `makeOutput(n)`, an array of the box's `n` elements filled with the fill
+ * value, which is returned at the box's size. An empty box gives undefined.
+ */
+export async function assembleChunk(
+  lower: readonly number[],
+  upper: readonly number[],
+  dimensions: readonly RectilinearDimension[],
+  read: (
+    extents: ChunkExtent[],
+  ) => Promise<TypedArray<ArrayBuffer> | undefined>,
+  makeOutput: (numElements: number) => TypedArray<ArrayBuffer>,
+): Promise<AssembledChunk | undefined> {
+  const rank = lower.length;
+  const covering: ChunkExtent[][] = [];
+  let single = true;
+  for (let i = 0; i < rank; ++i) {
+    if (upper[i] <= lower[i]) return undefined;
+    const chunks = getCoveringChunks(dimensions[i], lower[i], upper[i]);
+    covering.push(chunks);
+    if (chunks.length !== 1 || chunks[0].start !== lower[i]) single = false;
+  }
+
+  if (single) {
+    // Exactly one zarr chunk, aligned with the box: decoded in place.
+    const extents = covering.map((chunks) => chunks[0]);
+    const data = await read(extents);
+    if (data === undefined) return undefined;
+    return { data, size: Uint32Array.from(extents, (c) => c.length) };
+  }
+
+  // Every zarr chunk covering the box.
+  const zarrChunks: ChunkExtent[][] = [];
+  const visit = (i: number, current: ChunkExtent[]) => {
+    if (i === rank) {
+      zarrChunks.push(current.slice());
+      return;
+    }
+    for (const c of covering[i]) {
+      current[i] = c;
+      visit(i + 1, current);
+    }
+  };
+  visit(0, new Array(rank));
+
+  const size = Uint32Array.from(lower, (lo, i) => upper[i] - lo);
+  const output = makeOutput(size.reduce((a, b) => a * b, 1));
+  const parts = await Promise.all(zarrChunks.map(read));
+  for (let k = 0; k < zarrChunks.length; ++k) {
+    const data = parts[k];
+    if (data === undefined) continue;
+    const chunks = zarrChunks[k];
+    const destStart = new Array<number>(rank);
+    const srcStart = new Array<number>(rank);
+    const srcShape = new Array<number>(rank);
+    const boxSize = new Array<number>(rank);
+    for (let i = 0; i < rank; ++i) {
+      const { start, length } = chunks[i];
+      const begin = Math.max(lower[i], start);
+      const end = Math.min(upper[i], start + length);
+      destStart[i] = begin - lower[i];
+      srcStart[i] = begin - start;
+      srcShape[i] = length;
+      boxSize[i] = end - begin;
+    }
+    copyBox(output, size, destStart, data, srcShape, srcStart, boxSize);
+  }
+  return { data: output, size };
+}
