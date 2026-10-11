@@ -1,6 +1,7 @@
 import path from "node:path";
 import { defineConfig } from "@rspack/cli";
 import { HtmlRspackPlugin, ProgressPlugin } from "@rspack/core";
+import { computeForkInfo } from "./build_tools/fork_info.js";
 import { normalizeConfigurationWithDefine } from "./build_tools/rspack/configuration_with_define.js";
 import packageJson from "./package.json" with { type: "json" };
 
@@ -109,6 +110,13 @@ export default defineConfig((env, args) => {
       // it in.
       NEUROGLANCER_BRAINMAPS_CLIENT_ID: JSON.stringify(
         "639403125587-4k5hgdfumtrvur8v48e3pr7oo91d765k.apps.googleusercontent.com",
+      ),
+
+      // Identity of this fork (repository, branch, commit), shown in the
+      // banner and the help panel; see build_tools/fork_info.js for the
+      // environment overrides.
+      NEUROGLANCER_FORK_INFO: JSON.stringify(
+        computeForkInfo({ cwd: import.meta.dirname }),
       ),
 
       // NEUROGLANCER_CREDIT_LINK: JSON.stringify({url: '...', text: '...'}),

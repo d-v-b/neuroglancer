@@ -37,6 +37,17 @@ export async function captureNeuroglancerScreenshot(
   testInfo: TestInfo,
   testFragment: string = TEST_FRAGMENT,
 ) {
+  // The fork banner (src/ui/fork_banner.ts) names the build's commit, which
+  // differs between the root client (built from git) and the example projects
+  // (which bundle Neuroglancer as a package), so it is hidden here: these
+  // screenshots compare the viewer across bundlers.
+  await page.addInitScript(() => {
+    document.addEventListener("DOMContentLoaded", () => {
+      const style = document.createElement("style");
+      style.textContent = ".neuroglancer-fork-banner { display: none; }";
+      document.head.appendChild(style);
+    });
+  });
   await page.goto(url + testFragment);
 
   await expect
