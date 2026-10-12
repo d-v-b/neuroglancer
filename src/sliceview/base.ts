@@ -21,6 +21,11 @@ import {
 import { ProjectionParameters } from "#src/projection_parameters.js";
 import { getChunkPositionFromCombinedGlobalLocalPositions } from "#src/render_coordinate_transform.js";
 import { ChunkLayout } from "#src/sliceview/chunk_layout.js";
+import type { GeoTransformedSourceInfo } from "#src/sliceview/geo.js";
+import {
+  forEachGeoVisibleChunk,
+  updateGeoEffectiveVoxelSize,
+} from "#src/sliceview/geo.js";
 import type {
   WatchableValueChangeInterface,
   WatchableValueInterface,
@@ -160,6 +165,11 @@ export interface TransformedSource<
   curPositionInChunks: Float32Array;
 
   fixedPositionWithinChunk: Uint32Array;
+
+  /**
+   * Georeferencing information, if the source is warped into the display CRS.
+   */
+  geo?: GeoTransformedSourceInfo;
 }
 
 export interface SliceViewRenderLayer {
@@ -175,7 +185,7 @@ export interface SliceViewRenderLayer {
   ): Iterable<TransformedSource>;
 }
 
-function updateFixedCurPositionInChunks<
+export function updateFixedCurPositionInChunks<
   RLayer extends MultiscaleVolumetricDataRenderLayer,
 >(
   tsource: TransformedSource<RLayer, SliceViewChunkSource>,
@@ -299,6 +309,7 @@ export class SliceViewProjectionParameters extends ProjectionParameters {
 function visibleSourcesInvalidated(
   oldValue: SliceViewProjectionParameters,
   newValue: SliceViewProjectionParameters,
+  positionDependent: boolean,
 ) {
   if (
     oldValue.displayDimensionRenderInfo !== newValue.displayDimensionRenderInfo
@@ -308,7 +319,8 @@ function visibleSourcesInvalidated(
   if (oldValue.pixelSize !== newValue.pixelSize) return true;
   const { viewMatrix: oldViewMatrix } = oldValue;
   const { viewMatrix: newViewMatrix } = newValue;
-  for (let i = 0; i < 12; ++i) {
+  const n = positionDependent ? 16 : 12;
+  for (let i = 0; i < n; ++i) {
     if (oldViewMatrix[i] !== newViewMatrix[i]) return true;
   }
   return false;
@@ -328,13 +340,19 @@ export class SliceViewBase<
   >();
   visibleSourcesStale = true;
 
+  /**
+   * Indicates that some visible source is georeferenced, in which case the effective voxel size
+   * depends on the position.
+   */
+  hasGeoSources = false;
+
   constructor(
     public projectionParameters: WatchableValueChangeInterface<SliceViewProjectionParameters>,
   ) {
     super();
     this.registerDisposer(
       projectionParameters.changed.add((oldValue, newValue) => {
-        if (visibleSourcesInvalidated(oldValue, newValue)) {
+        if (visibleSourcesInvalidated(oldValue, newValue, this.hasGeoSources)) {
           this.invalidateVisibleSources();
         }
         this.invalidateVisibleChunks();
@@ -357,13 +375,27 @@ export class SliceViewBase<
       return;
     }
     this.visibleSourcesStale = false;
+    const projectionParameters = this.projectionParameters.value;
     const curDisplayDimensionRenderInfo =
-      this.projectionParameters.value.displayDimensionRenderInfo;
+      projectionParameters.displayDimensionRenderInfo;
 
     const { visibleLayers } = this;
+    let hasGeoSources = false;
     for (const [renderLayer, visibleLayerSources] of visibleLayers) {
       const { allSources, visibleSources } = visibleLayerSources;
       visibleSources.length = 0;
+      for (const scales of allSources) {
+        for (const tsource of scales) {
+          if (tsource.geo === undefined) continue;
+          hasGeoSources = true;
+          updateGeoEffectiveVoxelSize(
+            tsource,
+            projectionParameters,
+            curDisplayDimensionRenderInfo.voxelPhysicalScales,
+            curDisplayDimensionRenderInfo.displayRank,
+          );
+        }
+      }
       if (
         allSources.length === 0 ||
         !validateDisplayDimensionRenderInfoProperty(
@@ -390,6 +422,7 @@ export class SliceViewBase<
         console.log("visible sources chosen", visibleSources);
       }
     }
+    this.hasGeoSources = hasGeoSources;
   }
 }
 
@@ -890,6 +923,10 @@ export function forEachVisibleVolumetricChunk<
   transformedSource: TransformedSource<RLayer>,
   callback: (positionInChunks: vec3, clippingPlanes: Float32Array) => void,
 ) {
+  if (transformedSource.geo !== undefined) {
+    // Georeferenced sources are not supported for volume rendering.
+    return;
+  }
   if (
     !updateFixedCurPositionInChunks(
       transformedSource,
@@ -935,6 +972,16 @@ export function forEachPlaneIntersectingVolumetricChunk<
   chunkLayout: ChunkLayout,
   callback: (positionInChunks: vec3) => void,
 ) {
+  if (transformedSource.geo !== undefined) {
+    forEachGeoVisibleChunk(
+      projectionParameters,
+      localPosition,
+      transformedSource,
+      chunkLayout,
+      callback,
+    );
+    return;
+  }
   if (
     !updateFixedCurPositionInChunks(
       transformedSource,

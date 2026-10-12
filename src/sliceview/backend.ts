@@ -48,6 +48,7 @@ import {
   SliceViewBase,
 } from "#src/sliceview/base.js";
 import { ChunkLayout } from "#src/sliceview/chunk_layout.js";
+import { deserializeGeoTransformedSourceInfo } from "#src/sliceview/geo.js";
 import type { WatchableValueInterface } from "#src/trackable_value.js";
 import { raceWithAbort } from "#src/util/abort.js";
 import { erf } from "#src/util/erf.js";
@@ -321,6 +322,11 @@ export function deserializeTransformedSources<
           serializedSource.combinedGlobalLocalToChunkTransform,
         curPositionInChunks: new Float32Array(rank),
         fixedPositionWithinChunk: new Uint32Array(rank),
+        geo: deserializeGeoTransformedSourceInfo(
+          serializedSource.geo,
+          rank,
+          serializedSource.chunkDisplayDimensionIndices,
+        ),
       };
       return tsource;
     }),

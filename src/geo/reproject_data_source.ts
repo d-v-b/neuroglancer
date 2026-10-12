@@ -61,6 +61,10 @@ export class ReprojectedMultiscaleVolumeChunkSource extends MultiscaleVolumeChun
     return this.base.rank;
   }
 
+  get defaultShader() {
+    return this.base.defaultShader;
+  }
+
   getSources(
     options: VolumeSourceOptions,
   ): SliceViewSingleResolutionSource<VolumeChunkSource>[][] {

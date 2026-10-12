@@ -189,6 +189,23 @@ export interface SingleChannelMetadata {
   coefficient?: number;
 }
 
+/**
+ * Specifies that two model space dimensions are coordinates in a geospatial coordinate reference
+ * system.
+ */
+export interface GeoReference {
+  /**
+   * CRS specification, e.g. `"EPSG:32633"`, as accepted by `getCrs`.
+   */
+  crs: string;
+
+  /**
+   * Indices of the model (output) dimensions corresponding to the CRS x (easting/longitude) and y
+   * (northing/latitude) axes.
+   */
+  modelDimensions: [number, number];
+}
+
 export interface DataSource {
   subsources: DataSubsourceEntry[];
   modelTransform: CoordinateSpaceTransform;
@@ -196,6 +213,12 @@ export interface DataSource {
   state?: Trackable;
   canonicalUrl?: string;
   channelMetadata?: ChannelMetadata;
+
+  /**
+   * Georeferencing of the model space.  Georeferenced sources are reprojected into the display CRS
+   * of the viewer.
+   */
+  geoReference?: GeoReference;
 }
 
 export interface DataSourceRedirect {

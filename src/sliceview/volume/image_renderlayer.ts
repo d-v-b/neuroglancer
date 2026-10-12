@@ -41,7 +41,7 @@ import {
   setControlsInShader,
 } from "#src/webgl/shader_ui_controls.js";
 
-const DEFAULT_FRAGMENT_MAIN = `#uicontrol invlerp normalized
+export const DEFAULT_FRAGMENT_MAIN = `#uicontrol invlerp normalized
 void main() {
   emitGrayscale(normalized());
 }

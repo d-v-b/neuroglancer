@@ -22,6 +22,7 @@ import type {
 } from "#src/chunk_manager/frontend.js";
 import { Chunk, ChunkSource } from "#src/chunk_manager/frontend.js";
 import { applyRenderViewportToProjectionMatrix } from "#src/display_context.js";
+import type { GeoWarpSpec } from "#src/geo/source_warp.js";
 import type { LayerManager } from "#src/layer/index.js";
 import type {
   DisplayDimensionRenderInfo,
@@ -61,6 +62,10 @@ import {
   SliceViewProjectionParameters,
 } from "#src/sliceview/base.js";
 import { ChunkLayout } from "#src/sliceview/chunk_layout.js";
+import {
+  makeGeoTransformedSourceInfo,
+  serializeGeoTransformedSourceInfo,
+} from "#src/sliceview/geo.js";
 import type { SliceViewerState } from "#src/sliceview/panel.js";
 import { SliceViewRenderLayer } from "#src/sliceview/renderlayer.js";
 import type { WatchableValueInterface } from "#src/trackable_value.js";
@@ -139,6 +144,7 @@ function serializeTransformedSource(
     combinedGlobalLocalToChunkTransform:
       tsource.combinedGlobalLocalToChunkTransform,
     chunkLayout: tsource.chunkLayout.toObject(),
+    geo: serializeGeoTransformedSourceInfo(tsource.geo),
   };
 }
 
@@ -594,7 +600,11 @@ export class SliceView extends Base {
     );
     for (const scales of transformedSources) {
       for (const tsource of scales) {
-        layer.addSource(tsource.source, tsource.chunkTransform);
+        layer.addSource(
+          tsource.source,
+          tsource.chunkTransform,
+          tsource.geo?.warp,
+        );
       }
     }
     return transformedSources;
@@ -894,6 +904,12 @@ export interface SliceViewSingleResolutionSource<
    * to `chunkSource.spec.upperVoxelBound`.
    */
   upperClipBound?: Float32Array;
+
+  /**
+   * Nonlinear geospatial warp from the multiscale coordinate space to the (affine) coordinate
+   * space seen by the rest of Neuroglancer.  See `src/geo/source_warp.ts`.
+   */
+  geoWarp?: GeoWarpSpec;
 }
 
 export abstract class MultiscaleSliceViewChunkSource<
@@ -1072,6 +1088,16 @@ export function getVolumetricTransformedSources(
         effectiveVoxelSize[i] = effectiveVoxelSizeValues[i];
       }
       effectiveVoxelSize.fill(1, displayRank);
+      const { geoWarp } = singleResolutionSource;
+      const geo =
+        geoWarp === undefined
+          ? undefined
+          : makeGeoTransformedSourceInfo(
+              geoWarp,
+              singleResolutionSource.chunkToMultiscaleTransform,
+              spec.rank,
+              chunkDisplayDimensionIndices,
+            );
       return {
         layerRank,
         lowerClipBound,
@@ -1094,6 +1120,7 @@ export function getVolumetricTransformedSources(
         fixedPositionWithinChunk: new Uint32Array(chunkRank),
         chunkTransform,
         chunkDisplayTransform,
+        geo,
       };
     };
     return allSources.map((scales) =>

@@ -289,4 +289,12 @@ export abstract class MultiscaleVolumeChunkSource extends MultiscaleSliceViewChu
 > {
   abstract dataType: DataType;
   abstract volumeType: VolumeType;
+
+  /**
+   * Suggested image layer shader, used in place of the default shader if the user has not
+   * specified one.  For example, sources of RGBA map tiles suggest a shader that emits RGBA.
+   */
+  get defaultShader(): string | undefined {
+    return undefined;
+  }
 }

@@ -38,6 +38,7 @@ import type {
 } from "#src/datasource/index.js";
 import { makeEmptyDataSourceSpecification } from "#src/datasource/index.js";
 import type { DisplayContext, RenderedPanel } from "#src/display_context.js";
+import { TrackableDisplayCrs } from "#src/geo/display_crs.js";
 import type { LoadedDataSubsource } from "#src/layer/layer_data_source.js";
 import {
   LayerDataSource,
@@ -2156,6 +2157,11 @@ export class TopLevelLayerListSpecification extends LayerListSpecification {
   coordinateSpaceCombiner: CoordinateSpaceCombiner;
   subsets = new Set<LayerSubsetSpecification>();
   layerSelectedValues: LayerSelectedValues;
+
+  /**
+   * Display CRS into which georeferenced data sources are reprojected.
+   */
+  displayCrs = new TrackableDisplayCrs();
 
   constructor(
     public display: DisplayContext,

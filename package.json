@@ -363,6 +363,18 @@
       "neuroglancer/datasource/vtk:disabled": "./src/util/false.ts",
       "default": "./src/datasource/vtk/register_default.ts"
     },
+    "#datasource/xyz/backend": {
+      "neuroglancer/datasource/xyz:enabled": "./src/datasource/xyz/backend.ts",
+      "neuroglancer/datasource:none_by_default": "./src/util/false.ts",
+      "neuroglancer/datasource/xyz:disabled": "./src/util/false.ts",
+      "default": "./src/datasource/xyz/backend.ts"
+    },
+    "#datasource/xyz/register_default": {
+      "neuroglancer/datasource/xyz:enabled": "./src/datasource/xyz/register_default.ts",
+      "neuroglancer/datasource:none_by_default": "./src/util/false.ts",
+      "neuroglancer/datasource/xyz:disabled": "./src/util/false.ts",
+      "default": "./src/datasource/xyz/register_default.ts"
+    },
     "#datasource/zarr/backend": {
       "neuroglancer/datasource/zarr:enabled": "./src/datasource/zarr/backend.ts",
       "neuroglancer/datasource:none_by_default": "./src/util/false.ts",

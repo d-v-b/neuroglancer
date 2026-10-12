@@ -33,6 +33,7 @@ import type {
   DataSubsourceSpecification,
 } from "#src/datasource/index.js";
 import { makeEmptyDataSourceSpecification } from "#src/datasource/index.js";
+import { reprojectDataSource } from "#src/geo/reproject_data_source.js";
 import type { UserLayer } from "#src/layer/index.js";
 import { getWatchableRenderLayerTransform } from "#src/render_coordinate_transform.js";
 import type { RenderLayer } from "#src/renderlayer.js";
@@ -414,8 +415,30 @@ export class LayerDataSource extends RefCounted {
       .then((source: DataSourceWithRedirectInfo) => {
         if (refCounted.wasDisposed) return;
         this.messages.clearMessages();
+        let effectiveSource: DataSource = source;
+        const { geoReference } = source;
+        if (geoReference !== undefined) {
+          const { displayCrs } = layer.manager.root;
+          effectiveSource = reprojectDataSource(
+            source,
+            displayCrs.getOrAdopt(geoReference.crs),
+          );
+          const initialDisplayCrs = displayCrs.value;
+          refCounted.registerDisposer(
+            displayCrs.changed.add(() => {
+              if (displayCrs.value === initialDisplayCrs) return;
+              // Reload the data source to reproject it into the new display CRS.  Any custom
+              // transform is discarded, since it is expressed in the units of the previous CRS.
+              Promise.resolve().then(() => {
+                if (refCounted.wasDisposed) return;
+                this.spec = { ...this.spec, transform: undefined };
+                layer.specificationChanged.dispatch();
+              });
+            }),
+          );
+        }
         const loaded = refCounted.registerDisposer(
-          new LoadedLayerDataSource(this, source, spec),
+          new LoadedLayerDataSource(this, effectiveSource, spec),
         );
         loaded.registerDisposer(
           layer.addCoordinateSpace(loaded.transform.outputSpace),

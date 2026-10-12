@@ -43,6 +43,7 @@ import {
 import { DataType, VolumeType } from "#src/sliceview/volume/base.js";
 import { MultiscaleVolumeChunkSource } from "#src/sliceview/volume/frontend.js";
 import {
+  DEFAULT_FRAGMENT_MAIN,
   defineImageLayerShader,
   getTrackableFragmentMain,
   ImageRenderLayer,
@@ -250,6 +251,13 @@ export class ImageUserLayer extends Base {
         continue;
       }
       dataType = volume.dataType;
+      const { defaultShader } = volume;
+      if (
+        defaultShader !== undefined &&
+        this.fragmentMain.value === DEFAULT_FRAGMENT_MAIN
+      ) {
+        this.fragmentMain.value = defaultShader;
+      }
       loadedSubsource.activate((context) => {
         loadedSubsource.addRenderLayer(
           new ImageRenderLayer(volume, {

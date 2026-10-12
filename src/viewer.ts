@@ -302,6 +302,7 @@ export class TrackableViewerState extends CompoundTrackable {
     super();
     this.add("title", viewer.title);
     this.add("dimensions", viewer.coordinateSpace);
+    this.add("crs", viewer.layerSpecification.displayCrs);
     this.add("relativeDisplayScales", viewer.relativeDisplayScales);
     this.add("displayDimensions", viewer.displayDimensions);
     this.add("position", viewer.position);
