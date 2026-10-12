@@ -19,5 +19,10 @@ import type { ArrayMetadata } from "#src/datasource/zarr/metadata/index.js";
 export class VolumeChunkSourceParameters {
   url: string;
   metadata: ArrayMetadata;
+  /**
+   * If specified, the chunk source combines multiple arrays with identical metadata (e.g. the data
+   * variables of an xarray dataset) as an additional, last channel dimension.  `url` is ignored.
+   */
+  variableUrls?: string[];
   static RPC_ID = "zarr/VolumeChunkSource";
 }

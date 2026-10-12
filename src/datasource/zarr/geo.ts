@@ -411,8 +411,71 @@ export function getMissingValue(metadata: ArrayMetadata): number | undefined {
  * Returns a default shader for a georeferenced scalar array, mapping the valid range (from CF
  * attributes) to a colormap and rendering missing values as transparent.
  */
+function getMissingValueTest(metadata: ArrayMetadata, expr: string) {
+  const missing = getMissingValue(metadata);
+  let test = `isnan(${expr})`;
+  if (missing !== undefined && Number.isFinite(missing)) {
+    // Compare with a relative tolerance, since the fill value may not be exactly representable.
+    test += ` || abs(${expr} - ${missing.toExponential()}) <= ${Math.abs(missing * 1e-6).toExponential()}`;
+  }
+  return test;
+}
+
+/**
+ * Determines whether two variables are the eastward and northward components of a vector field
+ * (e.g. ocean currents or winds).
+ */
+export function isVectorPair(metadata: ArrayMetadata[]): boolean {
+  if (metadata.length !== 2) return false;
+  const standardNames = metadata.map((m) =>
+    String(m.userAttributes.standard_name ?? ""),
+  );
+  return (
+    standardNames[0].startsWith("eastward_") &&
+    standardNames[1].startsWith("northward_")
+  );
+}
+
+/**
+ * Returns the default shader for the data variables of an xarray dataset combined as channels.
+ */
+export function getXarrayDatasetDefaultShader(
+  metadata: ArrayMetadata[],
+): string | undefined {
+  if (metadata.length === 1) return getXarrayDefaultShader(metadata[0]);
+  if (metadata.some((m) => m.dataType !== DataType.FLOAT32)) return undefined;
+  if (isVectorPair(metadata)) {
+    const missingTest = getMissingValueTest(metadata[0], "u");
+    return `#uicontrol float maxSpeed slider(min=0.05, max=3, default=1, step=0.05)
+#uicontrol bool colorByDirection checkbox(default=false)
+vec3 hsvToRgb(vec3 c) {
+  vec3 p = abs(fract(c.xxx + vec3(1.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0);
+  return c.z * mix(vec3(1.0), clamp(p - 1.0, 0.0, 1.0), c.y);
+}
+void main() {
+  float u = getDataValue(0);
+  float v = getDataValue(1);
+  if (${missingTest}) {
+    emitTransparent();
+    return;
+  }
+  float speed = length(vec2(u, v));
+  float t = clamp(speed / maxSpeed, 0.0, 1.0);
+  if (colorByDirection) {
+    // Hue encodes the direction of flow; brightness encodes speed.
+    emitRGB(hsvToRgb(vec3(atan(v, u) / 6.28318531 + 0.5, 0.9, t)));
+  } else {
+    emitRGB(colormapCubehelix(t));
+  }
+}
+`;
+  }
+  return getXarrayDefaultShader(metadata[0], "0");
+}
+
 export function getXarrayDefaultShader(
   metadata: ArrayMetadata,
+  channel = "",
 ): string | undefined {
   if (metadata.dataType !== DataType.FLOAT32) return undefined;
   const attrs = metadata.userAttributes;
@@ -429,17 +492,15 @@ export function getXarrayDefaultShader(
   ) {
     range = [validRange[0], validRange[1]];
   }
-  const missing = getMissingValue(metadata);
-  const rangeParameter =
-    range === undefined ? "" : `(range=[${range[0]}, ${range[1]}])`;
-  let missingTest = "isnan(value)";
-  if (missing !== undefined && Number.isFinite(missing)) {
-    // Compare with a relative tolerance, since the fill value may not be exactly representable.
-    missingTest += ` || abs(value - ${missing.toExponential()}) <= ${Math.abs(missing * 1e-6).toExponential()}`;
-  }
-  return `#uicontrol invlerp normalized${rangeParameter}
+  const parameters: string[] = [];
+  if (range !== undefined) parameters.push(`range=[${range[0]}, ${range[1]}]`);
+  if (channel !== "") parameters.push(`channel=${channel}`);
+  const parameterString =
+    parameters.length === 0 ? "" : `(${parameters.join(", ")})`;
+  const missingTest = getMissingValueTest(metadata, "value");
+  return `#uicontrol invlerp normalized${parameterString}
 void main() {
-  float value = getDataValue();
+  float value = getDataValue(${channel});
   if (${missingTest}) {
     emitTransparent();
     return;

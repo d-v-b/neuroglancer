@@ -34,6 +34,7 @@ import { getKvStorePathCompletions } from "#src/datasource/kvstore_completions.j
 import { VolumeChunkSourceParameters } from "#src/datasource/zarr/base.js";
 import type { XarrayGeoreference } from "#src/datasource/zarr/geo.js";
 import {
+  getXarrayDatasetDefaultShader,
   getXarrayDefaultShader,
   getXarrayGeoreference,
 } from "#src/datasource/zarr/geo.js";
@@ -128,19 +129,27 @@ export class MultiscaleVolumeChunkSource extends GenericMultiscaleVolumeChunkSou
   getSources(volumeSourceOptions: VolumeSourceOptions) {
     return transposeNestedArrays(
       this.multiscale.scales.map((scale) => {
-        const { metadata } = scale;
-        const { rank, codecs, shape } = metadata;
+        const { metadata, variableUrls } = scale;
+        const { codecs, shape } = metadata;
+        const arrayRank = metadata.rank;
+        // Rank including the variable dimension, if any.
+        const rank = arrayRank + (variableUrls === undefined ? 0 : 1);
         const readChunkShape = codecs.layoutInfo[0].readChunkShape;
         const { physicalToLogicalDimension } = metadata.codecs.layoutInfo[0];
         const permutedChunkShape = new Uint32Array(rank);
         const permutedDataShape = new Float32Array(rank);
         const orderTransform = new Float32Array((rank + 1) ** 2);
         orderTransform[(rank + 1) ** 2 - 1] = 1;
-        for (let i = 0; i < rank; ++i) {
-          const decodedDim = physicalToLogicalDimension[rank - 1 - i];
+        for (let i = 0; i < arrayRank; ++i) {
+          const decodedDim = physicalToLogicalDimension[arrayRank - 1 - i];
           permutedChunkShape[i] = readChunkShape[decodedDim];
           permutedDataShape[i] = shape[decodedDim];
           orderTransform[i + decodedDim * (rank + 1)] = 1;
+        }
+        if (variableUrls !== undefined) {
+          permutedChunkShape[arrayRank] = variableUrls.length;
+          permutedDataShape[arrayRank] = variableUrls.length;
+          orderTransform[arrayRank + arrayRank * (rank + 1)] = 1;
         }
         const transform = new Float32Array((rank + 1) ** 2);
         matrix.multiply<Float32Array | Float64Array>(
@@ -173,6 +182,7 @@ export class MultiscaleVolumeChunkSource extends GenericMultiscaleVolumeChunkSou
                 parameters: {
                   url: scale.url,
                   metadata,
+                  variableUrls,
                 },
               },
             ),
@@ -221,12 +231,245 @@ const supportedQueryParameters = [
       { value: "/", description: "" },
     ],
   },
+  {
+    key: {
+      value: "variables",
+      description:
+        "Comma-separated data variables of an xarray dataset to combine as channels",
+    },
+    values: [],
+  },
 ];
+
+interface XarrayVariable {
+  name: string;
+  url: string;
+  metadata: ArrayMetadata;
+}
+
+/**
+ * Returns the names and metadata JSON of the arrays in an xarray dataset (zarr group), from its
+ * consolidated metadata.
+ */
+async function getConsolidatedArrays(
+  sharedKvStoreContext: SharedKvStoreContext,
+  url: string,
+  zarrVersion: 2 | 3,
+  options: Partial<ProgressOptions>,
+): Promise<
+  | Map<
+      string,
+      {
+        shape: number[];
+        dims: string[];
+        attrs: any;
+        dtype: string;
+        chunks: number[];
+      }
+    >
+  | undefined
+> {
+  const arrays = new Map<
+    string,
+    {
+      shape: number[];
+      dims: string[];
+      attrs: any;
+      dtype: string;
+      chunks: number[];
+    }
+  >();
+  if (zarrVersion === 2) {
+    const consolidated = await getJsonResource(
+      sharedKvStoreContext,
+      joinBaseUrlAndPath(url, ".zmetadata"),
+      "zarr v2 consolidated metadata",
+      options,
+    );
+    const metadata = consolidated?.metadata;
+    if (metadata == null || typeof metadata !== "object") return undefined;
+    for (const [key, zarray] of Object.entries<any>(metadata)) {
+      const m = key.match(/^([^/]+)\/\.zarray$/);
+      if (m === null) continue;
+      const name = m[1];
+      const attrs = metadata[`${name}/.zattrs`] ?? {};
+      arrays.set(name, {
+        shape: zarray.shape,
+        chunks: zarray.chunks,
+        dtype: JSON.stringify(zarray.dtype),
+        dims: attrs._ARRAY_DIMENSIONS ?? [],
+        attrs,
+      });
+    }
+  } else {
+    const groupJson = await getJsonResource(
+      sharedKvStoreContext,
+      joinBaseUrlAndPath(url, "zarr.json"),
+      "zarr v3 group metadata",
+      options,
+    );
+    const metadata = groupJson?.consolidated_metadata?.metadata;
+    if (metadata == null || typeof metadata !== "object") return undefined;
+    for (const [name, zarrJson] of Object.entries<any>(metadata)) {
+      if (name.includes("/") || zarrJson?.node_type !== "array") continue;
+      arrays.set(name, {
+        shape: zarrJson.shape,
+        chunks: zarrJson.chunk_grid?.configuration?.chunk_shape ?? [],
+        dtype: JSON.stringify(zarrJson.data_type),
+        dims: zarrJson.dimension_names ?? [],
+        attrs: zarrJson.attributes ?? {},
+      });
+    }
+  }
+  return arrays;
+}
+
+/**
+ * Selects the data variables of an xarray dataset to display.  If `requested` is not specified,
+ * selects all data variables with the same dimensions, shape, chunking, and data type as the first
+ * data variable.
+ */
+export function selectXarrayVariables(
+  arrays: Map<
+    string,
+    {
+      shape: number[];
+      dims: string[];
+      attrs: any;
+      dtype: string;
+      chunks: number[];
+    }
+  >,
+  requested: string[] | undefined,
+): string[] {
+  const coordinates = new Set<string>();
+  for (const [name, array] of arrays) {
+    if (array.dims.length === 1 && array.dims[0] === name)
+      coordinates.add(name);
+    const coordinatesAttr = array.attrs.coordinates;
+    if (typeof coordinatesAttr === "string") {
+      for (const c of coordinatesAttr.split(/\s+/)) coordinates.add(c);
+    }
+  }
+  const signature = (name: string) => {
+    const { shape, dims, dtype, chunks } = arrays.get(name)!;
+    return JSON.stringify([shape, dims, dtype, chunks]);
+  };
+  if (requested !== undefined) {
+    for (const name of requested) {
+      if (!arrays.has(name)) {
+        throw new Error(
+          `Variable ${JSON.stringify(name)} not found in dataset`,
+        );
+      }
+    }
+    const first = signature(requested[0]);
+    for (const name of requested) {
+      if (signature(name) !== first) {
+        throw new Error(
+          `Variables ${JSON.stringify(requested[0])} and ${JSON.stringify(name)} must have the same dimensions, shape, chunks, and data type`,
+        );
+      }
+    }
+    return requested;
+  }
+  const candidates = Array.from(arrays.keys())
+    .filter(
+      (name) => !coordinates.has(name) && arrays.get(name)!.shape.length >= 2,
+    )
+    .sort();
+  if (candidates.length === 0) {
+    throw new Error("Dataset contains no data variables");
+  }
+  const first = signature(candidates[0]);
+  return candidates.filter((name) => signature(name) === first);
+}
+
+async function resolveXarrayDataset(
+  sharedKvStoreContext: SharedKvStoreContext,
+  url: string,
+  zarrVersion: 2 | 3,
+  requested: string[] | undefined,
+  options: {
+    explicitDimensionSeparator: DimensionSeparator | undefined;
+  } & Partial<ProgressOptions>,
+): Promise<XarrayVariable[] | undefined> {
+  const arrays = await getConsolidatedArrays(
+    sharedKvStoreContext,
+    url,
+    zarrVersion,
+    options,
+  );
+  if (arrays === undefined) return undefined;
+  const names = selectXarrayVariables(arrays, requested);
+  return await Promise.all(
+    names.map(async (name) => {
+      const variableUrl = kvstoreEnsureDirectoryPipelineUrl(
+        pipelineUrlJoin(url, name),
+      );
+      const metadata = await getMetadata(sharedKvStoreContext, variableUrl, {
+        ...options,
+        zarrVersion,
+        expectedNodeType: "array",
+      });
+      if (metadata === undefined || metadata.nodeType !== "array") {
+        throw new Error(`Variable ${JSON.stringify(name)} not found`);
+      }
+      return { name, url: variableUrl, metadata };
+    }),
+  );
+}
+
+/**
+ * Returns the multiscale info for the data variables of an xarray dataset, combined along an
+ * additional channel dimension.
+ */
+function getMultiscaleInfoForXarrayDataset(
+  variables: XarrayVariable[],
+  geo: XarrayGeoreference | undefined,
+): ZarrMultiscaleInfo {
+  const [first] = variables;
+  const base = getMultiscaleInfoForSingleArray(first.url, first.metadata, geo);
+  if (variables.length === 1) return base;
+  const space = base.coordinateSpace;
+  const { rank } = space;
+  let channelName = "c^";
+  while (space.names.includes(channelName)) channelName = `_${channelName}`;
+  const lowerBounds = new Float64Array(rank + 1);
+  const upperBounds = new Float64Array(rank + 1);
+  upperBounds.set(space.bounds.upperBounds);
+  upperBounds[rank] = variables.length;
+  const coordinateSpace = makeCoordinateSpace({
+    names: [...space.names, channelName],
+    units: [...space.units, ""],
+    scales: Float64Array.from([...space.scales, 1]),
+    boundingBoxes: [
+      makeIdentityTransformedBoundingBox({ lowerBounds, upperBounds }),
+    ],
+  });
+  return {
+    coordinateSpace,
+    dataType: base.dataType,
+    scales: [
+      {
+        url: first.url,
+        transform: matrix.createIdentity(Float64Array, rank + 2),
+        metadata: first.metadata,
+        variableUrls: variables.map((v) => v.url),
+      },
+    ],
+  };
+}
 
 interface ZarrScaleInfo {
   url: string;
   transform: Float64Array;
   metadata: ArrayMetadata;
+  /**
+   * URLs of multiple arrays with identical metadata combined as an additional, last channel
+   * dimension.
+   */
+  variableUrls?: string[];
 }
 
 interface ZarrMultiscaleInfo {
@@ -525,12 +768,22 @@ export class ZarrDataSource implements KvStoreBasedDataSourceProvider {
       "dimension_separator",
       parseDimensionSeparator,
     );
+    const requestedVariables = verifyOptionalObjectProperty(
+      parameters,
+      "variables",
+      (x) =>
+        String(x)
+          .split(",")
+          .map((v) => v.trim())
+          .filter((v) => v !== ""),
+    );
     return options.registry.chunkManager.memoize.getAsync(
       {
         type: "zarr:MultiscaleVolumeChunkSource",
         zarrVersion: this.zarrVersion,
         kvStoreUrl,
         dimensionSeparator,
+        requestedVariables,
       },
       options,
       async (progressOptions) => {
@@ -555,18 +808,50 @@ export class ZarrDataSource implements KvStoreBasedDataSourceProvider {
             metadata.zarrVersion,
           );
           if (omeMetadata === undefined) {
-            throw new Error("Neither array nor OME multiscale metadata found");
+            // May be an xarray dataset.
+            const variables = await resolveXarrayDataset(
+              sharedKvStoreContext,
+              kvStoreUrl,
+              metadata.zarrVersion,
+              requestedVariables,
+              {
+                ...progressOptions,
+                explicitDimensionSeparator: dimensionSeparator,
+              },
+            );
+            if (variables === undefined) {
+              throw new Error(
+                "Neither array, OME multiscale, nor consolidated xarray metadata found",
+              );
+            }
+            const [first] = variables;
+            geo = await getXarrayGeoreference(
+              sharedKvStoreContext,
+              first.url,
+              first.metadata,
+              progressOptions,
+            );
+            multiscaleInfo = getMultiscaleInfoForXarrayDataset(variables, geo);
+            channelMetadata = {
+              channels: variables.map((v) => ({ label: v.name })),
+            };
+            if (geo !== undefined) {
+              defaultShader = getXarrayDatasetDefaultShader(
+                variables.map((v) => v.metadata),
+              );
+            }
+          } else {
+            channelMetadata = omeMetadata.channels;
+            multiscaleInfo = await resolveOmeMultiscale(
+              sharedKvStoreContext,
+              omeMetadata.multiscale,
+              {
+                ...progressOptions,
+                zarrVersion: metadata.zarrVersion,
+                explicitDimensionSeparator: dimensionSeparator,
+              },
+            );
           }
-          channelMetadata = omeMetadata.channels;
-          multiscaleInfo = await resolveOmeMultiscale(
-            sharedKvStoreContext,
-            omeMetadata.multiscale,
-            {
-              ...progressOptions,
-              zarrVersion: metadata.zarrVersion,
-              explicitDimensionSeparator: dimensionSeparator,
-            },
-          );
         } else {
           geo = await getXarrayGeoreference(
             sharedKvStoreContext,
