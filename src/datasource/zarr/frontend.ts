@@ -905,6 +905,13 @@ export class ZarrDataSource implements KvStoreBasedDataSourceProvider {
               : {
                   crs: geo.crs,
                   modelDimensions: [geo.lonDim, geo.latDim],
+                  verticalDimensions: Array.from(
+                    geo.verticalElevations,
+                    ([modelDimension, elevations]) => ({
+                      modelDimension,
+                      elevations,
+                    }),
+                  ),
                 },
           channelMetadata,
           subsources: [

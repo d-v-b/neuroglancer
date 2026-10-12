@@ -204,6 +204,12 @@ export interface GeoReference {
    * (northing/latitude) axes.
    */
   modelDimensions: [number, number];
+
+  /**
+   * Vertical model dimensions, if any, specified by the elevation (in meters, positive up) of the
+   * center of each level.  Level `i` is centered at model coordinate `i + 0.5`.
+   */
+  verticalDimensions?: { modelDimension: number; elevations: number[] }[];
 }
 
 export interface DataSource {

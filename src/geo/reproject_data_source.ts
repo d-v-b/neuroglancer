@@ -270,7 +270,11 @@ export function reprojectDataSource(
     ...dataSource,
     modelTransform: newModelTransform,
     subsources,
-    geoReference: { crs: displayCrs.id, modelDimensions: [o0, o1] },
+    geoReference: {
+      crs: displayCrs.id,
+      modelDimensions: [o0, o1],
+      verticalDimensions: geoReference.verticalDimensions,
+    },
     reprojection: { geoWarp, sourceCrs, displayCrs },
   };
 }

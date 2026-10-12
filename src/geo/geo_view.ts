@@ -39,6 +39,7 @@ import {
   haversineDistance,
   TransformStatus,
 } from "#src/geo/transform.js";
+import { VerticalAxis } from "#src/geo/vertical.js";
 import type { NavigationState } from "#src/navigation_state.js";
 import { TrackableBoolean } from "#src/trackable_boolean.js";
 import type { WatchableValueInterface } from "#src/trackable_value.js";
@@ -168,24 +169,92 @@ export function getGroundMetersPerPixel(
   globalPosition: ArrayLike<number>,
   invViewMatrix: ArrayLike<number>,
   displayDimensionIndices: ArrayLike<number>,
-): [number, number] | undefined {
-  const result: number[] = [];
+): [number | undefined, number | undefined] | undefined {
+  const result: (number | undefined)[] = [];
   for (let axis = 0; axis < 2; ++axis) {
     let dx = 0;
     let dy = 0;
+    let other = 0;
     for (let d = 0; d < 3; ++d) {
       const dim = displayDimensionIndices[d];
       const v = invViewMatrix[axis * 4 + d] * EPSILON_PIXELS;
       if (dim === info.xDim) dx = v;
       else if (dim === info.yDim) dy = v;
+      else if (dim !== -1) other += Math.abs(v);
     }
-    if (dx === 0 && dy === 0) return undefined;
-    // Use a displacement of at most a small fraction of the Earth, to avoid wrapping artifacts.
+    if (
+      (dx === 0 && dy === 0) ||
+      other > 1e-6 * (Math.abs(dx) + Math.abs(dy))
+    ) {
+      // The screen axis is not (purely) horizontal.
+      result.push(undefined);
+      continue;
+    }
     const distance = groundDistance(info, globalPosition, dx, dy);
-    if (distance === undefined || !(distance > 0)) return undefined;
-    result.push(distance / EPSILON_PIXELS);
+    result.push(
+      distance === undefined || !(distance > 0)
+        ? undefined
+        : distance / EPSILON_PIXELS,
+    );
   }
+  if (result[0] === undefined && result[1] === undefined) return undefined;
   return [result[0], result[1]];
+}
+
+export type GeoPanelView =
+  | { kind: "map" }
+  | {
+      kind: "vertical";
+      axis: VerticalAxis;
+      /**
+       * Display dimension (0, 1, or 2) of the vertical dimension.
+       */
+      verticalDisplayDimension: number;
+      verticalGlobalDimension: number;
+    };
+
+const NORMAL_EPSILON = 1e-3;
+
+/**
+ * Classifies a cross section of a geospatial display as a map view (parallel to the map plane)
+ * or a vertical section (containing the vertical axis and a horizontal direction), or returns
+ * `undefined` otherwise.
+ *
+ * @param viewMatrix View matrix of the cross section; row 2 is the normal of the plane in display
+ *     coordinates.
+ */
+export function classifyGeoPanelView(
+  info: GeoDisplayInfo,
+  getVerticalAxis: (globalDim: number) => VerticalAxis | undefined,
+  viewMatrix: ArrayLike<number>,
+  displayDimensionIndices: ArrayLike<number>,
+): GeoPanelView | undefined {
+  const normal = [viewMatrix[2], viewMatrix[6], viewMatrix[10]];
+  const norm = Math.hypot(normal[0], normal[1], normal[2]);
+  if (norm === 0) return undefined;
+  const inPlane = (d: number) => Math.abs(normal[d] / norm) < NORMAL_EPSILON;
+  let xDisplay = -1;
+  let yDisplay = -1;
+  for (let d = 0; d < 3; ++d) {
+    const dim = displayDimensionIndices[d];
+    if (dim === info.xDim) xDisplay = d;
+    else if (dim === info.yDim) yDisplay = d;
+  }
+  if (xDisplay === -1 || yDisplay === -1) return undefined;
+  if (inPlane(xDisplay) && inPlane(yDisplay)) return { kind: "map" };
+  for (let d = 0; d < 3; ++d) {
+    const dim = displayDimensionIndices[d];
+    if (dim === -1 || d === xDisplay || d === yDisplay || !inPlane(d)) continue;
+    const axis = getVerticalAxis(dim);
+    if (axis === undefined) continue;
+    return {
+      kind: "vertical",
+      axis,
+      verticalDisplayDimension: d,
+      verticalGlobalDimension: dim,
+    };
+  }
+  return undefined;
 }
 
 /**
@@ -297,6 +366,7 @@ export class GeoViewState extends RefCounted {
       this.changed.dispatch();
     };
     this.registerDisposer(displayCrs.changed.add(invalidate));
+    this.registerDisposer(displayCrs.verticalAxesChanged.add(invalidate));
     this.registerDisposer(coordinateSpace.changed.add(invalidate));
     this.registerDisposer(
       this.showGraticule.changed.add(this.changed.dispatch),
@@ -312,6 +382,24 @@ export class GeoViewState extends RefCounted {
     this.registerDisposer(
       this.changed.add(() => this.maybeInitializeOrientation()),
     );
+  }
+
+  private verticalAxisCache = new Map<number[], VerticalAxis>();
+
+  /**
+   * Returns the vertical axis corresponding to a global dimension, if any.
+   */
+  getVerticalAxis(globalDim: number): VerticalAxis | undefined {
+    const name = this.coordinateSpace.value.names[globalDim];
+    if (name === undefined) return undefined;
+    const elevations = this.displayCrs.verticalAxes.get(name);
+    if (elevations === undefined || elevations.length < 2) return undefined;
+    let axis = this.verticalAxisCache.get(elevations);
+    if (axis === undefined) {
+      axis = new VerticalAxis(elevations);
+      this.verticalAxisCache.set(elevations, axis);
+    }
+    return axis;
   }
 
   get info(): GeoDisplayInfo | undefined {

@@ -423,6 +423,13 @@ export class LayerDataSource extends RefCounted {
             source,
             displayCrs.getOrAdopt(geoReference.crs),
           );
+          const { names } = effectiveSource.modelTransform.outputSpace;
+          for (const {
+            modelDimension,
+            elevations,
+          } of geoReference.verticalDimensions ?? []) {
+            displayCrs.registerVerticalAxis(names[modelDimension], elevations);
+          }
           const initialDisplayCrs = displayCrs.value;
           refCounted.registerDisposer(
             displayCrs.changed.add(() => {

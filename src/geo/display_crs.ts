@@ -22,6 +22,7 @@ import type { Crs } from "#src/geo/crs.js";
 import { getCrs } from "#src/geo/crs.js";
 import { TrackableValue } from "#src/trackable_value.js";
 import { verifyString } from "#src/util/json.js";
+import { NullarySignal } from "#src/util/signal.js";
 
 /**
  * Names of the model dimensions holding display CRS x (easting/longitude) and y
@@ -48,6 +49,20 @@ export class TrackableDisplayCrs extends TrackableValue<string | undefined> {
    */
   get dimensionNames(): readonly [string, string] {
     return GEO_DIMENSION_NAMES;
+  }
+
+  /**
+   * Elevations (in meters, positive up) of the levels of vertical global dimensions, keyed by
+   * dimension name, as reported by georeferenced data sources.
+   */
+  verticalAxes = new Map<string, number[]>();
+  verticalAxesChanged = new NullarySignal();
+
+  registerVerticalAxis(name: string, elevations: number[]) {
+    const existing = this.verticalAxes.get(name);
+    if (existing !== undefined && existing.length === elevations.length) return;
+    this.verticalAxes.set(name, elevations);
+    this.verticalAxesChanged.dispatch();
   }
 
   constructor() {

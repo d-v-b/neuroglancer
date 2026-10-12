@@ -17,8 +17,12 @@
 import { AxesLineHelper, computeAxisLineMatrix } from "#src/axes_lines.js";
 import type { DisplayContext } from "#src/display_context.js";
 import type { GeoViewState } from "#src/geo/geo_view.js";
-import { getGroundMetersPerPixel } from "#src/geo/geo_view.js";
+import {
+  classifyGeoPanelView,
+  getGroundMetersPerPixel,
+} from "#src/geo/geo_view.js";
 import { drawGraticule } from "#src/geo/graticule.js";
+import { CRUST_COLOR, drawVerticalSection } from "#src/geo/vertical.js";
 import type { VisibleRenderLayerTracker } from "#src/layer/index.js";
 import { makeRenderedPanelVisibleLayerTracker } from "#src/layer/index.js";
 import { PickIDManager } from "#src/object_picking.js";
@@ -360,8 +364,12 @@ export class SliceViewPanel extends RenderedDataPanel {
     gl.clear(WebGL2RenderingContext.COLOR_BUFFER_BIT);
 
     const backgroundColor = tempVec4;
+    // In vertical sections through georeferenced volumes, regions without data (below the
+    // seafloor or outside the volume) represent the solid Earth.
     const crossSectionBackgroundColor =
-      this.viewer.crossSectionBackgroundColor.value;
+      this.getGeoPanelView(projectionParameters)?.kind === "vertical"
+        ? CRUST_COLOR
+        : this.viewer.crossSectionBackgroundColor.value;
     backgroundColor[0] = crossSectionBackgroundColor[0];
     backgroundColor[1] = crossSectionBackgroundColor[1];
     backgroundColor[2] = crossSectionBackgroundColor[2];
@@ -466,21 +474,31 @@ export class SliceViewPanel extends RenderedDataPanel {
    * Draws the graticule and north arrow if the view shows the display CRS dimensions of a
    * geospatial display.
    */
+  private getGeoPanelView(projectionParameters: ProjectionParameters) {
+    const { geoView } = this.viewer;
+    const info = geoView?.info;
+    if (geoView === undefined || info === undefined) return undefined;
+    return classifyGeoPanelView(
+      info,
+      (dim) => geoView.getVerticalAxis(dim),
+      projectionParameters.viewMatrix,
+      projectionParameters.displayDimensionRenderInfo.displayDimensionIndices,
+    );
+  }
+
   private drawGeoOverlay(projectionParameters: ProjectionParameters) {
     const { geoView } = this.viewer;
     const info = geoView?.info;
     if (geoView === undefined || info === undefined) return;
+    const panelView = this.getGeoPanelView(projectionParameters);
+    if (panelView === undefined) return;
     const drawGraticuleLines = geoView.showGraticule.value;
     const drawNorthArrow = this.viewer.showScaleBar.value;
-    if (!drawGraticuleLines && !drawNorthArrow) return;
-    const { displayDimensionIndices } =
-      projectionParameters.displayDimensionRenderInfo;
-    if (
-      !displayDimensionIndices.includes(info.xDim) ||
-      !displayDimensionIndices.includes(info.yDim)
-    ) {
+    if (panelView.kind === "map" && !drawGraticuleLines && !drawNorthArrow) {
       return;
     }
+    const { displayDimensionIndices } =
+      projectionParameters.displayDimensionRenderInfo;
     const { width, height } = projectionParameters;
     let canvas = this.geoOverlayCanvas;
     if (canvas === undefined) {
@@ -492,24 +510,42 @@ export class SliceViewPanel extends RenderedDataPanel {
     }
     const ctx = canvas.getContext("2d")!;
     const scaleBarOptions = this.viewer.scaleBarOptions.value;
-    drawGraticule(
-      ctx,
-      info,
-      {
-        width,
-        height,
-        viewProjectionMat: projectionParameters.viewProjectionMat,
-        invViewProjectionMat: projectionParameters.invViewProjectionMat,
-        displayDimensionIndices,
-        globalPosition: projectionParameters.globalPosition,
-      },
-      {
-        scaleFactor: scaleBarOptions.scaleFactor,
-        fontName: scaleBarOptions.fontName,
-        drawGraticule: drawGraticuleLines,
-        drawNorthArrow,
-      },
-    );
+    if (panelView.kind === "vertical") {
+      ctx.clearRect(0, 0, width, height);
+      drawVerticalSection(
+        ctx,
+        panelView.axis,
+        {
+          width,
+          height,
+          invViewProjectionMat: projectionParameters.invViewProjectionMat,
+          verticalDisplayDimension: panelView.verticalDisplayDimension,
+        },
+        {
+          scaleFactor: scaleBarOptions.scaleFactor,
+          fontName: scaleBarOptions.fontName,
+        },
+      );
+    } else {
+      drawGraticule(
+        ctx,
+        info,
+        {
+          width,
+          height,
+          viewProjectionMat: projectionParameters.viewProjectionMat,
+          invViewProjectionMat: projectionParameters.invViewProjectionMat,
+          displayDimensionIndices,
+          globalPosition: projectionParameters.globalPosition,
+        },
+        {
+          scaleFactor: scaleBarOptions.scaleFactor,
+          fontName: scaleBarOptions.fontName,
+          drawGraticule: drawGraticuleLines,
+          drawNorthArrow,
+        },
+      );
+    }
     const { gl } = this;
     if (this.geoOverlayTexture === null) {
       const texture = (this.geoOverlayTexture = gl.createTexture());
@@ -534,14 +570,10 @@ export class SliceViewPanel extends RenderedDataPanel {
   private getGeoScaleBarParameters(projectionParameters: ProjectionParameters) {
     const info = this.viewer.geoView?.info;
     if (info === undefined) return undefined;
+    const panelView = this.getGeoPanelView(projectionParameters);
+    if (panelView === undefined) return undefined;
     const { displayDimensionIndices } =
       projectionParameters.displayDimensionRenderInfo;
-    if (
-      !displayDimensionIndices.includes(info.xDim) ||
-      !displayDimensionIndices.includes(info.yDim)
-    ) {
-      return undefined;
-    }
     const groundMetersPerPixel = getGroundMetersPerPixel(
       info,
       projectionParameters.globalPosition,
@@ -549,10 +581,18 @@ export class SliceViewPanel extends RenderedDataPanel {
       displayDimensionIndices,
     );
     if (groundMetersPerPixel === undefined) return undefined;
-    return {
-      globalDimensions: [info.xDim, info.yDim],
-      groundMetersPerPixel,
-    };
+    // Vertical dimensions are indicated by depth ticks in vertical sections rather than by scale
+    // bars.
+    const globalDimensions = [info.xDim, info.yDim];
+    for (const dim of displayDimensionIndices) {
+      if (
+        dim !== -1 &&
+        this.viewer.geoView!.getVerticalAxis(dim) !== undefined
+      ) {
+        globalDimensions.push(dim);
+      }
+    }
+    return { globalDimensions, groundMetersPerPixel };
   }
 
   ensureBoundsUpdated() {

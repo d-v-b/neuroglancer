@@ -56,6 +56,11 @@ export interface XarrayGeoreference {
    * dimension index.
    */
   verticalScales: Map<number, number>;
+  /**
+   * Elevation (in meters, positive up) of the center of each level of vertical dimensions, keyed
+   * by dimension index.
+   */
+  verticalElevations: Map<number, number[]>;
 }
 
 const VERTICAL_NAMES = [
@@ -70,6 +75,17 @@ const VERTICAL_NAMES = [
   "depthu",
   "depthv",
 ];
+
+/**
+ * Converts vertical coordinate values to elevations (positive up).  Coordinates named `depth*`
+ * that are mostly non-negative are interpreted as depths (positive down).
+ */
+export function getElevations(name: string, values: number[]): number[] {
+  const isDepth =
+    name.startsWith("depth") &&
+    values.filter((x) => x >= 0).length >= values.length / 2;
+  return isDepth ? values.map((x) => -x) : values;
+}
 
 /**
  * Vertical exaggeration applied to vertical dimensions relative to horizontal distances.
@@ -361,6 +377,7 @@ export async function getXarrayGeoreference(
   // Vertical dimensions are displayed with a scale corresponding to their mean level spacing (in
   // meters), exaggerated relative to horizontal distances.
   const verticalScales = new Map<number, number>();
+  const verticalElevations = new Map<number, number[]>();
   await Promise.all(
     names.map(async (name, dim) => {
       if (!VERTICAL_NAMES.includes(name) || metadata.shape[dim] < 2) return;
@@ -384,12 +401,21 @@ export async function getXarrayGeoreference(
           dim,
           (DEFAULT_VERTICAL_EXAGGERATION * meanSpacing) / METERS_PER_DEGREE,
         );
+        verticalElevations.set(dim, getElevations(name, values));
       } catch {
         // Ignore vertical coordinates that cannot be read.
       }
     }),
   );
-  return { crs: "EPSG:4326", lonDim, latDim, lon, lat, verticalScales };
+  return {
+    crs: "EPSG:4326",
+    lonDim,
+    latDim,
+    lon,
+    lat,
+    verticalScales,
+    verticalElevations,
+  };
 }
 
 /**

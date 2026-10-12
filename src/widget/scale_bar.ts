@@ -312,7 +312,7 @@ export class MultipleScaleBarTextures extends RefCounted {
     options: ScaleBarOptions,
     geo?: {
       globalDimensions: readonly number[];
-      groundMetersPerPixel: readonly [number, number];
+      groundMetersPerPixel: readonly [number | undefined, number | undefined];
     },
   ) {
     const { scaleBars } = this;
@@ -336,15 +336,22 @@ export class MultipleScaleBarTextures extends RefCounted {
 
     if (geo !== undefined) {
       const [horizontal, vertical] = geo.groundMetersPerPixel;
-      const isotropic =
+      let bars: [string, number][];
+      if (horizontal === undefined || vertical === undefined) {
+        bars = [];
+        if (horizontal !== undefined) bars.push(["\u2194 ", horizontal]);
+        if (vertical !== undefined) bars.push(["\u2195 ", vertical]);
+      } else if (
         Math.abs(horizontal - vertical) <=
-        0.02 * Math.max(horizontal, vertical);
-      const bars: [string, number][] = isotropic
-        ? [["", horizontal]]
-        : [
-            ["\u2194 ", horizontal],
-            ["\u2195 ", vertical],
-          ];
+        0.02 * Math.max(horizontal, vertical)
+      ) {
+        bars = [["", horizontal]];
+      } else {
+        bars = [
+          ["\u2194 ", horizontal],
+          ["\u2195 ", vertical],
+        ];
+      }
       for (const [label, metersPerPixel] of bars) {
         const scaleBar = scaleBars[numScaleBars++];
         scaleBar.label = label;
