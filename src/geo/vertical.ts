@@ -97,7 +97,8 @@ export class VerticalAxis {
 
 const TICK_ELEVATIONS = [
   -10, -20, -50, -100, -200, -300, -500, -750, -1000, -1500, -2000, -3000,
-  -4000, -5000, -6000, -8000, -10000, 1000, 2000, 5000, 10000,
+  -4000, -5000, -6000, -8000, -10000, 1000, 2000, 5000, 10000, -100000, -200000,
+  -300000, -400000, -500000, -600000, -700000, -50000, -20000, -150000, -250000,
 ];
 
 export function formatElevation(elevation: number) {
@@ -263,6 +264,10 @@ export function drawVerticalSection(
   const placedLabels: [number, number][] = [];
   const labelSpacing = 2 * fontSize;
   const horizontal = Math.abs(b) > Math.abs(a);
+  const getLabelPosition = (coordinate: number) =>
+    horizontal ? -(c - coordinate) / b : -(b * height + c - coordinate) / a;
+  // Ticks are not placed within the label of the sea level line.
+  const seaLevelPosition = getLabelPosition(seaLevel);
   for (const elevation of TICK_ELEVATIONS) {
     if (elevation < minElevation || elevation > maxElevation) continue;
     const coordinate = axis.elevationToCoordinate(elevation);
@@ -273,9 +278,8 @@ export function drawVerticalSection(
     const labelExtent = horizontal
       ? labelSpacing
       : ctx.measureText(label).width + 8 * scaleFactor;
-    const position = horizontal
-      ? -(c - coordinate) / b
-      : -(b * height + c - coordinate) / a;
+    const position = getLabelPosition(coordinate);
+    if (Math.abs(position - seaLevelPosition) < labelExtent) continue;
     if (
       placedLabels.some(
         ([p, extent]) => Math.abs(p - position) < (extent + labelExtent) / 2,

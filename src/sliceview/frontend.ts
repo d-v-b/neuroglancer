@@ -22,6 +22,7 @@ import type {
 } from "#src/chunk_manager/frontend.js";
 import { Chunk, ChunkSource } from "#src/chunk_manager/frontend.js";
 import { applyRenderViewportToProjectionMatrix } from "#src/display_context.js";
+import type { GeoViewState } from "#src/geo/geo_view.js";
 import type { GeoWarpSpec } from "#src/geo/source_warp.js";
 import type { LayerManager } from "#src/layer/index.js";
 import type {
@@ -224,6 +225,7 @@ export class SliceView extends Base {
     public layerManager: LayerManager,
     public navigationState: Owned<NavigationState>,
     public wireFrame: WatchableValueInterface<boolean>,
+    public geoView?: GeoViewState,
   ) {
     super(
       new DerivedProjectionParameters({
@@ -244,19 +246,34 @@ export class SliceView extends Base {
             viewportNormalInGlobalCoordinates,
             viewportNormalInCanonicalCoordinates,
           } = out;
+          const setDepthRange = (depthRange: number) => {
+            mat4.ortho(
+              projectionMat,
+              -logicalWidth / 2,
+              logicalWidth / 2,
+              logicalHeight / 2,
+              -logicalHeight / 2,
+              -depthRange,
+              depthRange,
+            );
+            applyRenderViewportToProjectionMatrix(out, projectionMat);
+            updateProjectionParametersFromInverseViewAndProjection(out);
+          };
           const { relativeDepthRange } = navigationState;
-          mat4.ortho(
-            projectionMat,
-            -logicalWidth / 2,
-            logicalWidth / 2,
-            logicalHeight / 2,
-            -logicalHeight / 2,
-            -relativeDepthRange,
-            relativeDepthRange,
-          );
-          applyRenderViewportToProjectionMatrix(out, projectionMat);
-          updateProjectionParametersFromInverseViewAndProjection(out);
+          setDepthRange(relativeDepthRange);
           const { viewMatrix } = out;
+          // Geospatial map views span all depths.
+          const mapDepthRange = geoView?.getMapViewDepthRange(
+            viewMatrix,
+            out.displayDimensionRenderInfo.displayDimensionIndices,
+            out.globalPosition,
+          );
+          if (
+            mapDepthRange !== undefined &&
+            mapDepthRange > relativeDepthRange
+          ) {
+            setDepthRange(mapDepthRange);
+          }
           for (let i = 0; i < 3; ++i) {
             const x = (viewportNormalInGlobalCoordinates[i] =
               viewMatrix[i * 4 + 2]);
@@ -296,6 +313,11 @@ export class SliceView extends Base {
 
     this.registerDisposer(navigationState);
     this.registerDisposer(this.projectionParameters);
+    if (geoView !== undefined) {
+      this.registerDisposer(
+        geoView.changed.add(() => this.projectionParameters.update()),
+      );
+    }
     this.registerDisposer(
       this.projectionParameters.changed.add((oldValue, newValue) => {
         if (

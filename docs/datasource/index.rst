@@ -26,6 +26,7 @@ accessible from any of the supported :ref:`key-value stores<kvstores>`.
    nifti/index
    deepzoom/index
    geotiff/index
+   geojson/index
 
 .. _kvstores:
 

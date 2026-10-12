@@ -229,6 +229,12 @@
       "neuroglancer/datasource/dvid:disabled": "./src/util/false.ts",
       "default": "./src/datasource/dvid/register_credentials_provider.ts"
     },
+    "#datasource/geojson/register_default": {
+      "neuroglancer/datasource/geojson:enabled": "./src/datasource/geojson/register_default.ts",
+      "neuroglancer/datasource:none_by_default": "./src/util/false.ts",
+      "neuroglancer/datasource/geojson:disabled": "./src/util/false.ts",
+      "default": "./src/datasource/geojson/register_default.ts"
+    },
     "#datasource/geotiff/backend": {
       "neuroglancer/datasource/geotiff:enabled": "./src/datasource/geotiff/backend.ts",
       "neuroglancer/datasource:none_by_default": "./src/util/false.ts",

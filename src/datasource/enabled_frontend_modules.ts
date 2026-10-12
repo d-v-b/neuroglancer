@@ -6,6 +6,7 @@ import "#datasource/brainmaps/register_credentials_provider";
 import "#datasource/deepzoom/register_default";
 import "#datasource/dvid/register_default";
 import "#datasource/dvid/register_credentials_provider";
+import "#datasource/geojson/register_default";
 import "#datasource/geotiff/register_default";
 import "#datasource/graphene/register_default";
 import "#datasource/n5/register_default";

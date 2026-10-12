@@ -124,7 +124,7 @@ export class WatchableAnnotationRelationshipStates extends WatchableMap<
   }
 }
 
-const DEFAULT_FRAGMENT_MAIN = `
+export const DEFAULT_FRAGMENT_MAIN = `
 void main() {
   setColor(defaultColor());
 }

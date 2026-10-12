@@ -76,6 +76,7 @@ export interface SliceViewViewerState {
   navigationState: NavigationState;
   layerManager: LayerManager;
   wireFrame: WatchableValueInterface<boolean>;
+  geoView?: GeoViewState;
 }
 
 export class InputEventBindings {
@@ -153,6 +154,7 @@ export function makeSliceView(
     viewerState.layerManager,
     navigationState,
     viewerState.wireFrame,
+    viewerState.geoView,
   );
 }
 
@@ -276,6 +278,7 @@ function makeSliceViewFromSpecification(
     viewer.layerManager,
     specification.navigationState.addRef(),
     viewer.wireFrame,
+    viewer.geoView,
   );
   const updateViewportSize = () => {
     const {

@@ -254,7 +254,15 @@ export function reprojectDataSource(
   const subsources: DataSubsourceEntry[] = [];
   for (const entry of dataSource.subsources) {
     const { subsource } = entry;
-    if (subsource.volume !== undefined) {
+    if (subsource.geoAnnotations !== undefined) {
+      subsources.push({
+        ...entry,
+        subsource: {
+          ...subsource,
+          annotation: subsource.geoAnnotations.reproject(multiscaleWarp),
+        },
+      });
+    } else if (subsource.volume !== undefined) {
       subsources.push({
         ...entry,
         subsource: {

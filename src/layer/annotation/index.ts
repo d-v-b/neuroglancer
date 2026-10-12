@@ -17,7 +17,10 @@
 import "#src/layer/annotation/style.css";
 
 import type { AnnotationDisplayState } from "#src/annotation/annotation_layer_state.js";
-import { AnnotationLayerState } from "#src/annotation/annotation_layer_state.js";
+import {
+  AnnotationLayerState,
+  DEFAULT_FRAGMENT_MAIN,
+} from "#src/annotation/annotation_layer_state.js";
 import { MultiscaleAnnotationSource } from "#src/annotation/frontend_source.js";
 import type { AnnotationPropertySpec } from "#src/annotation/index.js";
 import {
@@ -683,6 +686,14 @@ export class AnnotationUserLayer extends Base {
       const { annotation } = subsourceEntry.subsource;
       if (annotation !== undefined) {
         if (!setProperties(annotation.properties)) continue;
+        // Data sources may suggest a shader, used if the user has not specified one.
+        const { defaultShader } = annotation as { defaultShader?: string };
+        if (
+          defaultShader !== undefined &&
+          this.annotationDisplayState.shader.value === DEFAULT_FRAGMENT_MAIN
+        ) {
+          this.annotationDisplayState.shader.value = defaultShader;
+        }
         loadedSubsource.activate(() => {
           const state = new AnnotationLayerState({
             localPosition: this.localPosition,

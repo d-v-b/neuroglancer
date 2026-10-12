@@ -74,6 +74,8 @@ Supported data sources
 - :ref:`GeoTIFF<geotiff-datasource>`, including Cloud-Optimized GeoTIFF.
 - :ref:`Zarr<zarr-xarray>` arrays and datasets written by xarray with
   regularly-spaced latitude/longitude coordinates.
+- :ref:`GeoJSON<geojson-datasource>` points and lines, e.g. earthquake
+  hypocenters and tectonic plate boundaries, displayed as annotations.
 
 User interface
 --------------
@@ -91,9 +93,11 @@ When a display CRS is set, the viewer adapts to the geometry of the Earth:
 - A latitude/longitude graticule with labeled lines is drawn over map views
   (toggled by :json:schema:`ViewerState.showGraticule`), along with a north
   arrow.
-- Vertical sections through georeferenced volumes with a vertical coordinate
-  (e.g. ocean model output) show the sea level, the sky, depth ticks, and the
-  solid Earth in a crust color.
+- Vertical sections through georeferenced data with a vertical coordinate
+  (e.g. ocean model output or earthquake hypocenters) show the sea level, the
+  sky, depth ticks, and the solid Earth in a crust color.
+- Cross sections parallel to the map plane show annotations at all depths
+  along the vertical dimensions, rather than only those near the cross section.
 
 Example
 -------
@@ -124,7 +128,8 @@ Limitations
 -----------
 
 - Datum transformations requiring grid files are not supported.
-- Annotations, meshes, and skeletons are not reprojected.
+- Annotations other than :ref:`GeoJSON<geojson-datasource>` features, meshes,
+  and skeletons are not reprojected.
 - Reprojected data cannot be volume rendered.
 - Positions are represented in single precision, which limits the precision of
   navigation to about a meter for global datasets.

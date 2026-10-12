@@ -19,6 +19,7 @@ import { makeCoordinateSpace } from "#src/coordinate_transform.js";
 import { getCrs } from "#src/geo/crs.js";
 import {
   classifyGeoPanelView,
+  computeMapViewDepthRange,
   formatLatitudeLongitude,
   getGeoDisplayInfo,
   getGroundMetersPerPixel,
@@ -187,9 +188,63 @@ describe("geo navigation", () => {
       verticalDisplayDimension: 2,
       verticalGlobalDimension: 2,
     });
+    // The vertical dimension may have a much larger display scale than the horizontal ones, which
+    // amplifies rounding error in the normal.
+    const scaledSection = mat4.multiply(
+      mat4.create(),
+      section,
+      mat4.fromScaling(mat4.create(), [1, 1, 1e5]),
+    );
+    scaledSection[6] = 1;
+    scaledSection[10] = 4e-3;
+    expect(
+      classifyGeoPanelView(info, getVerticalAxis, scaledSection, [0, 1, 2]),
+    ).toEqual({
+      kind: "vertical",
+      axis,
+      verticalDisplayDimension: 2,
+      verticalGlobalDimension: 2,
+    });
     // Without a vertical axis, the section is not classified.
     expect(
       classifyGeoPanelView(info, () => undefined, section, [0, 1, 2]),
+    ).toBe(undefined);
+  });
+
+  it("computes the depth range of map views spanning vertical dimensions", () => {
+    const info = makeInfo("EPSG:4326", 0.001, "deg");
+    const axis = new VerticalAxis([-950, -850, -750, -650]);
+    const getVerticalAxis = (dim: number) => (dim === 2 ? axis : undefined);
+    // Map view with 10 view units per vertical voxel, positioned at level 1.
+    const map = mat4.fromScaling(mat4.create(), [1, 1, 10]);
+    const range = computeMapViewDepthRange(
+      info,
+      getVerticalAxis,
+      map,
+      [0, 1, 2],
+      [0, 0, 1],
+    )!;
+    // Must span the farthest level boundary (3 voxels away).
+    expect(range).toBeGreaterThanOrEqual(30);
+    // Not a map view, or no vertical axis: undefined.
+    const section = mat4.fromXRotation(mat4.create(), Math.PI / 2);
+    expect(
+      computeMapViewDepthRange(
+        info,
+        getVerticalAxis,
+        section,
+        [0, 1, 2],
+        [0, 0, 1],
+      ),
+    ).toBe(undefined);
+    expect(
+      computeMapViewDepthRange(
+        info,
+        () => undefined,
+        map,
+        [0, 1, 2],
+        [0, 0, 1],
+      ),
     ).toBe(undefined);
   });
 });

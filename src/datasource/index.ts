@@ -25,6 +25,7 @@ import type {
 import type { SharedCredentialsManager } from "#src/credentials_provider/shared.js";
 import { getKvStoreCompletions } from "#src/datasource/kvstore_completions.js";
 import type { LocalDataSource } from "#src/datasource/local.js";
+import type { Warp2d } from "#src/geo/warp_mesh.js";
 import {
   AutoDetectRegistry,
   autoDetectFormat,
@@ -126,7 +127,15 @@ export interface ConvertLegacyUrlOptions extends ConvertLegacyUrlOptionsBase {
 export interface DataSubsource {
   volume?: MultiscaleVolumeChunkSource;
   mesh?: MeshSource | MultiscaleMeshSource | SkeletonSource;
-  annotation?: MultiscaleAnnotationSource;
+  annotation?: MultiscaleAnnotationSource | AnnotationSource;
+  /**
+   * Georeferenced annotations that are reprojected into the display CRS, replacing `annotation`.
+   * The warp maps the georeferenced model dimensions (in the input coordinate space of the model
+   * transform) to the coordinates of the reprojected data source.
+   */
+  geoAnnotations?: {
+    reproject(warp: Warp2d & { isIdentity?: boolean }): AnnotationSource;
+  };
   staticAnnotations?: AnnotationSource;
   local?: LocalDataSource;
   singleMesh?: SingleMeshSource;

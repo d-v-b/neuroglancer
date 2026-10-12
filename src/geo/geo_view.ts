@@ -216,12 +216,17 @@ export type GeoPanelView =
 const NORMAL_EPSILON = 1e-3;
 
 /**
+ * Factor by which the depth range of map views exceeds the extent of the vertical dimensions.
+ */
+const MAP_DEPTH_RANGE_MARGIN = 20;
+
+/**
  * Classifies a cross section of a geospatial display as a map view (parallel to the map plane)
  * or a vertical section (containing the vertical axis and a horizontal direction), or returns
  * `undefined` otherwise.
  *
- * @param viewMatrix View matrix of the cross section; row 2 is the normal of the plane in display
- *     coordinates.
+ * @param viewMatrix View matrix of the cross section, mapping display coordinates to view
+ *     coordinates (with z normal to the plane).
  */
 export function classifyGeoPanelView(
   info: GeoDisplayInfo,
@@ -229,10 +234,16 @@ export function classifyGeoPanelView(
   viewMatrix: ArrayLike<number>,
   displayDimensionIndices: ArrayLike<number>,
 ): GeoPanelView | undefined {
-  const normal = [viewMatrix[2], viewMatrix[6], viewMatrix[10]];
-  const norm = Math.hypot(normal[0], normal[1], normal[2]);
-  if (norm === 0) return undefined;
-  const inPlane = (d: number) => Math.abs(normal[d] / norm) < NORMAL_EPSILON;
+  // Display dimension `d` lies in the cross-section plane if it maps to a view direction with
+  // no depth component.  Each axis is normalized separately, since display dimensions may have
+  // very different scales (e.g. a vertical dimension relative to degrees).
+  const inPlane = (d: number) => {
+    const x = viewMatrix[4 * d];
+    const y = viewMatrix[4 * d + 1];
+    const z = viewMatrix[4 * d + 2];
+    const norm = Math.hypot(x, y, z);
+    return norm !== 0 && Math.abs(z / norm) < NORMAL_EPSILON;
+  };
   let xDisplay = -1;
   let yDisplay = -1;
   for (let d = 0; d < 3; ++d) {
@@ -255,6 +266,48 @@ export function classifyGeoPanelView(
     };
   }
   return undefined;
+}
+
+/**
+ * Returns the depth range (in view units) of a cross section parallel to the map plane such that
+ * it spans all levels of the vertical dimensions, or `undefined` if the cross section is not a map
+ * view of a display with vertical dimensions.  This ensures that map views show annotations (e.g.
+ * earthquake hypocenters) at all depths.
+ *
+ * @param viewMatrix Transform from display coordinates to view coordinates.
+ */
+export function computeMapViewDepthRange(
+  info: GeoDisplayInfo,
+  getVerticalAxis: (globalDim: number) => VerticalAxis | undefined,
+  viewMatrix: ArrayLike<number>,
+  displayDimensionIndices: ArrayLike<number>,
+  globalPosition: ArrayLike<number>,
+): number | undefined {
+  const view = classifyGeoPanelView(
+    info,
+    () => undefined,
+    viewMatrix,
+    displayDimensionIndices,
+  );
+  if (view?.kind !== "map") return undefined;
+  let depthRange: number | undefined;
+  for (let d = 0; d < 3; ++d) {
+    const dim = displayDimensionIndices[d];
+    if (dim === -1 || dim === info.xDim || dim === info.yDim) continue;
+    const axis = getVerticalAxis(dim);
+    if (axis === undefined) continue;
+    const position = globalPosition[dim];
+    const extent = Math.max(
+      Math.abs(position),
+      Math.abs(axis.numLevels - position),
+    );
+    // Annotations in cross sections fade with distance from the plane relative to the depth
+    // range; a large margin keeps features at all depths nearly opaque.
+    const range =
+      Math.abs(viewMatrix[4 * d + 2]) * (extent + 1) * MAP_DEPTH_RANGE_MARGIN;
+    depthRange = Math.max(depthRange ?? 0, range);
+  }
+  return depthRange;
 }
 
 /**
@@ -401,6 +454,26 @@ export class GeoViewState extends RefCounted {
       this.verticalAxisCache.set(elevations, axis);
     }
     return axis;
+  }
+
+  /**
+   * Returns the depth range of a map view that spans the vertical dimensions, or `undefined`.  See
+   * `computeMapViewDepthRange`.
+   */
+  getMapViewDepthRange(
+    viewMatrix: ArrayLike<number>,
+    displayDimensionIndices: ArrayLike<number>,
+    globalPosition: ArrayLike<number>,
+  ): number | undefined {
+    const { info } = this;
+    if (info === undefined) return undefined;
+    return computeMapViewDepthRange(
+      info,
+      (dim) => this.getVerticalAxis(dim),
+      viewMatrix,
+      displayDimensionIndices,
+      globalPosition,
+    );
   }
 
   get info(): GeoDisplayInfo | undefined {
