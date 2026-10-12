@@ -3,6 +3,7 @@ import "#datasource/boss/backend";
 import "#datasource/brainmaps/backend";
 import "#datasource/deepzoom/backend";
 import "#datasource/dvid/backend";
+import "#datasource/geotiff/backend";
 import "#datasource/graphene/backend";
 import "#datasource/n5/backend";
 import "#datasource/nifti/backend";

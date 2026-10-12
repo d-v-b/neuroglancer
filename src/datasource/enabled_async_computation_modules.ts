@@ -3,6 +3,7 @@ import "#datasource/boss/async_computation";
 import "#datasource/brainmaps/async_computation";
 import "#datasource/deepzoom/async_computation";
 import "#datasource/dvid/async_computation";
+import "#datasource/geotiff/async_computation";
 import "#datasource/graphene/async_computation";
 import "#datasource/n5/async_computation";
 import "#datasource/obj/async_computation";

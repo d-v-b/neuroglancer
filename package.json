@@ -229,6 +229,24 @@
       "neuroglancer/datasource/dvid:disabled": "./src/util/false.ts",
       "default": "./src/datasource/dvid/register_credentials_provider.ts"
     },
+    "#datasource/geotiff/backend": {
+      "neuroglancer/datasource/geotiff:enabled": "./src/datasource/geotiff/backend.ts",
+      "neuroglancer/datasource:none_by_default": "./src/util/false.ts",
+      "neuroglancer/datasource/geotiff:disabled": "./src/util/false.ts",
+      "default": "./src/datasource/geotiff/backend.ts"
+    },
+    "#datasource/geotiff/async_computation": {
+      "neuroglancer/datasource/geotiff:enabled": "./src/datasource/geotiff/async_computation.ts",
+      "neuroglancer/datasource:none_by_default": "./src/util/false.ts",
+      "neuroglancer/datasource/geotiff:disabled": "./src/util/false.ts",
+      "default": "./src/datasource/geotiff/async_computation.ts"
+    },
+    "#datasource/geotiff/register_default": {
+      "neuroglancer/datasource/geotiff:enabled": "./src/datasource/geotiff/register_default.ts",
+      "neuroglancer/datasource:none_by_default": "./src/util/false.ts",
+      "neuroglancer/datasource/geotiff:disabled": "./src/util/false.ts",
+      "default": "./src/datasource/geotiff/register_default.ts"
+    },
     "#datasource/graphene/backend": {
       "neuroglancer/datasource/graphene:enabled": "./src/datasource/graphene/backend.ts",
       "neuroglancer/datasource:none_by_default": "./src/util/false.ts",
