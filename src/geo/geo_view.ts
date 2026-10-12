@@ -499,6 +499,12 @@ export class GeoViewState extends RefCounted {
    */
   showGraticule = new TrackableBoolean(true, true);
 
+  /**
+   * Whether the perspective panel shows a 3-d globe (see `src/geo/globe.ts`) rather than the
+   * display CRS coordinate space.
+   */
+  showGlobe = new TrackableBoolean(false, false);
+
   private info_: GeoDisplayInfo | undefined;
   private infoStale = true;
   private infoCoordinateSpace: CoordinateSpace | undefined;
@@ -543,6 +549,7 @@ export class GeoViewState extends RefCounted {
     this.registerDisposer(
       this.showGraticule.changed.add(this.changed.dispatch),
     );
+    this.registerDisposer(this.showGlobe.changed.add(this.changed.dispatch));
     this.registerDisposer(
       navigationState.position.changed.add(() => this.handlePositionChanged()),
     );
@@ -606,6 +613,46 @@ export class GeoViewState extends RefCounted {
       displayDimensionIndices,
       globalPosition,
     );
+  }
+
+  /**
+   * Indicates that the perspective panel shows the globe.
+   */
+  get globeActive() {
+    return this.showGlobe.value && this.info !== undefined;
+  }
+
+  /**
+   * Returns the geodetic coordinates `[lon, lat]` (degrees) of a global position, or `undefined`.
+   */
+  getLonLat(globalPosition: ArrayLike<number>): [number, number] | undefined {
+    const { info } = this;
+    if (info === undefined) return undefined;
+    const out = new Float64Array(2);
+    if (!globalToLonLat(info, globalPosition, out)) return undefined;
+    return [out[0], out[1]];
+  }
+
+  /**
+   * Sets the display CRS dimensions of the global position from geodetic coordinates.
+   */
+  setLonLat(lon: number, lat: number) {
+    const { info } = this;
+    if (info === undefined) return;
+    const position = this.navigationState.position;
+    const value = Float32Array.from(position.value);
+    if (!lonLatToGlobal(info, lon, lat, value)) return;
+    position.value = value;
+  }
+
+  /**
+   * Returns the approximate ground distance in meters corresponding to a zoom factor (in units of
+   * global voxels of the display CRS dimensions), used as the distance of the globe camera.
+   */
+  getMetersPerZoomUnit(): number {
+    const { info } = this;
+    if (info === undefined) return 1;
+    return info.xScale * info.crs.metersPerUnit;
   }
 
   get info(): GeoDisplayInfo | undefined {

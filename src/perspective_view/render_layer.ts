@@ -121,4 +121,10 @@ export interface PerspectiveViewRenderLayer<AttachmentState = unknown> {
   isAnnotation: boolean | undefined;
   backend: SharedObject | undefined;
   isVolumeRendering: boolean | undefined;
+  /**
+   * Indicates that the layer renders in the render coordinates of the globe view (see
+   * `src/geo/globe.ts`).  Such layers are drawn only in globe mode, and other layers only outside
+   * of globe mode.
+   */
+  isGlobeLayer: boolean | undefined;
 }

@@ -124,14 +124,20 @@ export class ViewerSettingsPanel extends SidePanel {
         "Show graticule (geospatial data)",
         geoView.showGraticule,
       );
+      const globeElement = addCheckbox(
+        "Show 3-d globe (geospatial data)",
+        geoView.showGlobe,
+      );
       // Only relevant for geospatial displays.
       const updateVisibility = () => {
         const { displayCrs } = geoView;
         // The `hidden` attribute is overridden by the `display` style of the labels.
-        graticuleElement.style.display =
+        const display =
           displayCrs.numGeoSources === 0 && displayCrs.value === undefined
             ? "none"
             : "";
+        graticuleElement.style.display = display;
+        globeElement.style.display = display;
       };
       this.registerDisposer(geoView.changed.add(updateVisibility));
       updateVisibility();

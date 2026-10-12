@@ -21,9 +21,19 @@ import type { PerspectiveViewAnnotationLayer } from "#src/annotation/renderlayer
 import { AxesLineHelper, computeAxisLineMatrix } from "#src/axes_lines.js";
 import type { DisplayContext } from "#src/display_context.js";
 import { applyRenderViewportToProjectionMatrix } from "#src/display_context.js";
+import type { GeoViewState } from "#src/geo/geo_view.js";
+import { lonLatToGlobal } from "#src/geo/geo_view.js";
+import type { GlobeCamera } from "#src/geo/globe.js";
+import {
+  computeGlobeCamera,
+  ecefToGeodetic,
+  getGlobePixelAngle,
+  WGS84_SEMI_MAJOR_AXIS,
+} from "#src/geo/globe.js";
 import type { VisibleRenderLayerTracker } from "#src/layer/index.js";
 import { makeRenderedPanelVisibleLayerTracker } from "#src/layer/index.js";
 import { PERSPECTIVE_VIEW_RPC_ID } from "#src/perspective_view/base.js";
+import { GlobeBaseRenderer } from "#src/perspective_view/globe.js";
 import type {
   PerspectiveViewReadyRenderContext,
   PerspectiveViewRenderContext,
@@ -61,7 +71,7 @@ import {
   DownsamplingBasedOnFrameRateCalculator,
   FrameTimingMethod,
 } from "#src/util/framerate.js";
-import { kAxes, kZeroVec4, mat4, vec3, vec4 } from "#src/util/geom.js";
+import { kAxes, kZeroVec4, mat4, quat, vec3, vec4 } from "#src/util/geom.js";
 import { startRelativeMouseDrag } from "#src/util/mouse_drag.js";
 import type {
   TouchRotateInfo,
@@ -96,6 +106,20 @@ export interface PerspectiveViewerState extends RenderedDataViewerState {
   perspectiveViewBackgroundColor: TrackableRGB;
   hideCrossSectionBackground3D: TrackableBoolean;
   rpc: RPC;
+  geoView?: GeoViewState;
+}
+
+/**
+ * Minimum elevation angle (as the sine) of the globe camera above the horizon of its target.
+ */
+const GLOBE_MIN_CAMERA_ELEVATION = 0.05;
+
+/**
+ * Picking data of a frame of the globe view, which additionally records the ECEF coordinates of
+ * the origin of render coordinates.
+ */
+interface GlobePickingData extends FramePickingData {
+  globeTarget?: Float64Array;
 }
 
 export enum OffscreenTextures {
@@ -324,6 +348,14 @@ export class PerspectivePanel extends RenderedDataPanel {
   );
 
   private axesLineHelper = this.registerDisposer(AxesLineHelper.get(this.gl));
+  private globeBaseRenderer = this.registerDisposer(
+    GlobeBaseRenderer.get(this.gl),
+  );
+
+  /**
+   * Camera of the globe view, if the panel is in globe mode (see `src/geo/globe.ts`).
+   */
+  globeCamera: GlobeCamera | undefined;
   protected offscreenFramebuffer = this.registerDisposer(
     new FramebufferConfiguration(this.gl, {
       colorBuffers: [
@@ -420,6 +452,26 @@ export class PerspectivePanel extends RenderedDataPanel {
         update: (out: ProjectionParameters, navigationState) => {
           const { invViewMatrix, projectionMat, logicalWidth, logicalHeight } =
             out;
+          const { geoView } = this.viewer;
+          if (geoView?.globeActive) {
+            const [lon, lat] = geoView.getLonLat(out.globalPosition) ?? [0, 0];
+            const camera = (this.globeCamera = computeGlobeCamera({
+              lon,
+              lat,
+              distance:
+                navigationState.zoomFactor.value *
+                geoView.getMetersPerZoomUnit(),
+              orientation: navigationState.pose.orientation.orientation,
+              width: logicalWidth,
+              height: logicalHeight,
+            }));
+            mat4.copy(invViewMatrix, camera.invViewMatrix);
+            mat4.copy(projectionMat, camera.projectionMat);
+            applyRenderViewportToProjectionMatrix(out, projectionMat);
+            updateProjectionParametersFromInverseViewAndProjection(out);
+            return;
+          }
+          this.globeCamera = undefined;
           const widthOverHeight = logicalWidth / logicalHeight;
           const fovy = Math.PI / 4.0;
           let { relativeDepthRange } = navigationState;
@@ -466,6 +518,30 @@ export class PerspectivePanel extends RenderedDataPanel {
       }),
     );
     this.projectionParameters.changed.add(() => this.context.scheduleRedraw());
+    const { geoView } = viewer;
+    if (geoView !== undefined) {
+      const ensureGlobeOrientation = () => {
+        if (!geoView.globeActive) return;
+        // The camera must be above the horizon of the target.
+        const back = vec3.transformQuat(
+          tempVec3,
+          kAxes[2],
+          this.navigationState.pose.orientation.orientation,
+        );
+        if (back[2] < GLOBE_MIN_CAMERA_ELEVATION) {
+          quat.identity(this.navigationState.pose.orientation.orientation);
+          this.navigationState.pose.orientation.changed.dispatch();
+        }
+      };
+      this.registerDisposer(
+        geoView.changed.add(() => {
+          ensureGlobeOrientation();
+          this.projectionParameters.update();
+          this.scheduleRedraw();
+        }),
+      );
+      ensureGlobeOrientation();
+    }
 
     const sharedObject = (this.sharedObject = this.registerDisposer(
       new PerspectiveViewState(this),
@@ -502,6 +578,10 @@ export class PerspectivePanel extends RenderedDataPanel {
       (e: ActionEvent<MouseEvent>) => {
         startRelativeMouseDrag(e.detail, (_event, deltaX, deltaY) => {
           this.context.flagContinuousCameraMotion();
+          if (this.globeCamera !== undefined) {
+            this.panGlobe(deltaX, deltaY);
+            return;
+          }
           this.navigationState.pose.rotateRelative(
             kAxes[1],
             ((deltaX / 4.0) * Math.PI) / 180.0,
@@ -596,7 +676,78 @@ export class PerspectivePanel extends RenderedDataPanel {
     this.sliceViews.changed.add(() => this.scheduleRedraw());
   }
 
+  /**
+   * Moves the target of the globe camera such that the Earth follows the mouse.
+   */
+  private panGlobe(deltaX: number, deltaY: number) {
+    const { geoView } = this.viewer;
+    const camera = this.globeCamera;
+    if (geoView === undefined || camera === undefined) return;
+    const lonLat = geoView.getLonLat(this.navigationState.position.value);
+    if (lonLat === undefined) return;
+    const { logicalHeight } = this.projectionParameters.value;
+    const eyeDistance = Math.hypot(
+      camera.invViewMatrix[12],
+      camera.invViewMatrix[13],
+      camera.invViewMatrix[14],
+    );
+    const metersPerPixel = eyeDistance * getGlobePixelAngle(logicalHeight);
+    const orientation = this.navigationState.pose.orientation.orientation;
+    const right = vec3.transformQuat(vec3.create(), kAxes[0], orientation);
+    const up = vec3.transformQuat(vec3.create(), kAxes[1], orientation);
+    const east = (-deltaX * right[0] + deltaY * up[0]) * metersPerPixel;
+    const north = (-deltaX * right[1] + deltaY * up[1]) * metersPerPixel;
+    const [lon, lat] = lonLat;
+    const radiansToDegrees = 180 / Math.PI;
+    const newLat = Math.max(
+      -89.9,
+      Math.min(89.9, lat + (north / WGS84_SEMI_MAJOR_AXIS) * radiansToDegrees),
+    );
+    const newLon =
+      lon +
+      (east /
+        (WGS84_SEMI_MAJOR_AXIS *
+          Math.max(0.01, Math.cos((lat * Math.PI) / 180)))) *
+        radiansToDegrees;
+    geoView.setLonLat(((((newLon + 180) % 360) + 360) % 360) - 180, newLat);
+  }
+
+  /**
+   * Rotates the globe camera about the vertical at the target (horizontal mouse motion) and tilts
+   * it (vertical mouse motion), keeping it above the horizon.
+   */
+  private orbitGlobe(deltaX: number, deltaY: number) {
+    const orientationState = this.navigationState.pose.orientation;
+    const { orientation } = orientationState;
+    const degrees = Math.PI / 180;
+    const heading = quat.setAxisAngle(
+      quat.create(),
+      kAxes[2],
+      (-deltaX / 4) * degrees,
+    );
+    const tilt = quat.setAxisAngle(
+      quat.create(),
+      kAxes[0],
+      (-deltaY / 4) * degrees,
+    );
+    const newOrientation = quat.multiply(quat.create(), heading, orientation);
+    quat.multiply(newOrientation, newOrientation, tilt);
+    quat.normalize(newOrientation, newOrientation);
+    const back = vec3.transformQuat(vec3.create(), kAxes[2], newOrientation);
+    if (back[2] < GLOBE_MIN_CAMERA_ELEVATION) {
+      // Only apply the heading change.
+      quat.multiply(newOrientation, heading, orientation);
+      quat.normalize(newOrientation, newOrientation);
+    }
+    quat.copy(orientation, newOrientation);
+    orientationState.changed.dispatch();
+  }
+
   translateByViewportPixels(deltaX: number, deltaY: number): void {
+    if (this.globeCamera !== undefined) {
+      this.orbitGlobe(deltaX, deltaY);
+      return;
+    }
     const temp = tempVec3;
     const {
       viewProjectionMat,
@@ -745,6 +896,16 @@ export class PerspectivePanel extends RenderedDataPanel {
       1.0;
     tempVec3[2] = 2.0 * glWindowZ - 1.0;
     vec3.transformMat4(tempVec3, tempVec3, pickingData.invTransform);
+    const { globeTarget } = pickingData as GlobePickingData;
+    if (globeTarget !== undefined) {
+      this.completeGlobePickRequest(
+        globeTarget,
+        tempVec3,
+        pickingData,
+        resolvedPick.pickValue,
+      );
+      return;
+    }
     let { position: mousePosition, unsnappedPosition } = mouseState;
     const { value: voxelCoordinates } = this.navigationState.position;
     const rank = voxelCoordinates.length;
@@ -768,6 +929,50 @@ export class PerspectivePanel extends RenderedDataPanel {
     unsnappedPosition.set(mousePosition);
     pickingData.pickIDs.setMouseState(mouseState, resolvedPick.pickValue);
     mouseState.displayDimensions = displayDimensions;
+    mouseState.setActive(true);
+  }
+
+  /**
+   * Sets the mouse position from the render coordinates of a picked point of the globe view.
+   */
+  private completeGlobePickRequest(
+    globeTarget: Float64Array,
+    renderPosition: vec3,
+    pickingData: FramePickingData,
+    pickValue: number,
+  ) {
+    const { mouseState, geoView } = this.viewer;
+    const info = geoView?.info;
+    if (info === undefined) {
+      mouseState.setActive(false);
+      return;
+    }
+    const geodetic = ecefToGeodetic(
+      renderPosition[0] + globeTarget[0],
+      renderPosition[1] + globeTarget[1],
+      renderPosition[2] + globeTarget[2],
+      new Float64Array(3),
+    );
+    const { value: voxelCoordinates } = this.navigationState.position;
+    const rank = voxelCoordinates.length;
+    const position = Float64Array.from(voxelCoordinates);
+    if (!lonLatToGlobal(info, geodetic[0], geodetic[1], position)) {
+      mouseState.setActive(false);
+      return;
+    }
+    let { position: mousePosition, unsnappedPosition } = mouseState;
+    if (mousePosition.length !== rank) {
+      mousePosition = mouseState.position = new Float32Array(rank);
+    }
+    if (unsnappedPosition.length !== rank) {
+      unsnappedPosition = mouseState.unsnappedPosition = new Float32Array(rank);
+    }
+    mousePosition.set(position);
+    unsnappedPosition.set(position);
+    mouseState.coordinateSpace = this.navigationState.coordinateSpace.value;
+    pickingData.pickIDs.setMouseState(mouseState, pickValue);
+    mouseState.displayDimensions =
+      this.navigationState.pose.displayDimensions.value;
     mouseState.setActive(true);
   }
 
@@ -1017,6 +1222,31 @@ export class PerspectivePanel extends RenderedDataPanel {
 
     const { visibleLayers } = this.visibleLayerTracker;
 
+    const { globeCamera } = this;
+    (pickingData as GlobePickingData).globeTarget = globeCamera?.target;
+    if (globeCamera !== undefined) {
+      const { invViewMatrix } = globeCamera;
+      this.globeBaseRenderer.draw(
+        perspectivePanelEmit,
+        globeCamera.target,
+        [invViewMatrix[12], invViewMatrix[13], invViewMatrix[14]],
+        projectionParameters.viewProjectionMat,
+      );
+      for (const [renderLayer, attachment] of visibleLayers) {
+        if (renderLayer.isGlobeLayer) {
+          renderLayer.draw(renderContext, attachment);
+        }
+      }
+      gl.disable(WebGL2RenderingContext.STENCIL_TEST);
+      gl.disable(WebGL2RenderingContext.DEPTH_TEST);
+      this.offscreenFramebuffer.unbind();
+      this.setGLClippedViewport();
+      this.offscreenCopyHelper.draw(
+        this.offscreenFramebuffer.colorBuffers[OffscreenTextures.COLOR].texture,
+      );
+      return true;
+    }
+
     let hasTransparent = false;
     let hasVolumeRenderingPick = false;
     let hasAnnotation = false;
@@ -1024,6 +1254,7 @@ export class PerspectivePanel extends RenderedDataPanel {
 
     // Draw fully-opaque layers first.
     for (const [renderLayer, attachment] of visibleLayers) {
+      if (renderLayer.isGlobeLayer) continue;
       if (!renderLayer.isTransparent) {
         if (!renderLayer.isAnnotation) {
           renderLayer.draw(renderContext, attachment);
