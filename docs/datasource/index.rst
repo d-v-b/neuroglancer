@@ -25,6 +25,7 @@ accessible from any of the supported :ref:`key-value stores<kvstores>`.
    precomputed/index
    nifti/index
    deepzoom/index
+   geotiff/index
 
 .. _kvstores:
 
@@ -129,3 +130,4 @@ Data services
    boss/index
    dvid/index
    render/index
+   xyz/index

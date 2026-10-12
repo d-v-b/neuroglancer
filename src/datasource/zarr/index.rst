@@ -22,6 +22,7 @@ URL syntax
 - :file:`{KVSTORE-URL/}|zarr3:{additional/path/}`
 - :file:`{KVSTORE-URL/}|zarr:#dimension_separator=/`
 - :file:`{KVSTORE-URL/}|zarr2:#dimension_separator=/`
+- :file:`{KVSTORE-URL/}|zarr:#variables=uo,vo` (xarray dataset)
 
 Specifying an :file:`{additional/path/}` after the zarr URL scheme is currently
 equivalent to including it in the :file:`{KVSTORE-URL/}`, but may be
@@ -35,8 +36,10 @@ syntax.
 
 The :file:`{KVSTORE-URL/}` must refer to a directory, and the combination
 of :file:`{KVSTORE-URL/}` and any :file:`{additional/path/}` after the zarr
-URL scheme must specify either a Zarr array or a Zarr group with OME-Zarr
-multiscale metadata.
+URL scheme must specify either a Zarr array, a Zarr group with OME-Zarr
+multiscale metadata, or a Zarr group written by `xarray
+<https://docs.xarray.dev/en/stable/user-guide/io.html#zarr>`__ with consolidated
+metadata (see :ref:`zarr-xarray`).
 
 Data types
 ----------
@@ -67,6 +70,54 @@ set:
    {
      "dimension_units": ["4 nm", "5 nm", "30 nm"]
    }
+
+.. _zarr-xarray:
+
+xarray datasets and georeferencing
+----------------------------------
+
+Arrays written by xarray following the `CF conventions
+<https://cfconventions.org/>`__ are :ref:`georeferenced<geospatial>`
+automatically if their dimensions (given by the ``_ARRAY_DIMENSIONS`` attribute
+or the zarr v3 ``dimension_names``) include ``longitude``/``lon`` and
+``latitude``/``lat`` dimensions with regularly-spaced 1-d coordinate arrays of
+the same names in the parent group. Such arrays are displayed in WGS 84
+(``EPSG:4326``) coordinates over other georeferenced data, such as map tiles.
+
+Vertical dimensions (``depth``, ``elevation``, ``altitude``, ``height``,
+``lev``, ``level``, ``z``) with 1-d coordinate arrays are displayed with a scale
+corresponding to their mean level spacing, with 100x vertical exaggeration
+relative to horizontal distances. Vertical sections through such volumes show
+the sea level, the sky, depth ticks placed according to the actual level depths,
+and the solid Earth (regions without data, such as below the seafloor) in a
+crust color.
+
+A default shader maps the CF ``valid_min``/``valid_max`` (or ``valid_range``)
+attributes to a colormap and renders missing values (``_FillValue``,
+``missing_value``, or the zarr fill value) as transparent.
+
+A Zarr group with consolidated metadata (``.zmetadata`` for zarr v2, or
+``consolidated_metadata`` in ``zarr.json`` for zarr v3) written by xarray may be
+opened directly. Its data variables with identical dimensions, shape, chunking,
+and data type are combined along an additional channel dimension ``c^``.
+Specific variables may be selected using the :file:`#variables={a,b}` URL
+parameter. If the selected variables are the eastward and northward components
+of a vector field (indicated by CF standard names beginning with
+``eastward_``/``northward_``), such as ocean currents or winds, the default
+shader shows the speed, optionally colored by direction.
+
+Examples
+~~~~~~~~
+
+- Ocean temperature from the `Copernicus Marine Service
+  <https://data.marine.copernicus.eu/product/GLOBAL_ANALYSISFORECAST_PHY_001_024/description>`__
+  global ocean physics analysis (1/12 degree, monthly means, 50 depth levels):
+
+  :file:`https://s3.waw3-1.cloudferro.com/mdl-arco-geo-012/arco/GLOBAL_ANALYSISFORECAST_PHY_001_024/cmems_mod_glo_phy-thetao_anfc_0.083deg_P1M-m_202406/geoChunked.zarr/thetao/|zarr2:`
+
+- Ocean currents (``uo`` and ``vo`` combined) from the same product:
+
+  :file:`https://s3.waw3-1.cloudferro.com/mdl-arco-geo-007/arco/GLOBAL_ANALYSISFORECAST_PHY_001_024/cmems_mod_glo_phy-cur_anfc_0.083deg_P1M-m_202406/geoChunked.zarr/|zarr2:`
 
 Zarr v2 features
 ----------------

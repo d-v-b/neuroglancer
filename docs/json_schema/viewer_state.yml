@@ -6,6 +6,17 @@ properties:
   dimensions:
     $ref: CoordinateSpace
     title: "Global coordinate space."
+  crs:
+    type: string
+    title: "Display coordinate reference system for georeferenced data sources."
+    description: |
+      Specified as an EPSG code (e.g. ``"EPSG:4326"`` or ``"EPSG:3857"``) or a
+      proj4 definition. Georeferenced data sources are reprojected into this
+      CRS, and the two global dimensions named ``x`` and ``y`` hold display CRS
+      coordinates. If not specified, the CRS of the first georeferenced data
+      source that is loaded is used.
+
+      See :ref:`geospatial`.
   relativeDisplayScales:
     $ref: RelativeDisplayScales
     title: "Default additional relative display scale factors for each `global dimension<.dimensions>`."
@@ -48,6 +59,10 @@ properties:
   showScaleBar:
     type: boolean
     title: "Indicates whether to show scale bars."
+    default: true
+  showGraticule:
+    type: boolean
+    title: "Indicates whether to show a latitude/longitude graticule in cross-section views of georeferenced data."
     default: true
   showDefaultAnnotations:
     type: boolean
