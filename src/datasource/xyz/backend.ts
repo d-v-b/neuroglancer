@@ -19,6 +19,7 @@ import {
   getXyzTileUrl,
   XyzTileSourceParameters,
 } from "#src/datasource/xyz/base.js";
+import { readTileWithRetry } from "#src/datasource/xyz/fetch.js";
 import { WithSharedKvStoreContextCounterpart } from "#src/kvstore/backend.js";
 import type { VolumeChunk } from "#src/sliceview/volume/backend.js";
 import { VolumeChunkSource } from "#src/sliceview/volume/backend.js";
@@ -68,7 +69,10 @@ export class XyzTileSource extends WithParameters(
     const url = getXyzTileUrl(parameters, x, y);
     const { kvStoreContext } = this.sharedKvStoreContext;
     const { store, path } = kvStoreContext.getKvStore(url);
-    const response = await store.read(path, { signal });
+    const response = await readTileWithRetry(
+      () => store.read(path, { signal, throwIfMissing: true }),
+      signal,
+    );
     if (response === undefined) {
       // Missing tile: leave the chunk empty (transparent).
       return;

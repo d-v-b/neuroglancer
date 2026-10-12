@@ -879,6 +879,9 @@ void main() {
         return;
       }
       ++presentCount;
+      // Chunks without data (e.g. missing map tiles) are not drawn, such that coarser resolutions
+      // remain visible rather than being hidden by transparent fill values.
+      if ((chunk as { data?: unknown }).data === null) return;
       const { chunkGridPosition, chunkDataSize } = chunk;
       const mesh = getGeoChunkMesh(
         transformedSource,
