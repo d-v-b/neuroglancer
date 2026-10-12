@@ -213,6 +213,19 @@ export type GeoPanelView =
       verticalGlobalDimension: number;
     };
 
+/**
+ * Orientation of the "yz" cross section relative to the north-up map orientation, for geospatial
+ * displays: north to the right and the vertical dimension upward (rather than horizontal, as for
+ * the default "yz" orientation).  Composed with the north-up orientation, it maps view x (right)
+ * to +y, view y (down) to -z, and view z (into the screen) to -x.
+ */
+export const GEO_YZ_RELATIVE_ORIENTATION = quat.fromValues(
+  0.5,
+  -0.5,
+  -0.5,
+  0.5,
+);
+
 const NORMAL_EPSILON = 1e-3;
 
 /**

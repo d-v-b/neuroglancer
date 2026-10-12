@@ -1053,21 +1053,28 @@ export class OrientationState extends RefCounted {
    * versa.
    */
   static makeRelative(peer: OrientationState, peerToSelf: quat) {
+    peerToSelf = quat.clone(peerToSelf);
     const self = new OrientationState(
       quat.multiply(quat.create(), peer.orientation, peerToSelf),
-    );
+    ) as OrientationState & {
+      /**
+       * Changes the orientation relative to the peer, preserving the peer orientation.
+       */
+      setPeerToSelf(newPeerToSelf: quat): void;
+    };
     let updatingPeer = false;
+    let updatingSelf = false;
+    const updateSelf = () => {
+      updatingSelf = true;
+      quat.multiply(self.orientation, peer.orientation, peerToSelf);
+      self.changed.dispatch();
+      updatingSelf = false;
+    };
     self.registerDisposer(
       peer.changed.add(() => {
-        if (!updatingPeer) {
-          updatingSelf = true;
-          quat.multiply(self.orientation, peer.orientation, peerToSelf);
-          self.changed.dispatch();
-          updatingSelf = false;
-        }
+        if (!updatingPeer) updateSelf();
       }),
     );
-    let updatingSelf = false;
     const selfToPeer = quat.invert(quat.create(), peerToSelf);
     self.registerDisposer(
       self.changed.add(() => {
@@ -1079,6 +1086,12 @@ export class OrientationState extends RefCounted {
         }
       }),
     );
+    self.setPeerToSelf = (newPeerToSelf: quat) => {
+      if (quat.exactEquals(newPeerToSelf, peerToSelf)) return;
+      quat.copy(peerToSelf, newPeerToSelf);
+      quat.invert(selfToPeer, peerToSelf);
+      updateSelf();
+    };
     return self;
   }
 

@@ -21,6 +21,7 @@ import {
   classifyGeoPanelView,
   computeMapViewDepthRange,
   formatLatitudeLongitude,
+  GEO_YZ_RELATIVE_ORIENTATION,
   getGeoDisplayInfo,
   getGroundMetersPerPixel,
   globalToLonLat,
@@ -36,7 +37,7 @@ import {
   formatGraticuleLabel,
 } from "#src/geo/graticule.js";
 import { VerticalAxis } from "#src/geo/vertical.js";
-import { mat4, quat } from "#src/util/geom.js";
+import { mat4, quat, vec3 } from "#src/util/geom.js";
 
 function makeInfo(crs: string, scale: number, unit: string) {
   const space = makeCoordinateSpace({
@@ -161,6 +162,26 @@ describe("geo navigation", () => {
     const identity = quat.create();
     expect(restrictToMapPlane(identity)).toBe(true);
     expect(Array.from(identity)).toEqual(Array.from(NORTH_UP_ORIENTATION));
+  });
+
+  it("orients north-south sections with north right and up upward", () => {
+    const orientation = quat.multiply(
+      quat.create(),
+      NORTH_UP_ORIENTATION,
+      GEO_YZ_RELATIVE_ORIENTATION,
+    );
+    const map = (v: [number, number, number]) =>
+      Array.from(
+        vec3.transformQuat(
+          vec3.create(),
+          vec3.fromValues(v[0], v[1], v[2]),
+          orientation,
+        ),
+      ).map((x) => Math.round(x * 1e6) / 1e6 + 0);
+    // View x (right) is north, view y (down) is down, view z (into the screen) is west.
+    expect(map([1, 0, 0])).toEqual([0, 1, 0]);
+    expect(map([0, 1, 0])).toEqual([0, 0, -1]);
+    expect(map([0, 0, 1])).toEqual([-1, 0, 0]);
   });
 
   it("formats geographic coordinates", () => {

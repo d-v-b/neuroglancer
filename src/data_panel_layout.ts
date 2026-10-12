@@ -20,6 +20,7 @@ import { debounce } from "lodash-es";
 import type { ChunkManager } from "#src/chunk_manager/frontend.js";
 import type { DisplayContext } from "#src/display_context.js";
 import type { GeoViewState } from "#src/geo/geo_view.js";
+import { GEO_YZ_RELATIVE_ORIENTATION } from "#src/geo/geo_view.js";
 import type {
   LayerManager,
   MouseSelectionState,
@@ -131,38 +132,60 @@ const LAYOUT_SYMBOLS = new Map<string, string>([
 export function makeSliceView(
   viewerState: SliceViewViewerState,
   baseToSelf?: quat,
+  geoBaseToSelf?: quat,
 ) {
   let navigationState: NavigationState;
+  let orientation: ReturnType<typeof OrientationState.makeRelative> | undefined;
   if (baseToSelf === undefined) {
     navigationState = viewerState.navigationState.addRef();
   } else {
+    orientation = OrientationState.makeRelative(
+      viewerState.navigationState.pose.orientation,
+      baseToSelf,
+    );
     navigationState = new NavigationState(
       new DisplayPose(
         viewerState.navigationState.pose.position.addRef(),
         viewerState.navigationState.pose.displayDimensionRenderInfo.addRef(),
-        OrientationState.makeRelative(
-          viewerState.navigationState.pose.orientation,
-          baseToSelf,
-        ),
+        orientation,
       ),
       viewerState.navigationState.zoomFactor.addRef(),
       viewerState.navigationState.depthRange.addRef(),
     );
   }
-  return new SliceView(
+  const sliceView = new SliceView(
     viewerState.chunkManager,
     viewerState.layerManager,
     navigationState,
     viewerState.wireFrame,
     viewerState.geoView,
   );
+  const { geoView } = viewerState;
+  if (
+    orientation !== undefined &&
+    geoBaseToSelf !== undefined &&
+    geoView !== undefined
+  ) {
+    const updateOrientation = () => {
+      orientation.setPeerToSelf(
+        geoView.info !== undefined ? geoBaseToSelf : baseToSelf!,
+      );
+    };
+    sliceView.registerDisposer(geoView.changed.add(updateOrientation));
+    updateOrientation();
+  }
+  return sliceView;
 }
 
 export function makeNamedSliceView(
   viewerState: SliceViewViewerState,
   axes: NamedAxes,
 ) {
-  return makeSliceView(viewerState, AXES_RELATIVE_ORIENTATION.get(axes)!);
+  return makeSliceView(
+    viewerState,
+    AXES_RELATIVE_ORIENTATION.get(axes)!,
+    axes === "yz" ? GEO_YZ_RELATIVE_ORIENTATION : undefined,
+  );
 }
 
 export function makeOrthogonalSliceViews(viewerState: SliceViewViewerState) {
