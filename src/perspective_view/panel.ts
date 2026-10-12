@@ -465,6 +465,7 @@ export class PerspectivePanel extends RenderedDataPanel {
               width: logicalWidth,
               height: logicalHeight,
             }));
+            out.globeTarget = camera.target;
             mat4.copy(invViewMatrix, camera.invViewMatrix);
             mat4.copy(projectionMat, camera.projectionMat);
             applyRenderViewportToProjectionMatrix(out, projectionMat);
@@ -472,6 +473,7 @@ export class PerspectivePanel extends RenderedDataPanel {
             return;
           }
           this.globeCamera = undefined;
+          out.globeTarget = undefined;
           const widthOverHeight = logicalWidth / logicalHeight;
           const fovy = Math.PI / 4.0;
           let { relativeDepthRange } = navigationState;

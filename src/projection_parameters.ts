@@ -53,6 +53,13 @@ export class ProjectionParameters extends RenderViewport {
    * Inverse of `viewProjectionMat`.
    */
   invViewProjectionMat: mat4 = mat4.create();
+
+  /**
+   * In the globe view of the perspective panel (see `src/geo/globe.ts`), the ECEF coordinates of
+   * the camera target, which is the origin of the world (render) coordinates.  Otherwise
+   * `undefined`.
+   */
+  globeTarget: Float64Array | undefined = undefined;
 }
 
 export function projectionParametersEqual(
@@ -64,7 +71,11 @@ export function projectionParametersEqual(
     renderViewportsEqual(a, b) &&
     arraysEqual(a.globalPosition, b.globalPosition) &&
     arraysEqual(a.projectionMat, b.projectionMat) &&
-    arraysEqual(a.viewMatrix, b.viewMatrix)
+    arraysEqual(a.viewMatrix, b.viewMatrix) &&
+    (a.globeTarget === b.globeTarget ||
+      (a.globeTarget !== undefined &&
+        b.globeTarget !== undefined &&
+        arraysEqual(a.globeTarget, b.globeTarget)))
   );
 }
 

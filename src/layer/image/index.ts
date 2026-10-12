@@ -42,6 +42,7 @@ import {
 } from "#src/render_scale_statistics.js";
 import { DataType, VolumeType } from "#src/sliceview/volume/base.js";
 import { MultiscaleVolumeChunkSource } from "#src/sliceview/volume/frontend.js";
+import { GlobeVolumeRenderLayer } from "#src/sliceview/volume/globe_render_layer.js";
 import {
   DEFAULT_FRAGMENT_MAIN,
   defineImageLayerShader,
@@ -259,21 +260,28 @@ export class ImageUserLayer extends Base {
         this.fragmentMain.value = defaultShader;
       }
       loadedSubsource.activate((context) => {
-        loadedSubsource.addRenderLayer(
-          new ImageRenderLayer(volume, {
-            opacity: this.opacity,
-            blendMode: this.blendMode,
-            shaderControlState: this.shaderControlState,
-            shaderError: this.shaderError,
-            transform: loadedSubsource.getRenderLayerTransform(
-              this.channelCoordinateSpace,
-            ),
-            renderScaleTarget: this.sliceViewRenderScaleTarget,
-            renderScaleHistogram: this.sliceViewRenderScaleHistogram,
-            localPosition: this.localPosition,
-            channelCoordinateSpace: this.channelCoordinateSpace,
-          }),
-        );
+        const imageRenderLayer = new ImageRenderLayer(volume, {
+          opacity: this.opacity,
+          blendMode: this.blendMode,
+          shaderControlState: this.shaderControlState,
+          shaderError: this.shaderError,
+          transform: loadedSubsource.getRenderLayerTransform(
+            this.channelCoordinateSpace,
+          ),
+          renderScaleTarget: this.sliceViewRenderScaleTarget,
+          renderScaleHistogram: this.sliceViewRenderScaleHistogram,
+          localPosition: this.localPosition,
+          channelCoordinateSpace: this.channelCoordinateSpace,
+        });
+        loadedSubsource.addRenderLayer(imageRenderLayer);
+        if (
+          loadedSubsource.loadedDataSource.dataSource.geoReference !== undefined
+        ) {
+          // Shown on the globe of the perspective panel in globe mode.
+          loadedSubsource.addRenderLayer(
+            new GlobeVolumeRenderLayer(imageRenderLayer),
+          );
+        }
         const volumeRenderLayer = context.registerDisposer(
           new VolumeRenderingRenderLayer({
             gain: this.volumeRenderingGain,

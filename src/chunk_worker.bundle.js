@@ -6,6 +6,7 @@ import "#src/shared_watchable_value.js";
 import "#src/chunk_manager/backend.js";
 import "#src/kvstore/backend.js";
 import "#src/sliceview/backend.js";
+import "#src/sliceview/globe_backend.js";
 import "#src/perspective_view/backend.js";
 import "#src/volume_rendering/backend.js";
 import "#src/annotation/backend.js";
