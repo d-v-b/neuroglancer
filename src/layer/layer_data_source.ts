@@ -419,23 +419,13 @@ export class LayerDataSource extends RefCounted {
         const { geoReference } = source;
         if (geoReference !== undefined) {
           const { displayCrs } = layer.manager.root;
-          effectiveSource = reprojectDataSource(
-            source,
-            displayCrs.getOrAdopt(geoReference.crs),
-          );
-          const { names } = effectiveSource.modelTransform.outputSpace;
-          for (const {
-            modelDimension,
-            elevations,
-          } of geoReference.verticalDimensions ?? []) {
-            displayCrs.registerVerticalAxis(names[modelDimension], elevations);
-          }
-          const initialDisplayCrs = displayCrs.value;
+          const targetCrs = displayCrs.getOrAdopt(geoReference.crs);
+          // Reload the data source when the display CRS changes, to reproject it into the new
+          // display CRS (also if reprojection into the current display CRS fails below).  Any
+          // custom transform is discarded, since it is expressed in the units of the previous CRS.
           refCounted.registerDisposer(
             displayCrs.changed.add(() => {
-              if (displayCrs.value === initialDisplayCrs) return;
-              // Reload the data source to reproject it into the new display CRS.  Any custom
-              // transform is discarded, since it is expressed in the units of the previous CRS.
+              if (displayCrs.value === targetCrs.id) return;
               Promise.resolve().then(() => {
                 if (refCounted.wasDisposed) return;
                 this.spec = { ...this.spec, transform: undefined };
@@ -443,6 +433,15 @@ export class LayerDataSource extends RefCounted {
               });
             }),
           );
+          effectiveSource = reprojectDataSource(source, targetCrs);
+          refCounted.registerDisposer(displayCrs.retainGeoSource());
+          const { names } = effectiveSource.modelTransform.outputSpace;
+          for (const {
+            modelDimension,
+            elevations,
+          } of geoReference.verticalDimensions ?? []) {
+            displayCrs.registerVerticalAxis(names[modelDimension], elevations);
+          }
         }
         const loaded = refCounted.registerDisposer(
           new LoadedLayerDataSource(this, effectiveSource, spec),

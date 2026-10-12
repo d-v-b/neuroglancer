@@ -58,6 +58,29 @@ export class TrackableDisplayCrs extends TrackableValue<string | undefined> {
   verticalAxes = new Map<string, number[]>();
   verticalAxesChanged = new NullarySignal();
 
+  /**
+   * Number of georeferenced data sources currently loaded.  Geospatial navigation and overlays
+   * are only enabled while this is non-zero.
+   */
+  numGeoSources = 0;
+  numGeoSourcesChanged = new NullarySignal();
+
+  /**
+   * Indicates that a georeferenced data source is loaded.  Returns a function that must be called
+   * when it is unloaded.
+   */
+  retainGeoSource() {
+    ++this.numGeoSources;
+    this.numGeoSourcesChanged.dispatch();
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      --this.numGeoSources;
+      this.numGeoSourcesChanged.dispatch();
+    };
+  }
+
   registerVerticalAxis(name: string, elevations: number[]) {
     const existing = this.verticalAxes.get(name);
     if (existing !== undefined && existing.length === elevations.length) return;

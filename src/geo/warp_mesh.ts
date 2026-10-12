@@ -90,6 +90,18 @@ const DEFAULT_MAX_EDGE_DEPTH = 12;
  */
 const MIN_TRIANGLE_AREA = 0.25;
 
+/**
+ * Triangles straddling the boundary of the valid domain are refined until their area is below the
+ * area of the rectangle divided by this value.
+ */
+const BOUNDARY_REFINEMENT_DIVISIONS = 4096;
+
+/**
+ * Error assigned to triangles straddling the boundary of the valid domain, which are refined
+ * after triangles with a larger interpolation error.
+ */
+const BOUNDARY_TRIANGLE_ERROR = 1;
+
 const tempOut = new Float64Array(2);
 
 function isValidStatus(status: TransformStatus) {
@@ -298,6 +310,7 @@ class MeshBuilder {
   constructor(
     public warp: Warp2d,
     public maxError: number,
+    public minBoundaryTriangleArea: number,
   ) {}
 
   addPoint(x: number, y: number): number {
@@ -380,7 +393,19 @@ class MeshBuilder {
     let maxX = 0;
     let maxY = 0;
     const area = 0.5 * Math.abs(orient(p0x, p0y, p1x, p1y, p2x, p2y));
-    if (
+    const numValid =
+      (isValidStatus(outputStatus[a]) ? 1 : 0) +
+      (isValidStatus(outputStatus[b]) ? 1 : 0) +
+      (isValidStatus(outputStatus[c]) ? 1 : 0);
+    if (numValid !== 0 && numValid !== 3) {
+      // Triangle straddles the boundary of the valid domain: refine to localize the boundary, such
+      // that valid regions are not omitted.
+      if (area >= this.minBoundaryTriangleArea) {
+        maxError = BOUNDARY_TRIANGLE_ERROR;
+        maxX = (p0x + p1x + p2x) / 3;
+        maxY = (p0y + p1y + p2y) / 3;
+      }
+    } else if (
       area >= MIN_TRIANGLE_AREA &&
       isValidStatus(outputStatus[a]) &&
       isValidStatus(outputStatus[b]) &&
@@ -666,7 +691,14 @@ export function computeWarpMesh(
     maxVertices = DEFAULT_MAX_VERTICES,
     maxEdgeDepth = DEFAULT_MAX_EDGE_DEPTH,
   } = options;
-  const builder = new MeshBuilder(warp, maxError);
+  const builder = new MeshBuilder(
+    warp,
+    maxError,
+    Math.max(
+      MIN_TRIANGLE_AREA,
+      (Math.abs(x1 - x0) * Math.abs(y1 - y0)) / BOUNDARY_REFINEMENT_DIVISIONS,
+    ),
+  );
 
   // Boundary ring: corners in order (x0,y0) -> (x1,y0) -> (x1,y1) -> (x0,y1), with edge
   // subdivision points in between.

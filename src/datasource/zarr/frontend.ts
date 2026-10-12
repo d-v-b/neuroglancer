@@ -342,7 +342,7 @@ async function resolveXarrayDataset(
   );
   if (arrays === undefined) return undefined;
   const names = selectXarrayVariables(arrays, requested);
-  return await Promise.all(
+  const variables = await Promise.all(
     names.map(async (name) => {
       const variableUrl = kvstoreEnsureDirectoryPipelineUrl(
         pipelineUrlJoin(url, name),
@@ -358,6 +358,28 @@ async function resolveXarrayDataset(
       return { name, url: variableUrl, metadata };
     }),
   );
+  // Variables combined as channels are decoded using the codecs of the first variable, and must
+  // use the same encoding.
+  const encodingKey = (metadata: ArrayMetadata) =>
+    JSON.stringify([
+      metadata.codecs,
+      metadata.chunkKeyEncoding,
+      metadata.dimensionSeparator,
+      String(metadata.fillValue),
+    ]);
+  const firstKey = encodingKey(variables[0].metadata);
+  const compatible = variables.filter(
+    (v) => encodingKey(v.metadata) === firstKey,
+  );
+  if (compatible.length !== variables.length && requested !== undefined) {
+    const incompatible = variables.find(
+      (v) => encodingKey(v.metadata) !== firstKey,
+    )!;
+    throw new Error(
+      `Variables ${JSON.stringify(variables[0].name)} and ${JSON.stringify(incompatible.name)} must have the same encoding (codecs and fill value)`,
+    );
+  }
+  return compatible;
 }
 
 /**
@@ -453,6 +475,8 @@ function getNormalizedDimensionNames(
   });
 }
 
+const METERS_PER_DEGREE = (Math.PI / 180) * 6378137;
+
 function getMultiscaleInfoForSingleArray(
   url: string,
   metadata: ArrayMetadata,
@@ -472,9 +496,11 @@ function getMultiscaleInfoForSingleArray(
       unit: "deg",
       scale: Math.abs(geo.lat.step),
     };
+    // Vertical scales are converted from meters to display CRS units on reprojection (see
+    // `GeoReference.verticalDimensions`); express them in degrees to match the source CRS.
     for (const [dim, scale] of geo.verticalScales) {
       if (unitsAndScales[dim].unit === "") {
-        unitsAndScales[dim] = { unit: "", scale };
+        unitsAndScales[dim] = { unit: "", scale: scale / METERS_PER_DEGREE };
       }
     }
   }

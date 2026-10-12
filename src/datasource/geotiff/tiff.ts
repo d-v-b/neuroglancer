@@ -86,6 +86,13 @@ export class BlockCachingReader implements ByteRangeReader {
     private size: number | undefined = undefined,
   ) {}
 
+  /**
+   * Provides data already read for the block containing offset `index * blockSize`.
+   */
+  seedBlock(index: number, data: Uint8Array) {
+    this.blocks.set(index, Promise.resolve(data));
+  }
+
   private getBlock(index: number) {
     let block = this.blocks.get(index);
     if (block === undefined) {

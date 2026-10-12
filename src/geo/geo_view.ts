@@ -367,6 +367,7 @@ export class GeoViewState extends RefCounted {
     };
     this.registerDisposer(displayCrs.changed.add(invalidate));
     this.registerDisposer(displayCrs.verticalAxesChanged.add(invalidate));
+    this.registerDisposer(displayCrs.numGeoSourcesChanged.add(invalidate));
     this.registerDisposer(coordinateSpace.changed.add(invalidate));
     this.registerDisposer(
       this.showGraticule.changed.add(this.changed.dispatch),
@@ -406,7 +407,7 @@ export class GeoViewState extends RefCounted {
     if (this.infoStale) {
       this.infoStale = false;
       this.info_ = getGeoDisplayInfo(
-        this.displayCrs.crs,
+        this.displayCrs.numGeoSources === 0 ? undefined : this.displayCrs.crs,
         this.displayCrs.dimensionNames,
         this.coordinateSpace.value,
       );
@@ -512,6 +513,13 @@ export class GeoViewState extends RefCounted {
       for (const dim of [info.xDim, info.yDim]) {
         units[dim] = unit;
         scales[dim] = space.scales[dim] * conversion;
+      }
+      // Vertical dimensions are scaled relative to the CRS units to preserve vertical
+      // exaggeration.
+      for (let dim = 0; dim < space.rank; ++dim) {
+        if (this.getVerticalAxis(dim) !== undefined) {
+          scales[dim] = space.scales[dim] * conversion;
+        }
       }
       (this.coordinateSpace as WatchableValueInterface<CoordinateSpace>).value =
         makeCoordinateSpace({

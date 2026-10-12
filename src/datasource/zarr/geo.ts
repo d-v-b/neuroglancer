@@ -63,8 +63,8 @@ export interface XarrayGeoreference {
   lon: CoordinateAxis;
   lat: CoordinateAxis;
   /**
-   * Display scale (in degree-equivalent units per level) of vertical dimensions, keyed by
-   * dimension index.
+   * Display scale of vertical dimensions, keyed by dimension index, in exaggerated meters per
+   * level (converted to display CRS units when the source is reprojected).
    */
   verticalScales: Map<number, number>;
   /**
@@ -102,8 +102,6 @@ export function getElevations(name: string, values: number[]): number[] {
  * Vertical exaggeration applied to vertical dimensions relative to horizontal distances.
  */
 export const DEFAULT_VERTICAL_EXAGGERATION = 100;
-
-const METERS_PER_DEGREE = (Math.PI / 180) * 6378137;
 
 /**
  * Determines whether a coordinate array is regularly spaced, and returns its start and step.
@@ -408,10 +406,7 @@ export async function getXarrayGeoreference(
         const meanSpacing =
           Math.abs(values[values.length - 1] - values[0]) / (values.length - 1);
         if (!(meanSpacing > 0)) return;
-        verticalScales.set(
-          dim,
-          (DEFAULT_VERTICAL_EXAGGERATION * meanSpacing) / METERS_PER_DEGREE,
-        );
+        verticalScales.set(dim, DEFAULT_VERTICAL_EXAGGERATION * meanSpacing);
         verticalElevations.set(dim, getElevations(name, values));
       } catch {
         // Ignore vertical coordinates that cannot be read.

@@ -182,6 +182,18 @@ export function reprojectDataSource(
   const displayUnit = displayCrs.unit;
   const newOutputUnits = Array.from(outputSpace.units);
   const newOutputScales = new Float64Array(outputScales);
+  // Convert the scales of vertical dimensions from source CRS units to display CRS units.
+  const newInputScales = new Float64Array(inputScales);
+  const verticalConversion = sourceCrs.metersPerUnit / displayCrs.metersPerUnit;
+  for (const { modelDimension } of geoReference.verticalDimensions ?? []) {
+    const inputDims = findDependentInputDimensions(transform, rank, [
+      modelDimension,
+    ]);
+    newOutputScales[modelDimension] *= verticalConversion;
+    for (const inputDim of inputDims) {
+      newInputScales[inputDim] *= verticalConversion;
+    }
+  }
   newOutputUnits[o0] = newOutputUnits[o1] = displayUnit;
   newOutputScales[o0] = newOutputScales[o1] = displayScale;
   // Georeferenced dimensions of all sources are named consistently, such that they map to the
@@ -220,7 +232,7 @@ export function reprojectDataSource(
     valid: inputSpace.valid,
     names: inputSpace.names,
     units: inputSpace.units,
-    scales: inputSpace.scales,
+    scales: newInputScales,
     ids: inputSpace.ids,
     timestamps: inputSpace.timestamps,
     coordinateArrays: inputSpace.coordinateArrays,

@@ -39,6 +39,11 @@ export enum TransformStatus {
 
 type PointFn = (coords: number[]) => number[];
 
+/**
+ * Latitudes up to this absolute value are clamped to the poles rather than treated as invalid.
+ */
+const MAX_LATITUDE_OVERSHOOT = 95;
+
 function makeConverter(
   from: string,
   to: string,
@@ -122,10 +127,13 @@ export class GeographicTransform {
     if (
       !Number.isFinite(lon) ||
       !Number.isFinite(lat) ||
-      Math.abs(lat) > 90 + 1e-9
+      Math.abs(lat) > MAX_LATITUDE_OVERSHOOT
     ) {
       return TransformStatus.INVALID;
     }
+    // Coordinates slightly beyond the poles arise for cell edges of grids whose cell centers lie on
+    // the poles.
+    lat = Math.max(-90, Math.min(90, lat));
     const { referenceLongitude } = this;
     if (referenceLongitude !== undefined && !this.crs.isGeographic) {
       lon = wrapLongitude(lon, referenceLongitude);

@@ -312,6 +312,9 @@ async function readTiffMetadata(
     blockSize,
     initial.totalSize,
   );
+  if (initial.offset === 0) {
+    reader.seedBlock(0, new Uint8Array(await initial.response.arrayBuffer()));
+  }
   return await readTiff(reader);
 }
 

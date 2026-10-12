@@ -80,6 +80,10 @@ export interface GeoChunkMesh {
    */
   warpedLower: Float64Array;
   warpedUpper: Float64Array;
+  /**
+   * Frontend only: GPU resources for rendering the mesh, disposed with the mesh.
+   */
+  gpuMesh?: { dispose(): void };
 }
 
 /**
@@ -341,12 +345,17 @@ class ClipBounds {
   yMin = Infinity;
   xMax = -Infinity;
   yMax = -Infinity;
+  /**
+   * Indicates that some sample point could not be transformed.
+   */
   invalid = false;
+  numValid = 0;
 
   reset() {
     this.xMin = this.yMin = Infinity;
     this.xMax = this.yMax = -Infinity;
     this.invalid = false;
+    this.numValid = 0;
   }
 
   addSubspacePoint(m: Float64Array, v: ArrayLike<number>) {
@@ -359,6 +368,7 @@ class ClipBounds {
       this.invalid = true;
       return;
     }
+    ++this.numValid;
     this.xMin = Math.min(this.xMin, cx);
     this.xMax = Math.max(this.xMax, cx);
     this.yMin = Math.min(this.yMin, cy);
@@ -368,10 +378,19 @@ class ClipBounds {
   /**
    * Tests whether the bounds, expanded by `marginFraction` of their size and shifted by
    * `(offsetX, offsetY)`, intersect the viewport `[-1, 1]^2`.
+   *
+   * If some sample points are invalid, the bounds of the valid points are expanded by a larger
+   * margin.  If no sample points are valid, the result is `!isLeaf`, such that blocks of chunks
+   * are subdivided further while single chunks are considered not visible.
    */
-  intersectsViewport(offsetX: number, offsetY: number, marginFraction: number) {
-    if (this.invalid) return true;
-    if (!(this.xMin <= this.xMax)) return false;
+  intersectsViewport(
+    offsetX: number,
+    offsetY: number,
+    marginFraction: number,
+    isLeaf = false,
+  ) {
+    if (this.numValid === 0) return !isLeaf;
+    if (this.invalid) marginFraction = Math.max(marginFraction, 0.5);
     const mx = (this.xMax - this.xMin) * marginFraction + 1e-3;
     const my = (this.yMax - this.yMin) * marginFraction + 1e-3;
     return (
@@ -388,7 +407,8 @@ const tempSubspace = new Float64Array(3);
 
 /**
  * Computes the clip-space bounds of the image of the rectangle `[x0, x1] x [y0, y1]` (true chunk
- * coordinates of the warped dimensions) by sampling its boundary.
+ * coordinates of the warped dimensions) by sampling its boundary.  If some boundary points are
+ * invalid, interior points are sampled as well.
  */
 function computeFootprintClipBounds(
   bounds: ClipBounds,
@@ -419,7 +439,13 @@ function computeFootprintClipBounds(
     addPoint(x1, y0 + t * (y1 - y0));
     addPoint(x1 - t * (x1 - x0), y1);
     addPoint(x0, y1 - t * (y1 - y0));
-    if (bounds.invalid) return;
+  }
+  if (bounds.invalid) {
+    for (let i = 1; i < n; ++i) {
+      for (let j = 1; j < n; ++j) {
+        addPoint(x0 + (i / n) * (x1 - x0), y0 + (j / n) * (y1 - y0));
+      }
+    }
   }
 }
 
@@ -433,7 +459,7 @@ function getWorldCopyOffsets(
   marginFraction: number,
 ): number[] {
   const { worldPeriodSubspace, subspaceToClip: m } = view;
-  if (worldPeriodSubspace === undefined || bounds.invalid) {
+  if (worldPeriodSubspace === undefined || bounds.numValid === 0) {
     return bounds.intersectsViewport(0, 0, marginFraction) ? [0, 0, 0] : [];
   }
   const p = worldPeriodSubspace;
@@ -555,9 +581,18 @@ export function forEachGeoVisibleChunk<
         Math.min(clipX1, x1 * sizeX),
         Math.min(clipY1, y1 * sizeY),
       );
-      if (!bounds.intersectsViewport(offsetX, offsetY, 0.1)) return;
       const nx = x1 - x0;
       const ny = y1 - y0;
+      if (
+        !bounds.intersectsViewport(
+          offsetX,
+          offsetY,
+          0.1,
+          /*isLeaf=*/ nx === 1 && ny === 1,
+        )
+      ) {
+        return;
+      }
       if (nx === 1 && ny === 1) {
         emit(x0, y0);
         return;
@@ -654,9 +689,22 @@ export function getGeoChunkMesh(
   cache.set(key, mesh);
   if (cache.size > MAX_CACHED_MESHES) {
     const oldest = cache.keys().next().value!;
+    cache.get(oldest)!.gpuMesh?.dispose();
     cache.delete(oldest);
   }
   return mesh;
+}
+
+/**
+ * Releases the cached chunk meshes (and their GPU resources) of a transformed source.
+ */
+export function disposeGeoMeshCache(tsource: TransformedSource<any>) {
+  const cache = tsource.geo?.meshCache;
+  if (cache === undefined) return;
+  for (const mesh of cache.values()) {
+    mesh.gpuMesh?.dispose();
+  }
+  cache.clear();
 }
 
 /**

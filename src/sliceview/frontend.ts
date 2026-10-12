@@ -63,6 +63,7 @@ import {
 } from "#src/sliceview/base.js";
 import { ChunkLayout } from "#src/sliceview/chunk_layout.js";
 import {
+  disposeGeoMeshCache,
   makeGeoTransformedSourceInfo,
   serializeGeoTransformedSourceInfo,
 } from "#src/sliceview/geo.js";
@@ -159,7 +160,9 @@ function disposeTransformedSources(
   allSources: TransformedSource<SliceViewRenderLayer, SliceViewChunkSource>[][],
 ) {
   for (const scales of allSources) {
-    for (const { source } of scales) {
+    for (const tsource of scales) {
+      const { source } = tsource;
+      disposeGeoMeshCache(tsource);
       layer.removeSource(source);
       source.dispose();
     }

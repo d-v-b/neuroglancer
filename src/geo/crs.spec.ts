@@ -180,6 +180,16 @@ describe("CrsTransform", () => {
     expect(out[1]).toBeCloseTo(20037508.3428, 3);
   });
 
+  it("clamps latitudes slightly beyond the poles", () => {
+    const t = new CrsTransform(getCrs("EPSG:4326"), getCrs("EPSG:4326"));
+    const out = new Float64Array(2);
+    // Identity transforms do not check the domain.
+    expect(t.forward(0, 90.125, out)).toBe(TransformStatus.VALID);
+    const m = new CrsTransform(getCrs("EPSG:4326"), getCrs("EPSG:3857"));
+    expect(m.forward(0, 90.125, out)).toBe(TransformStatus.CLAMPED);
+    expect(m.forward(0, 96, out)).toBe(TransformStatus.INVALID);
+  });
+
   it("unwraps longitudes across the antimeridian", () => {
     // UTM zone 1 is centered at -177 degrees; points west of the zone boundary should map to
     // longitudes < -180 rather than wrapping to +180.

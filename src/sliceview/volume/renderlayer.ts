@@ -106,18 +106,26 @@ const tempMat4 = mat4.create();
  * dummy vertex id attribute (see `vertex_id.ts`).
  */
 const GEO_POSITION_ATTRIBUTE_LOCATION = 1;
-const GEO_CHUNK_POSITION_ATTRIBUTE_LOCATION = 2;
+const GEO_POSITION_LOW_ATTRIBUTE_LOCATION = 2;
+const GEO_CHUNK_POSITION_ATTRIBUTE_LOCATION = 3;
 
 /**
  * Defines the vertex shader for rendering georeferenced sources, which are drawn as triangle meshes
  * computed on the CPU (see `src/sliceview/geo.ts`) rather than as box-plane intersections.
  */
 function defineGeoVolumeShader(builder: ShaderBuilder, wireFrame: boolean) {
-  // Display position of the vertex relative to the center of the view.
+  // Display position of the vertex relative to the origin of the chunk mesh, split into high and
+  // low parts (each representable in single precision) to preserve precision for meshes far from
+  // the center of the view.
   builder.addAttribute(
     "highp vec3",
     "aGeoPosition",
     GEO_POSITION_ATTRIBUTE_LOCATION,
+  );
+  builder.addAttribute(
+    "highp vec3",
+    "aGeoPositionLow",
+    GEO_POSITION_LOW_ATTRIBUTE_LOCATION,
   );
   // Position within the chunk along the two georeferenced chunk dimensions.
   builder.addAttribute(
@@ -126,15 +134,18 @@ function defineGeoVolumeShader(builder: ShaderBuilder, wireFrame: boolean) {
     GEO_CHUNK_POSITION_ATTRIBUTE_LOCATION,
   );
   builder.addUniform("highp mat4", "uProjectionMatrix");
-  // Display offset of the current world copy.
+  // Display offset of the mesh origin relative to the center of the view (including the offset of
+  // the current world copy), split into high and low parts.
   builder.addUniform("highp vec3", "uGeoOffset");
+  builder.addUniform("highp vec3", "uGeoOffsetLow");
   builder.addUniform("highp vec3", "uGeoChunkAxisX");
   builder.addUniform("highp vec3", "uGeoChunkAxisY");
   builder.addUniform("highp vec3", "uGeoChunkBase");
   builder.addUniform("highp vec3", "uChunkDataSize");
   if (wireFrame) {
     builder.setVertexMain(`
-gl_Position = uProjectionMatrix * vec4(aGeoPosition + uGeoOffset, 1.0);
+gl_Position = uProjectionMatrix * vec4(
+    (aGeoPosition + uGeoOffset) + (aGeoPositionLow + uGeoOffsetLow), 1.0);
 gl_Position.z = 0.0;
 `);
     builder.setFragmentMain(`
@@ -144,11 +155,110 @@ emit(vec4(1.0, 1.0, 1.0, 0.5));
   }
   builder.addVarying("highp vec3", "vChunkPosition");
   builder.setVertexMain(`
-gl_Position = uProjectionMatrix * vec4(aGeoPosition + uGeoOffset, 1.0);
+gl_Position = uProjectionMatrix * vec4(
+    (aGeoPosition + uGeoOffset) + (aGeoPositionLow + uGeoOffsetLow), 1.0);
 gl_Position.z = 0.0;
 vChunkPosition = uGeoChunkBase + aGeoChunkPosition.x * uGeoChunkAxisX +
     aGeoChunkPosition.y * uGeoChunkAxisY;
 `);
+}
+
+/**
+ * GPU buffers for a georeferenced chunk mesh.  Vertex positions are stored in display
+ * coordinates relative to the mesh origin, such that they are small enough for single precision.
+ */
+class GeoChunkGpuMesh {
+  position: GLBuffer;
+  positionLow: GLBuffer;
+  chunkPosition: GLBuffer;
+  triangles: GLBuffer;
+  private lines: GLBuffer | undefined;
+  numTriangleIndices: number;
+  numLineIndices: number;
+  originX: number;
+  originY: number;
+
+  constructor(
+    private gl: GL,
+    private mesh: GeoChunkMesh,
+    transform: mat4,
+    si: number,
+    sj: number,
+  ) {
+    const { numVertices, warped, warpedLower, indices } = mesh;
+    const originX = (this.originX = warpedLower[0]);
+    const originY = (this.originY = warpedLower[1]);
+    const positions = new Float32Array(numVertices * 3);
+    const positionsLow = new Float32Array(numVertices * 3);
+    for (let v = 0; v < numVertices; ++v) {
+      const wx = warped[2 * v] - originX;
+      const wy = warped[2 * v + 1] - originY;
+      for (let i = 0; i < 3; ++i) {
+        const d = transform[si * 4 + i] * wx + transform[sj * 4 + i] * wy;
+        const high = Math.fround(d);
+        positions[3 * v + i] = high;
+        positionsLow[3 * v + i] = d - high;
+      }
+    }
+    this.position = GLBuffer.fromData(gl, positions);
+    this.positionLow = GLBuffer.fromData(gl, positionsLow);
+    this.chunkPosition = GLBuffer.fromData(gl, mesh.positionWithinChunk);
+    this.triangles = GLBuffer.fromData(
+      gl,
+      indices,
+      WebGL2RenderingContext.ELEMENT_ARRAY_BUFFER,
+    );
+    this.numTriangleIndices = indices.length;
+    this.numLineIndices = indices.length * 2;
+  }
+
+  getLines() {
+    let { lines } = this;
+    if (lines === undefined) {
+      const { indices } = this.mesh;
+      const lineIndices = new Uint32Array(indices.length * 2);
+      for (let t = 0, o = 0; t < indices.length; t += 3) {
+        const a = indices[t];
+        const b = indices[t + 1];
+        const c = indices[t + 2];
+        lineIndices[o++] = a;
+        lineIndices[o++] = b;
+        lineIndices[o++] = b;
+        lineIndices[o++] = c;
+        lineIndices[o++] = c;
+        lineIndices[o++] = a;
+      }
+      lines = this.lines = GLBuffer.fromData(
+        this.gl,
+        lineIndices,
+        WebGL2RenderingContext.ELEMENT_ARRAY_BUFFER,
+      );
+    }
+    return lines;
+  }
+
+  dispose() {
+    this.position.dispose();
+    this.positionLow.dispose();
+    this.chunkPosition.dispose();
+    this.triangles.dispose();
+    this.lines?.dispose();
+  }
+}
+
+function getGeoChunkGpuMesh(
+  gl: GL,
+  mesh: GeoChunkMesh,
+  transform: mat4,
+  si: number,
+  sj: number,
+): GeoChunkGpuMesh {
+  let gpuMesh = mesh.gpuMesh as GeoChunkGpuMesh | undefined;
+  if (gpuMesh === undefined) {
+    gpuMesh = new GeoChunkGpuMesh(gl, mesh, transform, si, sj);
+    mesh.gpuMesh = gpuMesh;
+  }
+  return gpuMesh;
 }
 
 function defineVolumeShader(
@@ -633,28 +743,6 @@ void main() {
     parameters;
   }
 
-  private geoBuffers:
-    | { position: GLBuffer; chunkPosition: GLBuffer; index: GLBuffer }
-    | undefined;
-
-  private getGeoBuffers() {
-    let buffers = this.geoBuffers;
-    if (buffers === undefined) {
-      const { gl } = this;
-      buffers = this.geoBuffers = {
-        position: new GLBuffer(gl),
-        chunkPosition: new GLBuffer(gl),
-        index: new GLBuffer(gl, WebGL2RenderingContext.ELEMENT_ARRAY_BUFFER),
-      };
-      this.registerDisposer(() => {
-        buffers!.position.dispose();
-        buffers!.chunkPosition.dispose();
-        buffers!.index.dispose();
-      });
-    }
-    return buffers;
-  }
-
   /**
    * Draws the visible chunks of a georeferenced source as adaptive triangle meshes.
    *
@@ -684,106 +772,12 @@ void main() {
     const chunkDimX = chunkDisplayDimensionIndices[si];
     const chunkDimY = chunkDisplayDimensionIndices[sj];
     const chunkDimK = chunkDisplayDimensionIndices[sk];
-
-    // Collect the visible chunks that are in GPU memory.
-    const drawChunks: VolumeChunk[] = [];
-    const meshes: GeoChunkMesh[] = [];
-    let notPresentCount = 0;
-    let totalVertices = 0;
-    let totalIndices = 0;
-    sliceView.forEachVisibleChunk(transformedSource, chunkLayout, (key) => {
-      const chunk = chunks.get(key);
-      if (chunk === undefined || chunk.state !== ChunkState.GPU_MEMORY) {
-        ++notPresentCount;
-        return;
-      }
-      const { chunkGridPosition } = chunk;
-      const mesh = getGeoChunkMesh(
-        transformedSource,
-        chunkLayout,
-        `${chunkGridPosition[chunkDimX]},${chunkGridPosition[chunkDimY]}`,
-        chunkGridPosition[chunkDimX],
-        chunkGridPosition[chunkDimY],
-        si,
-        sj,
-      );
-      if (mesh.indices.length === 0) return;
-      drawChunks.push(chunk as VolumeChunk);
-      meshes.push(mesh);
-      totalVertices += mesh.numVertices;
-      totalIndices += wireFrame ? mesh.indices.length * 2 : mesh.indices.length;
-    });
-    const presentCount = drawChunks.length;
-    if (presentCount === 0) return [presentCount, notPresentCount];
-
-    // Compute vertex positions relative to the center of the view, in double precision, to avoid
-    // loss of precision for large display coordinates.
+    // The static part of the chunk layout transform, used for the vertex positions stored in the
+    // (cached) chunk mesh buffers.
+    const staticTransform = transformedSource.chunkLayout.transform;
     const { transform } = chunkLayout;
     const { invViewMatrix, viewProjectionMat } = projectionParameters;
     const center = [invViewMatrix[12], invViewMatrix[13], invViewMatrix[14]];
-    const offset = [0, 0, 0];
-    for (let i = 0; i < 3; ++i) {
-      offset[i] =
-        transform[sk * 4 + i] * thirdCoordinate + transform[12 + i] - center[i];
-    }
-    const tx = [
-      transform[si * 4],
-      transform[si * 4 + 1],
-      transform[si * 4 + 2],
-    ];
-    const ty = [
-      transform[sj * 4],
-      transform[sj * 4 + 1],
-      transform[sj * 4 + 2],
-    ];
-    const positions = new Float32Array(totalVertices * 3);
-    const chunkPositions = new Float32Array(totalVertices * 2);
-    const indices = new Uint32Array(totalIndices);
-    const indexOffsets: number[] = [];
-    {
-      let vertexOffset = 0;
-      let indexOffset = 0;
-      for (const mesh of meshes) {
-        const { warped, numVertices } = mesh;
-        for (let v = 0; v < numVertices; ++v) {
-          const wx = warped[2 * v];
-          const wy = warped[2 * v + 1];
-          const base = (vertexOffset + v) * 3;
-          for (let i = 0; i < 3; ++i) {
-            positions[base + i] = tx[i] * wx + ty[i] * wy + offset[i];
-          }
-        }
-        chunkPositions.set(mesh.positionWithinChunk, vertexOffset * 2);
-        indexOffsets.push(indexOffset);
-        const meshIndices = mesh.indices;
-        if (wireFrame) {
-          for (let t = 0, n = meshIndices.length; t < n; t += 3) {
-            const a = meshIndices[t] + vertexOffset;
-            const b = meshIndices[t + 1] + vertexOffset;
-            const c = meshIndices[t + 2] + vertexOffset;
-            indices[indexOffset++] = a;
-            indices[indexOffset++] = b;
-            indices[indexOffset++] = b;
-            indices[indexOffset++] = c;
-            indices[indexOffset++] = c;
-            indices[indexOffset++] = a;
-          }
-        } else {
-          for (let t = 0, n = meshIndices.length; t < n; ++t) {
-            indices[indexOffset++] = meshIndices[t] + vertexOffset;
-          }
-        }
-        vertexOffset += numVertices;
-      }
-      indexOffsets.push(indexOffset);
-    }
-    const buffers = this.getGeoBuffers();
-    buffers.position.setData(positions, WebGL2RenderingContext.STREAM_DRAW);
-    buffers.chunkPosition.setData(
-      chunkPositions,
-      WebGL2RenderingContext.STREAM_DRAW,
-    );
-    buffers.index.setData(indices, WebGL2RenderingContext.STREAM_DRAW);
 
     // Projection matrix for center-relative positions: viewProjection * translate(center).
     {
@@ -813,13 +807,6 @@ void main() {
     }
 
     this.vertexIdHelper.disable();
-    buffers.position.bindToVertexAttrib(GEO_POSITION_ATTRIBUTE_LOCATION, 3);
-    buffers.chunkPosition.bindToVertexAttrib(
-      GEO_CHUNK_POSITION_ATTRIBUTE_LOCATION,
-      2,
-    );
-    buffers.index.bind();
-
     const axisX = vec3.create();
     const axisY = vec3.create();
     axisX[si] = 1;
@@ -836,10 +823,29 @@ void main() {
     const drawMode = wireFrame
       ? WebGL2RenderingContext.LINES
       : WebGL2RenderingContext.TRIANGLES;
-    for (let chunkIndex = 0; chunkIndex < presentCount; ++chunkIndex) {
-      const chunk = drawChunks[chunkIndex];
-      const mesh = meshes[chunkIndex];
-      const { chunkDataSize, chunkGridPosition } = chunk;
+    let presentCount = 0;
+    let notPresentCount = 0;
+    sliceView.forEachVisibleChunk(transformedSource, chunkLayout, (key) => {
+      const chunk = chunks.get(key) as VolumeChunk | undefined;
+      if (chunk === undefined || chunk.state !== ChunkState.GPU_MEMORY) {
+        ++notPresentCount;
+        return;
+      }
+      ++presentCount;
+      const { chunkGridPosition, chunkDataSize } = chunk;
+      const mesh = getGeoChunkMesh(
+        transformedSource,
+        chunkLayout,
+        `${chunkGridPosition[chunkDimX]},${chunkGridPosition[chunkDimY]}`,
+        chunkGridPosition[chunkDimX],
+        chunkGridPosition[chunkDimY],
+        si,
+        sj,
+      );
+      if (mesh.indices.length === 0) return;
+      const gpuMesh = getGeoChunkGpuMesh(gl, mesh, staticTransform, si, sj);
+      const copies = getGeoChunkMeshCopies(mesh, view);
+      if (copies.length === 0) return;
       for (let i = 0; i < 3; ++i) {
         const chunkDim = chunkDisplayDimensionIndices[i];
         chunkDataDisplaySize[i] =
@@ -867,26 +873,55 @@ void main() {
         );
       }
       newSource = false;
-      const indexStart = indexOffsets[chunkIndex];
-      const indexCount = indexOffsets[chunkIndex + 1] - indexStart;
-      const copies = getGeoChunkMeshCopies(mesh, view);
+      gpuMesh.position.bindToVertexAttrib(GEO_POSITION_ATTRIBUTE_LOCATION, 3);
+      gpuMesh.positionLow.bindToVertexAttrib(
+        GEO_POSITION_LOW_ATTRIBUTE_LOCATION,
+        3,
+      );
+      gpuMesh.chunkPosition.bindToVertexAttrib(
+        GEO_CHUNK_POSITION_ATTRIBUTE_LOCATION,
+        2,
+      );
+      const indexBuffer = wireFrame ? gpuMesh.getLines() : gpuMesh.triangles;
+      indexBuffer.bind();
+      const indexCount = wireFrame
+        ? gpuMesh.numLineIndices
+        : gpuMesh.numTriangleIndices;
+      // Offset of the mesh origin relative to the center of the view, computed in double
+      // precision.
+      const { originX, originY } = gpuMesh;
       for (let c = 0; c < copies.length; c += 3) {
         const k = copies[c];
+        const offset = [0, 0, 0];
+        for (let i = 0; i < 3; ++i) {
+          offset[i] =
+            transform[si * 4 + i] * originX +
+            transform[sj * 4 + i] * originY +
+            transform[sk * 4 + i] * thirdCoordinate +
+            transform[12 + i] -
+            center[i] +
+            k * worldPeriodDisplay[i];
+        }
+        const high0 = Math.fround(offset[0]);
+        const high1 = Math.fround(offset[1]);
+        const high2 = Math.fround(offset[2]);
+        gl.uniform3f(shader.uniform("uGeoOffset"), high0, high1, high2);
         gl.uniform3f(
-          shader.uniform("uGeoOffset"),
-          k * worldPeriodDisplay[0],
-          k * worldPeriodDisplay[1],
-          k * worldPeriodDisplay[2],
+          shader.uniform("uGeoOffsetLow"),
+          offset[0] - high0,
+          offset[1] - high1,
+          offset[2] - high2,
         );
         gl.drawElements(
           drawMode,
           indexCount,
           WebGL2RenderingContext.UNSIGNED_INT,
-          indexStart * 4,
+          0,
         );
       }
-    }
+    });
     gl.disableVertexAttribArray(GEO_POSITION_ATTRIBUTE_LOCATION);
+    gl.disableVertexAttribArray(GEO_POSITION_LOW_ATTRIBUTE_LOCATION);
     gl.disableVertexAttribArray(GEO_CHUNK_POSITION_ATTRIBUTE_LOCATION);
     this.vertexIdHelper.enable();
     return [presentCount, notPresentCount];
@@ -922,7 +957,7 @@ void main() {
           )
         : Infinity;
       if (medianVoxelSize <= medianStoredVoxelSize) {
-        this.highestResolutionLoadedVoxelSize = effectiveVoxelSize;
+        this.highestResolutionLoadedVoxelSize = vec3.clone(effectiveVoxelSize);
       }
     }
     renderScaleHistogram.add(

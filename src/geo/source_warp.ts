@@ -108,7 +108,20 @@ export interface GeoWarpSpec {
    * is cylindrical.
    */
   displayWorldPeriod: number | undefined;
+
+  /**
+   * Bounds `[x0, y0, x1, y1]` of the source in multiscale coordinates.
+   */
+  multiscaleBounds: [number, number, number, number];
 }
+
+/**
+ * Warped points farther than this multiple of the source extent from the center of the source are
+ * treated as invalid.  Such points arise only near singularities of the display CRS (e.g. the
+ * opposite pole of a polar stereographic projection), where the reprojection is not meaningful,
+ * and would otherwise cause loss of precision in rendering.
+ */
+const MAX_WARPED_DISTANCE_FACTOR = 1000;
 
 /**
  * Warp `W` from multiscale coordinates to approximate multiscale coordinates.
@@ -126,7 +139,17 @@ export class MultiscaleGeoWarp implements Warp2d {
    */
   readonly worldPeriod: Float64Array | undefined;
 
+  private centerX: number;
+  private centerY: number;
+  private maxDistance: number;
+
   constructor(public spec: GeoWarpSpec) {
+    const [x0, y0, x1, y1] = spec.multiscaleBounds;
+    this.centerX = 0.5 * (x0 + x1);
+    this.centerY = 0.5 * (y0 + y1);
+    this.maxDistance =
+      MAX_WARPED_DISTANCE_FACTOR *
+      Math.max(1, Math.abs(x1 - x0), Math.abs(y1 - y0));
     this.crsTransform = new CrsTransform(
       getCrs(spec.sourceCrs),
       getCrs(spec.displayCrs),
@@ -178,6 +201,12 @@ export class MultiscaleGeoWarp implements Warp2d {
     const status = this.toDisplay(x, y, out);
     if (status === TransformStatus.INVALID) return status;
     applyAffine2d(this.displayToMultiscale, out[0], out[1], out);
+    if (
+      Math.abs(out[0] - this.centerX) > this.maxDistance ||
+      Math.abs(out[1] - this.centerY) > this.maxDistance
+    ) {
+      return TransformStatus.INVALID;
+    }
     return status;
   }
 
@@ -194,6 +223,7 @@ export class MultiscaleGeoWarp implements Warp2d {
 }
 
 const warpCache = new Map<string, MultiscaleGeoWarp>();
+const MAX_CACHED_WARPS = 256;
 
 export function getMultiscaleGeoWarp(spec: GeoWarpSpec): MultiscaleGeoWarp {
   const key = JSON.stringify(spec);
@@ -201,6 +231,9 @@ export function getMultiscaleGeoWarp(spec: GeoWarpSpec): MultiscaleGeoWarp {
   if (warp === undefined) {
     warp = new MultiscaleGeoWarp(spec);
     warpCache.set(key, warp);
+    if (warpCache.size > MAX_CACHED_WARPS) {
+      warpCache.delete(warpCache.keys().next().value!);
+    }
   }
   return warp;
 }
@@ -246,6 +279,7 @@ export function computeGeoWarpSpec(
     multiscaleToSource,
     multiscaleToDisplay: multiscaleToSource,
     displayWorldPeriod: displayCrs.worldPeriod,
+    multiscaleBounds: [lower[0], lower[1], upper[0], upper[1]],
   };
   const crsTransform = new CrsTransform(
     sourceCrs,

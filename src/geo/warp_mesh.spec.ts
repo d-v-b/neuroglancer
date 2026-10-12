@@ -208,6 +208,43 @@ describe("computeWarpMesh", () => {
   });
 });
 
+describe("computeWarpMesh near invalid regions", () => {
+  it("covers valid regions adjacent to invalid regions", () => {
+    // Quarter-degree grid with cell centers on the poles (as for ERA5), such that the top edge of
+    // the grid lies beyond the pole, displayed in Web Mercator.
+    const warp = makeWarp(
+      "EPSG:4326",
+      "EPSG:3857",
+      [0.25, 0, 0, -0.25, -180.125, 90.125],
+      [0, 0],
+      [1440, 721],
+    );
+    const mesh = computeWarpMesh(warp, 0, 0, 256, 256);
+    const { indices, sourcePositions: p } = mesh;
+    const contains = (x: number, y: number) => {
+      for (let i = 0; i < indices.length; i += 3) {
+        const [a, b, c] = [indices[i], indices[i + 1], indices[i + 2]];
+        const d = (px: number, py: number, qx: number, qy: number) =>
+          (qx - px) * (y - py) - (qy - py) * (x - px);
+        const d0 = d(p[2 * a], p[2 * a + 1], p[2 * b], p[2 * b + 1]);
+        const d1 = d(p[2 * b], p[2 * b + 1], p[2 * c], p[2 * c + 1]);
+        const d2 = d(p[2 * c], p[2 * c + 1], p[2 * a], p[2 * a + 1]);
+        if (
+          (d0 >= 0 && d1 >= 0 && d2 >= 0) ||
+          (d0 <= 0 && d1 <= 0 && d2 <= 0)
+        ) {
+          return true;
+        }
+      }
+      return false;
+    };
+    // Latitude 80 (row 40.5) at various longitudes, near the clamped region.
+    for (const x of [10, 64, 128, 200, 250]) {
+      expect(contains(x, 40.5), `x=${x}`).toBe(true);
+    }
+  });
+});
+
 describe("MultiscaleGeoWarp", () => {
   it("maps through the affine approximation to exact display coordinates", () => {
     const spec = computeGeoWarpSpec(

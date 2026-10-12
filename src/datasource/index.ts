@@ -208,6 +208,10 @@ export interface GeoReference {
   /**
    * Vertical model dimensions, if any, specified by the elevation (in meters, positive up) of the
    * center of each level.  Level `i` is centered at model coordinate `i + 0.5`.
+   *
+   * The scales of vertical dimensions (which are unitless) are interpreted relative to the units
+   * of the CRS, and are converted when the source is reprojected, such that the vertical
+   * exaggeration is preserved.
    */
   verticalDimensions?: { modelDimension: number; elevations: number[] }[];
 }
