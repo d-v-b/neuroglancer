@@ -34,6 +34,10 @@ import { GeoTiffTileSourceParameters } from "#src/datasource/geotiff/base.js";
 import type { TiffTileFormat } from "#src/datasource/geotiff/decode.js";
 import { getTiffDataType } from "#src/datasource/geotiff/decode.js";
 import { getGeoTiffGeoreference } from "#src/datasource/geotiff/geokeys.js";
+import {
+  getGeoTiffDefaultShader,
+  getTiffScales,
+} from "#src/datasource/geotiff/metadata.js";
 import type {
   ByteRangeReader,
   TiffFile,
@@ -69,7 +73,7 @@ import {
   VolumeChunkSource,
 } from "#src/sliceview/volume/frontend.js";
 import { transposeNestedArrays } from "#src/util/array.js";
-import { DataType } from "#src/util/data_type.js";
+import type { DataType } from "#src/util/data_type.js";
 import type { ProgressOptions } from "#src/util/progress_listener.js";
 import { ProgressSpan } from "#src/util/progress_listener.js";
 
@@ -77,35 +81,6 @@ class GeoTiffTileSource extends WithParameters(
   WithSharedKvStoreContext(VolumeChunkSource),
   GeoTiffTileSourceParameters,
 ) {}
-
-/**
- * Selects the full-resolution image and its overviews, ordered by decreasing resolution.
- */
-export function getTiffScales(tiff: TiffFile): TiffImage[] {
-  const isMask = (image: TiffImage) => (image.subfileType & 4) !== 0;
-  const isOverview = (image: TiffImage) => (image.subfileType & 1) !== 0;
-  const base = tiff.images.find(
-    (image) => !isMask(image) && !isOverview(image),
-  );
-  if (base === undefined) {
-    throw new Error("TIFF file contains no full-resolution image");
-  }
-  const scales = [base];
-  for (const image of tiff.images) {
-    if (image === base || isMask(image) || !isOverview(image)) continue;
-    if (
-      image.samplesPerPixel !== base.samplesPerPixel ||
-      image.bitsPerSample !== base.bitsPerSample ||
-      image.sampleFormat !== base.sampleFormat ||
-      image.width >= base.width
-    ) {
-      continue;
-    }
-    scales.push(image);
-  }
-  scales.sort((a, b) => b.width - a.width);
-  return scales;
-}
 
 function getTileFormat(
   image: TiffImage,
@@ -122,38 +97,6 @@ function getTileFormat(
     tileHeight: image.tileHeight,
     jpegTables: image.jpegTables,
   };
-}
-
-/**
- * Returns the default shader for an image, or `undefined` to use the generic default.
- */
-export function getGeoTiffDefaultShader(
-  dataType: DataType,
-  samplesPerPixel: number,
-  noData: number | undefined,
-): string | undefined {
-  if (dataType !== DataType.UINT8) return undefined;
-  if (samplesPerPixel === 3) {
-    const alpha =
-      noData === 0 ? "all(equal(rgb, vec3(0.0))) ? 0.0 : 1.0" : "1.0";
-    return `void main() {
-  vec3 rgb = vec3(toNormalized(getDataValue(0)),
-                  toNormalized(getDataValue(1)),
-                  toNormalized(getDataValue(2)));
-  emitRGBA(vec4(rgb, ${alpha}));
-}
-`;
-  }
-  if (samplesPerPixel === 4) {
-    return `void main() {
-  emitRGBA(vec4(toNormalized(getDataValue(0)),
-                toNormalized(getDataValue(1)),
-                toNormalized(getDataValue(2)),
-                toNormalized(getDataValue(3))));
-}
-`;
-  }
-  return undefined;
 }
 
 export class GeoTiffMultiscaleVolumeChunkSource extends MultiscaleVolumeChunkSource {
