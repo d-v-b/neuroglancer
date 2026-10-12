@@ -116,3 +116,20 @@ def test_tool():
 
 def test_annotation():
     viewer_state.PointAnnotation(point=[1])
+
+
+def test_coordinate_space_degrees():
+    x = viewer_state.CoordinateSpace({"x": [1e-4, "deg"], "y": [1e-4, "deg"]})
+    assert x.units == ("deg", "deg")
+    np.testing.assert_array_equal(x.scales, [1e-4, 1e-4])
+    assert x.to_json() == {"x": [1e-4, "deg"], "y": [1e-4, "deg"]}
+
+
+def test_viewer_state_geospatial_properties():
+    state = viewer_state.ViewerState({"crs": "EPSG:4326", "showGraticule": False})
+    assert state.crs == "EPSG:4326"
+    assert state.show_graticule is False
+    state.crs = "EPSG:3857"
+    state.show_graticule = True
+    assert state.to_json()["crs"] == "EPSG:3857"
+    assert state.to_json()["showGraticule"] is True
