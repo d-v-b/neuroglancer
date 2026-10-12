@@ -55,6 +55,7 @@ import type {
   AutoDetectRegistry,
 } from "#src/kvstore/auto_detect.js";
 import { parseUrlSuffix } from "#src/kvstore/url.js";
+import { WatchableValue } from "#src/trackable_value.js";
 import { ProgressSpan } from "#src/util/progress_listener.js";
 
 const METERS_PER_DEGREE = (Math.PI / 180) * 6378137;
@@ -199,12 +200,14 @@ export function makeGeoJsonAnnotationSource(
   const source = new GeoJsonAnnotationSource(
     rank,
     [],
-    parsed.properties.map(({ identifier, description }) => ({
-      type: "float32" as const,
-      identifier,
-      description,
-      default: 0,
-    })),
+    new WatchableValue(
+      parsed.properties.map(({ identifier, description }) => ({
+        type: "float32" as const,
+        identifier,
+        description,
+        default: 0,
+      })),
+    ),
   );
   source.readonly = true;
   source.defaultShader = getGeoJsonDefaultShader(parsed);

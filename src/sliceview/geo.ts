@@ -36,11 +36,11 @@ import type {
   MultiscaleVolumetricDataRenderLayer,
   TransformedSource,
 } from "#src/sliceview/base.js";
+import type { ChunkLayout } from "#src/sliceview/chunk_layout.js";
 import {
   getNormalizedChunkLayout,
   updateFixedCurPositionInChunks,
 } from "#src/sliceview/chunk_position.js";
-import type { ChunkLayout } from "#src/sliceview/chunk_layout.js";
 import type { GeoLevelInput, GeoLevelPlan } from "#src/sliceview/geo_levels.js";
 import {
   computeGeoLevelPlan,

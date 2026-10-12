@@ -421,17 +421,19 @@ function getMultiscaleInfoForXarrayDataset(
       makeIdentityTransformedBoundingBox({ lowerBounds, upperBounds }),
     ],
   });
+  const transform = matrix.createIdentity(Float64Array, rank + 2);
   return {
     coordinateSpace,
     dataType: base.dataType,
     scales: [
       {
         url: first.url,
-        transform: matrix.createIdentity(Float64Array, rank + 2),
+        transform,
         metadata: first.metadata,
         variableUrls: variables.map((v) => v.url),
       },
     ],
+    baseTransform: transform,
   };
 }
 

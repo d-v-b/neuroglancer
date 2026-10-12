@@ -37,7 +37,6 @@ import {
   GEO_DIMENSION_NAMES,
   stripDisplayCrsDimensionsFromTransformSpecification,
 } from "#src/geo/display_crs.js";
-import { reprojectDataSource } from "#src/geo/reproject_data_source.js";
 import type { UserLayer } from "#src/layer/index.js";
 import { getWatchableRenderLayerTransform } from "#src/render_coordinate_transform.js";
 import type { RenderLayer } from "#src/renderlayer.js";
@@ -445,7 +444,16 @@ export class LayerDataSource extends RefCounted {
         state: spec.state,
         progressListener: this.progressListener,
       })
-      .then((source: DataSourceWithRedirectInfo) => {
+      .then(async (source: DataSourceWithRedirectInfo) => {
+        // The reprojection module depends on rendering code, so it is only loaded when needed.
+        const reproject =
+          source.geoReference === undefined
+            ? undefined
+            : (await import("#src/geo/reproject_data_source.js"))
+                .reprojectDataSource;
+        return { source, reproject };
+      })
+      .then(({ source, reproject }) => {
         if (refCounted.wasDisposed) return;
         this.messages.clearMessages();
         let effectiveSource: DataSource = source;
@@ -477,7 +485,7 @@ export class LayerDataSource extends RefCounted {
               });
             }),
           );
-          const reprojectedSource = reprojectDataSource(source, targetCrs);
+          const reprojectedSource = reproject!(source, targetCrs);
           effectiveSource = reprojectedSource;
           const { droppedSubsources } = reprojectedSource.reprojection;
           if (droppedSubsources.length > 0) {
