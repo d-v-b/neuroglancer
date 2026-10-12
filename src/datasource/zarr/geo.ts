@@ -45,6 +45,17 @@ export interface CoordinateAxis {
   step: number;
 }
 
+/**
+ * Summary of an array of an xarray dataset, from consolidated metadata.
+ */
+export interface XarrayArrayInfo {
+  shape: number[];
+  dims: string[];
+  attrs: any;
+  dtype: string;
+  chunks: number[];
+}
+
 export interface XarrayGeoreference {
   crs: string;
   lonDim: number;
@@ -534,4 +545,65 @@ void main() {
   emitRGB(colormapJet(normalized()));
 }
 `;
+}
+
+/**
+ * Selects the data variables of an xarray dataset to display.  If `requested` is not specified,
+ * selects all data variables with the same dimensions, shape, chunking, and data type as the first
+ * data variable.
+ */
+export function selectXarrayVariables(
+  arrays: Map<
+    string,
+    {
+      shape: number[];
+      dims: string[];
+      attrs: any;
+      dtype: string;
+      chunks: number[];
+    }
+  >,
+  requested: string[] | undefined,
+): string[] {
+  const coordinates = new Set<string>();
+  for (const [name, array] of arrays) {
+    if (array.dims.length === 1 && array.dims[0] === name)
+      coordinates.add(name);
+    const coordinatesAttr = array.attrs.coordinates;
+    if (typeof coordinatesAttr === "string") {
+      for (const c of coordinatesAttr.split(/\s+/)) coordinates.add(c);
+    }
+  }
+  const signature = (name: string) => {
+    const { shape, dims, dtype, chunks } = arrays.get(name)!;
+    return JSON.stringify([shape, dims, dtype, chunks]);
+  };
+  if (requested !== undefined) {
+    for (const name of requested) {
+      if (!arrays.has(name)) {
+        throw new Error(
+          `Variable ${JSON.stringify(name)} not found in dataset`,
+        );
+      }
+    }
+    const first = signature(requested[0]);
+    for (const name of requested) {
+      if (signature(name) !== first) {
+        throw new Error(
+          `Variables ${JSON.stringify(requested[0])} and ${JSON.stringify(name)} must have the same dimensions, shape, chunks, and data type`,
+        );
+      }
+    }
+    return requested;
+  }
+  const candidates = Array.from(arrays.keys())
+    .filter(
+      (name) => !coordinates.has(name) && arrays.get(name)!.shape.length >= 2,
+    )
+    .sort();
+  if (candidates.length === 0) {
+    throw new Error("Dataset contains no data variables");
+  }
+  const first = signature(candidates[0]);
+  return candidates.filter((name) => signature(name) === first);
 }
