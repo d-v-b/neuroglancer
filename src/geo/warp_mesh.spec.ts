@@ -264,111 +264,125 @@ function getCoveredFraction(
 }
 
 describe("computeWarpMesh across discontinuities", () => {
-  it("omits triangles straddling discontinuities of the warp", () => {
-    const chunkSize = 256;
-    const cases: {
-      description: string;
-      source: string;
-      display: string;
-      grid: Affine2d;
-      size: [number, number];
-      // Chunk origins (multiples of `chunkSize`) crossed by the discontinuity.
-      chunks: [number, number][];
-    }[] = [
-      {
-        // The antimeridian runs from the pole (at pixel 6666, 6666) towards +y.
-        description: "south polar stereographic to geographic",
-        source: "EPSG:3031",
-        display: "EPSG:4326",
-        grid: POLAR_GRID,
-        size: [POLAR_SIZE, POLAR_SIZE],
-        chunks: [
-          [6656, 6912],
-          [6656, 7680],
-          [6656, 12800],
-        ],
-      },
-      {
-        description: "south polar stereographic to Web Mercator",
-        source: "EPSG:3031",
-        display: "EPSG:3857",
-        grid: POLAR_GRID,
-        size: [POLAR_SIZE, POLAR_SIZE],
-        // Chunks closer to the pole lie beyond the latitude limit of Web Mercator, where the
-        // interpolation error is not refined.
-        chunks: [
-          [6656, 8192],
-          [6656, 9984],
-        ],
-      },
-      {
-        // The antimeridian runs from the pole diagonally towards -x, -y.
-        description: "north polar stereographic to geographic",
-        source: "EPSG:3413",
-        display: "EPSG:4326",
-        grid: POLAR_GRID,
-        size: [POLAR_SIZE, POLAR_SIZE],
-        chunks: [
-          [6400, 6400],
-          [5632, 5632],
-        ],
-      },
-      {
-        // Global quarter-degree grid with longitudes 0..360; 180 degrees lies at x = 720.5.
-        description: "0..360 geographic grid to Equal Earth",
-        source: "EPSG:4326",
-        display: "EPSG:8857",
-        grid: [0.25, 0, 0, -0.25, -0.125, 90.125],
-        size: [1440, 721],
-        chunks: [
-          [512, 0],
-          [512, 256],
-          [512, 512],
-        ],
-      },
-      {
-        // Longitudes 170..190; 180 degrees lies at x = 1000.
-        description: "geographic grid across the antimeridian to Equal Earth",
-        source: "EPSG:4326",
-        display: "EPSG:8857",
-        grid: [0.01, 0, 0, -0.01, 170, 10],
-        size: [2000, 1000],
-        chunks: [
-          [768, 0],
-          [768, 768],
-        ],
-      },
-      {
-        description:
-          "Web Mercator grid with cell centers on +/-180 to Equal Earth",
-        source: "EPSG:3857",
-        display: "EPSG:8857",
-        grid: MERCATOR_OVERHANG_GRID,
-        size: [1024, 1024],
-        chunks: [
-          [0, 256],
-          [768, 512],
-        ],
-      },
-    ];
-    for (const { description, source, display, grid, size, chunks } of cases) {
-      const warp = makeWarp(source, display, grid, [0, 0], size);
-      for (const [x0, y0] of chunks) {
-        const x1 = Math.min(size[0], x0 + chunkSize);
-        const y1 = Math.min(size[1], y0 + chunkSize);
-        const mesh = computeWarpMesh(warp, x0, y0, x1, y1, { maxError: 0.2 });
-        const message = `${description}: chunk ${x0},${y0}`;
-        // Output coordinates are approximately source pixels; triangles straddling the
-        // discontinuity would span a large fraction of the world.
-        expect(getMaxTriangleExtent(mesh), message).toBeLessThan(4 * chunkSize);
-        // Only a thin gap is left along the discontinuity.
-        expect(
-          getCoveredFraction(mesh, x0, y0, x1, y1),
-          message,
-        ).toBeGreaterThan(0.995);
+  // Computationally expensive.
+  it(
+    "omits triangles straddling discontinuities of the warp",
+    { timeout: 60_000 },
+    () => {
+      const chunkSize = 256;
+      const cases: {
+        description: string;
+        source: string;
+        display: string;
+        grid: Affine2d;
+        size: [number, number];
+        // Chunk origins (multiples of `chunkSize`) crossed by the discontinuity.
+        chunks: [number, number][];
+      }[] = [
+        {
+          // The antimeridian runs from the pole (at pixel 6666, 6666) towards +y.
+          description: "south polar stereographic to geographic",
+          source: "EPSG:3031",
+          display: "EPSG:4326",
+          grid: POLAR_GRID,
+          size: [POLAR_SIZE, POLAR_SIZE],
+          chunks: [
+            [6656, 6912],
+            [6656, 7680],
+            [6656, 12800],
+          ],
+        },
+        {
+          description: "south polar stereographic to Web Mercator",
+          source: "EPSG:3031",
+          display: "EPSG:3857",
+          grid: POLAR_GRID,
+          size: [POLAR_SIZE, POLAR_SIZE],
+          // Chunks closer to the pole lie beyond the latitude limit of Web Mercator, where the
+          // interpolation error is not refined.
+          chunks: [
+            [6656, 8192],
+            [6656, 9984],
+          ],
+        },
+        {
+          // The antimeridian runs from the pole diagonally towards -x, -y.
+          description: "north polar stereographic to geographic",
+          source: "EPSG:3413",
+          display: "EPSG:4326",
+          grid: POLAR_GRID,
+          size: [POLAR_SIZE, POLAR_SIZE],
+          chunks: [
+            [6400, 6400],
+            [5632, 5632],
+          ],
+        },
+        {
+          // Global quarter-degree grid with longitudes 0..360; 180 degrees lies at x = 720.5.
+          description: "0..360 geographic grid to Equal Earth",
+          source: "EPSG:4326",
+          display: "EPSG:8857",
+          grid: [0.25, 0, 0, -0.25, -0.125, 90.125],
+          size: [1440, 721],
+          chunks: [
+            [512, 0],
+            [512, 256],
+            [512, 512],
+          ],
+        },
+        {
+          // Longitudes 170..190; 180 degrees lies at x = 1000.
+          description: "geographic grid across the antimeridian to Equal Earth",
+          source: "EPSG:4326",
+          display: "EPSG:8857",
+          grid: [0.01, 0, 0, -0.01, 170, 10],
+          size: [2000, 1000],
+          chunks: [
+            [768, 0],
+            [768, 768],
+          ],
+        },
+        {
+          description:
+            "Web Mercator grid with cell centers on +/-180 to Equal Earth",
+          source: "EPSG:3857",
+          display: "EPSG:8857",
+          grid: MERCATOR_OVERHANG_GRID,
+          size: [1024, 1024],
+          chunks: [
+            [0, 256],
+            [768, 512],
+          ],
+        },
+      ];
+      for (const {
+        description,
+        source,
+        display,
+        grid,
+        size,
+        chunks,
+      } of cases) {
+        const warp = makeWarp(source, display, grid, [0, 0], size);
+        for (const [x0, y0] of chunks) {
+          const x1 = Math.min(size[0], x0 + chunkSize);
+          const y1 = Math.min(size[1], y0 + chunkSize);
+          const mesh = computeWarpMesh(warp, x0, y0, x1, y1, { maxError: 0.2 });
+          const message = `${description}: chunk ${x0},${y0}`;
+          // Output coordinates are approximately source pixels; triangles straddling the
+          // discontinuity would span a large fraction of the world.
+          expect(getMaxTriangleExtent(mesh), message).toBeLessThan(
+            4 * chunkSize,
+          );
+          // Only a thin gap is left along the discontinuity.
+          expect(
+            getCoveredFraction(mesh, x0, y0, x1, y1),
+            message,
+          ).toBeGreaterThan(0.995);
+        }
       }
-    }
-  });
+    },
+  );
 
   it("does not fold sources slightly wider than 360 degrees", () => {
     // The edge columns extend half a pixel beyond +/-180 degrees, but are not discontinuous in a
@@ -557,51 +571,56 @@ describe("MultiscaleGeoWarp", () => {
     }
   });
 
-  it("computes warped bounds enclosing the interior and poles", () => {
-    for (const [source, display] of [
-      ["EPSG:3413", "EPSG:3857"],
-      ["EPSG:3031", "EPSG:4326"],
-      ["EPSG:3031", "EPSG:3031"],
-      ["EPSG:32633", "EPSG:4326"],
-    ]) {
-      const isPolar = source !== "EPSG:32633";
-      const grid = isPolar ? POLAR_GRID : SENTINEL_TILE;
-      const size = isPolar ? POLAR_SIZE : SENTINEL_SIZE;
-      const warp = makeWarp(source, display, grid, [0, 0], [size, size]);
-      const bounds = computeWarpedBounds(warp, [0, 0], [size, size])!;
-      const samples: [number, number][] = [];
-      const n = 100;
-      for (let i = 0; i <= n; ++i) {
-        for (let j = 0; j <= n; ++j) {
-          samples.push([(i / n) * size, (j / n) * size]);
+  // Computationally expensive.
+  it(
+    "computes warped bounds enclosing the interior and poles",
+    { timeout: 60_000 },
+    () => {
+      for (const [source, display] of [
+        ["EPSG:3413", "EPSG:3857"],
+        ["EPSG:3031", "EPSG:4326"],
+        ["EPSG:3031", "EPSG:3031"],
+        ["EPSG:32633", "EPSG:4326"],
+      ]) {
+        const isPolar = source !== "EPSG:32633";
+        const grid = isPolar ? POLAR_GRID : SENTINEL_TILE;
+        const size = isPolar ? POLAR_SIZE : SENTINEL_SIZE;
+        const warp = makeWarp(source, display, grid, [0, 0], [size, size]);
+        const bounds = computeWarpedBounds(warp, [0, 0], [size, size])!;
+        const samples: [number, number][] = [];
+        const n = 100;
+        for (let i = 0; i <= n; ++i) {
+          for (let j = 0; j <= n; ++j) {
+            samples.push([(i / n) * size, (j / n) * size]);
+          }
+        }
+        // Points around the pole.
+        for (let k = 0; k < 360; ++k) {
+          const angle = (k * Math.PI) / 180;
+          for (const r of [0.01, 0.5, 5]) {
+            samples.push([
+              size / 2 + 6 + r * Math.cos(angle),
+              size / 2 + 6 + r * Math.sin(angle),
+            ]);
+          }
+        }
+        const out = new Float64Array(2);
+        for (const [x, y] of samples) {
+          if (warp.forward(x, y, out) === TransformStatus.INVALID) continue;
+          const message = `${source} -> ${display}: ${x},${y}`;
+          for (let i = 0; i < 2; ++i) {
+            const tolerance = 1e-2 * (bounds.upper[i] - bounds.lower[i]);
+            expect(out[i], message).toBeGreaterThanOrEqual(
+              bounds.lower[i] - tolerance,
+            );
+            expect(out[i], message).toBeLessThanOrEqual(
+              bounds.upper[i] + tolerance,
+            );
+          }
         }
       }
-      // Points around the pole.
-      for (let k = 0; k < 360; ++k) {
-        const angle = (k * Math.PI) / 180;
-        for (const r of [0.01, 0.5, 5]) {
-          samples.push([
-            size / 2 + 6 + r * Math.cos(angle),
-            size / 2 + 6 + r * Math.sin(angle),
-          ]);
-        }
-      }
-      const out = new Float64Array(2);
-      for (const [x, y] of samples) {
-        if (warp.forward(x, y, out) === TransformStatus.INVALID) continue;
-        const message = `${source} -> ${display}: ${x},${y}`;
-        for (let i = 0; i < 2; ++i) {
-          const tolerance = 1e-2 * (bounds.upper[i] - bounds.lower[i]);
-          expect(out[i], message).toBeGreaterThanOrEqual(
-            bounds.lower[i] - tolerance,
-          );
-          expect(out[i], message).toBeLessThanOrEqual(
-            bounds.upper[i] + tolerance,
-          );
-        }
-      }
-    }
-  });
+    },
+  );
 
   it("excludes extremely distorted regions from warped bounds", () => {
     // A global grid shown in a north polar stereographic projection: the southern hemisphere

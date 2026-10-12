@@ -56,8 +56,17 @@ an affine approximation (the linearization of the reprojection at the center of
 the source), and the exact reprojection is applied when determining the visible
 chunks and when rendering:
 
-- Visible chunks are determined by projecting the boundaries of blocks of chunks
-  into the viewport, using a hierarchical search.
+- The resolution level of a multiscale source is chosen separately for each
+  region of the view, since the resolution of a reprojected source relative to
+  the display can vary greatly across the view (e.g. near the pole of a polar
+  display CRS, a small region covers all longitudes of a source in geographic
+  coordinates). The view is divided into cells of 128 pixels; the source
+  footprint of each cell is determined by sampling, and the level whose
+  resolution best matches the display is chosen, subject to limits on the
+  number of tiles per cell and per view, beyond which coarser levels are used.
+  Coarser levels are also drawn where finer levels have not yet loaded. This
+  follows the approaches of GDAL (``gdalwarp -ovr AUTO``), Cesium, and
+  OpenLayers, which choose the source resolution per target region.
 
 - Each chunk is rendered as a triangle mesh computed in double precision on the
   CPU, adaptively refined until the error of linear interpolation within each

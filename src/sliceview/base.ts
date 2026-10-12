@@ -26,6 +26,7 @@ import {
   forEachGeoVisibleChunk,
   GeoRenderingMode,
   getGeoRenderingMode,
+  prepareGeoLevelGroup,
   updateGeoEffectiveVoxelSize,
 } from "#src/sliceview/geo.js";
 import type {
@@ -413,6 +414,19 @@ export class SliceViewBase<
       );
 
       const sources = allSources[preferredOrientationIndex];
+
+      // For warped multiscale sources, the resolution level is chosen per region of the view, so
+      // all levels are potentially visible (ordered from finest to coarsest).
+      if (
+        prepareGeoLevelGroup(sources, projectionParameters, (tsource) =>
+          getNormalizedChunkLayout(projectionParameters, tsource.chunkLayout),
+        )
+      ) {
+        for (const source of sources) {
+          visibleSources.push(source as Transformed);
+        }
+        continue;
+      }
 
       for (const source of renderLayer.filterVisibleSources(this, sources)) {
         visibleSources.push(source as Transformed);

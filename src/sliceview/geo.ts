@@ -27,7 +27,7 @@
  * multiples of the world period ("world copies").
  */
 
-import type { GeoWarpSpec } from "#src/geo/source_warp.js";
+import type { Affine2d, GeoWarpSpec } from "#src/geo/source_warp.js";
 import { ChunkGeoWarp, getMultiscaleGeoWarp } from "#src/geo/source_warp.js";
 import { TransformStatus } from "#src/geo/transform.js";
 import { computeWarpMesh } from "#src/geo/warp_mesh.js";
@@ -36,8 +36,16 @@ import type {
   MultiscaleVolumetricDataRenderLayer,
   TransformedSource,
 } from "#src/sliceview/base.js";
-import { updateFixedCurPositionInChunks } from "#src/sliceview/base.js";
+import {
+  getNormalizedChunkLayout,
+  updateFixedCurPositionInChunks,
+} from "#src/sliceview/base.js";
 import type { ChunkLayout } from "#src/sliceview/chunk_layout.js";
+import type { GeoLevelInput, GeoLevelPlan } from "#src/sliceview/geo_levels.js";
+import {
+  computeGeoLevelPlan,
+  geoLevelChunkFromKey,
+} from "#src/sliceview/geo_levels.js";
 import { vec3 } from "#src/util/geom.js";
 
 /**
@@ -155,6 +163,27 @@ export interface GeoTransformedSourceInfo {
    * Cached footprints of blocks of chunks (see `forEachGeoVisibleChunk`).
    */
   footprintCache?: GeoFootprintCache;
+  /**
+   * If set, the visible chunks are determined jointly for all resolution levels of the source (see
+   * `src/sliceview/geo_levels.ts`), and this is the index of this level (0 is the finest).
+   */
+  levelGroup?: GeoLevelGroup;
+  levelIndex?: number;
+}
+
+/**
+ * The resolution levels of a warped multiscale source, whose visible chunks are determined jointly.
+ */
+export interface GeoLevelGroup {
+  /**
+   * Levels from finest to coarsest.
+   */
+  sources: readonly TransformedSource<any>[];
+  planCache: {
+    key: Float64Array;
+    plan: GeoLevelPlan;
+    inputs: GeoLevelInput[];
+  }[];
 }
 
 /**
@@ -724,6 +753,29 @@ export function forEachGeoVisibleChunk<
   if (!(clipX0 < clipX1 && clipY0 < clipY1)) return;
   const numY = upperY - lowerY;
 
+  const { levelGroup, levelIndex } = geo;
+  if (levelGroup !== undefined) {
+    const planEntry = getGeoLevelPlan(levelGroup, projectionParameters);
+    if (planEntry !== undefined) {
+      const level = planEntry.inputs[levelIndex!];
+      const positionInChunks = tempPositionInChunks;
+      positionInChunks[sk] = chunkK;
+      const chunkDimX = chunkDisplayDimensionIndices[si];
+      const chunkDimY = chunkDisplayDimensionIndices[sj];
+      const chunkDimK = chunkDisplayDimensionIndices[sk];
+      for (const [key, distance] of planEntry.plan.chunks[levelIndex!]) {
+        const [x, y] = geoLevelChunkFromKey(level, key);
+        positionInChunks[si] = x;
+        positionInChunks[sj] = y;
+        curPositionInChunks[chunkDimX] = x;
+        curPositionInChunks[chunkDimY] = y;
+        curPositionInChunks[chunkDimK] = chunkK;
+        callback(positionInChunks, distance);
+      }
+      return;
+    }
+  }
+
   // Footprint cache.
   let nodes: Map<number, Float64Array>;
   {
@@ -827,6 +879,203 @@ export function forEachGeoVisibleChunk<
     curPositionInChunks[chunkDimK] = chunkK;
     callback(positionInChunks, distance);
   }
+}
+
+function composeAffine2d(a: Affine2d, b: Affine2d): Affine2d {
+  // Returns `a ∘ b`.
+  return [
+    a[0] * b[0] + a[2] * b[1],
+    a[1] * b[0] + a[3] * b[1],
+    a[0] * b[2] + a[2] * b[3],
+    a[1] * b[2] + a[3] * b[3],
+    a[0] * b[4] + a[2] * b[5] + a[4],
+    a[1] * b[4] + a[3] * b[5] + a[5],
+  ];
+}
+
+const geoLevelGroups = new WeakMap<
+  readonly TransformedSource<any>[],
+  GeoLevelGroup
+>();
+
+/**
+ * Number of cached level plans per group, e.g. for multiple views of the same sources.
+ */
+const MAX_CACHED_LEVEL_PLANS = 4;
+
+/**
+ * Prepares the resolution levels `sources` (from finest to coarsest) of a layer for joint
+ * selection of visible chunks, if they are warped sources rendered using the warped path in the
+ * current view.  Returns `true` in that case, in which case all levels should be considered
+ * visible (the visible chunks of each level are then determined by `forEachGeoVisibleChunk`).
+ */
+export function prepareGeoLevelGroup(
+  sources: readonly TransformedSource<any>[],
+  projectionParameters: ProjectionParameters,
+  getChunkLayout: (tsource: TransformedSource<any>) => ChunkLayout,
+): boolean {
+  const applicable =
+    sources.length > 0 &&
+    sources.every(
+      (tsource) =>
+        tsource.geo !== undefined &&
+        tsource.geo.warp.multiscaleWarp ===
+          sources[0].geo!.warp.multiscaleWarp &&
+        getGeoRenderingMode(
+          tsource,
+          projectionParameters,
+          getChunkLayout(tsource),
+        ) === GeoRenderingMode.WARPED,
+    );
+  if (!applicable) {
+    for (const tsource of sources) {
+      if (tsource.geo !== undefined) {
+        tsource.geo.levelGroup = undefined;
+        tsource.geo.levelIndex = undefined;
+      }
+    }
+    return false;
+  }
+  let group = geoLevelGroups.get(sources);
+  if (group === undefined) {
+    group = { sources, planCache: [] };
+    geoLevelGroups.set(sources, group);
+  }
+  sources.forEach((tsource, i) => {
+    tsource.geo!.levelGroup = group;
+    tsource.geo!.levelIndex = i;
+  });
+  return true;
+}
+
+const tempScreenSubspace = new Float64Array(2);
+
+/**
+ * Returns the (cached) plan of visible chunks of each level of `group` for the current view, or
+ * `undefined` if the levels cannot be displayed in the current view.
+ */
+function getGeoLevelPlan(
+  group: GeoLevelGroup,
+  projectionParameters: ProjectionParameters,
+) {
+  const { sources } = group;
+  const tsource0 = sources[0];
+  const renderScaleTarget =
+    (tsource0.renderLayer as any)?.renderScaleTarget?.value ?? 1;
+  const { width, height, viewProjectionMat } = projectionParameters;
+  const key = new Float64Array(19);
+  key.set(viewProjectionMat);
+  key[16] = width;
+  key[17] = height;
+  key[18] = renderScaleTarget;
+  const { planCache } = group;
+  for (let i = 0; i < planCache.length; ++i) {
+    const entry = planCache[i];
+    if (entry.key.every((v, j) => v === key[j])) {
+      // Move to the front.
+      planCache.splice(i, 1);
+      planCache.unshift(entry);
+      return entry;
+    }
+  }
+  const inputs: GeoLevelInput[] = [];
+  let view0: GeoViewParameters | undefined;
+  for (const tsource of sources) {
+    const geo = tsource.geo!;
+    const chunkLayout = getNormalizedChunkLayout(
+      projectionParameters,
+      tsource.chunkLayout,
+    );
+    const view = getGeoViewParameters(geo, projectionParameters, chunkLayout);
+    if (view === undefined) return undefined;
+    view0 ??= view;
+    const { si, sj } = view;
+    const { size } = chunkLayout;
+    inputs.push({
+      fromLevel0: composeAffine2d(
+        geo.warp.multiscaleToChunk,
+        tsource0.geo!.warp.chunkToMultiscale,
+      ),
+      chunkSizeX: size[si],
+      chunkSizeY: size[sj],
+      lowerChunkX: tsource.lowerChunkDisplayBound[si],
+      lowerChunkY: tsource.lowerChunkDisplayBound[sj],
+      upperChunkX: tsource.upperChunkDisplayBound[si],
+      upperChunkY: tsource.upperChunkDisplayBound[sj],
+    });
+  }
+  const { si, sj, sk, subspaceToClip: m, thirdCoordinate: z } = view0!;
+  const a = m[si * 4];
+  const b = m[sj * 4];
+  const c = m[sk * 4] * z + m[12];
+  const d = m[si * 4 + 1];
+  const e = m[sj * 4 + 1];
+  const f = m[sk * 4 + 1] * z + m[13];
+  const w = m[sk * 4 + 3] * z + m[15];
+  const det = a * e - b * d;
+  const warp = tsource0.geo!.warp;
+  const { worldPeriod, isIdentity } = warp;
+  const maxCopy = worldPeriod === undefined ? 0 : MAX_WORLD_COPIES;
+  const lowerX = tsource0.lowerClipDisplayBound[si];
+  const lowerY = tsource0.lowerClipDisplayBound[sj];
+  const upperX = tsource0.upperClipDisplayBound[si];
+  const upperY = tsource0.upperClipDisplayBound[sj];
+  const screenToSource = (px: number, py: number, out: Float64Array) => {
+    const cx = (2 * px) / width - 1;
+    const cy = 1 - (2 * py) / height;
+    const rx = cx * w - c;
+    const ry = cy * w - f;
+    const vx = (rx * e - b * ry) / det;
+    const vy = (a * ry - d * rx) / det;
+    if (!Number.isFinite(vx) || !Number.isFinite(vy)) return undefined;
+    for (let i = 0; i <= 2 * maxCopy; ++i) {
+      // k = 0, -1, 1, -2, 2, ...
+      const k = i & 1 ? -((i + 1) >> 1) : i >> 1;
+      let qx = vx;
+      let qy = vy;
+      if (k !== 0) {
+        qx -= k * worldPeriod![0];
+        qy -= k * worldPeriod![1];
+      }
+      let tx = qx;
+      let ty = qy;
+      if (!isIdentity) {
+        if (
+          warp.inverse(qx, qy, tempScreenSubspace) === TransformStatus.INVALID
+        ) {
+          continue;
+        }
+        tx = tempScreenSubspace[0];
+        ty = tempScreenSubspace[1];
+      }
+      if (!(tx >= lowerX && tx <= upperX && ty >= lowerY && ty <= upperY)) {
+        continue;
+      }
+      if (
+        !isIdentity &&
+        (warp.forward(tx, ty, tempScreenSubspace) === TransformStatus.INVALID ||
+          Math.abs(tempScreenSubspace[0] - qx) > ROUND_TRIP_TOLERANCE ||
+          Math.abs(tempScreenSubspace[1] - qy) > ROUND_TRIP_TOLERANCE)
+      ) {
+        continue;
+      }
+      out[0] = tx;
+      out[1] = ty;
+      return k;
+    }
+    return undefined;
+  };
+  const plan = computeGeoLevelPlan({
+    levels: inputs,
+    width,
+    height,
+    screenToSource,
+    renderScaleTarget,
+  });
+  const entry = { key, plan, inputs };
+  planCache.unshift(entry);
+  if (planCache.length > MAX_CACHED_LEVEL_PLANS) planCache.pop();
+  return entry;
 }
 
 /**

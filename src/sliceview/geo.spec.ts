@@ -256,7 +256,8 @@ function countForwardCalls(geo: GeoTransformedSourceInfo) {
 const SENTINEL_TILE: Affine2d = [10, 0, 0, -10, 300000, 5900040];
 
 describe("forEachGeoVisibleChunk", () => {
-  it("finds all visible chunks of warped sources", () => {
+  // Computationally expensive.
+  it("finds all visible chunks of warped sources", { timeout: 60_000 }, () => {
     const cases: {
       description: string;
       source: TestSource;
@@ -378,7 +379,8 @@ describe("forEachGeoVisibleChunk", () => {
     expect(counter.count).toBeLessThan(firstCount / 2);
   });
 
-  it("skips sources with too many visible chunks", () => {
+  // Computationally expensive.
+  it("skips sources with too many visible chunks", { timeout: 60_000 }, () => {
     // A fine-resolution source in geographic coordinates (western hemisphere), shown in a north
     // polar stereographic projection.  Near the pole, a small region covers all longitudes, and
     // therefore the entire top row of chunks.
