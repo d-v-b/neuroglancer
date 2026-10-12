@@ -37,17 +37,28 @@ Images
 The first full-resolution image is displayed, with reduced-resolution images
 (overviews, ``NewSubfileType`` bit 0) used as additional scales. Transparency
 masks are ignored. The samples of each pixel are represented as a channel
-dimension ``c^``.
+dimension ``c^``. Image file directories after the first that cannot be parsed
+(e.g. thumbnails or masks with unsupported properties) are skipped with a
+warning; errors in the first image are reported.
 
 Supported features:
 
-- Tiled and stripped images.
+- Tiled and stripped images. Tiles are loaded as individual chunks. Strips
+  are grouped into chunks of about 256 rows; images wider than 1024 pixels and
+  strips taller than 1024 rows are divided into chunks of 512 pixels, with the
+  decoded strips cached briefly such that each strip is downloaded and decoded
+  only once. Nearby tiles and strips needed at the same time are read with a
+  single byte range request. Note that an image stored as a single strip must
+  still be downloaded and decoded entirely.
 - Chunky (interleaved) and planar sample configurations.
 - Unsigned and signed integer samples of 8, 16, and 32 bits (and unsigned 64
   bits), and floating point samples of 32 and 64 bits (converted to 32 bits).
 - Compression: none, LZW, DEFLATE, PackBits, JPEG (including ``JPEGTables``),
   Zstandard, and WebP.
 - Predictors: horizontal differencing and floating point.
+
+Byte range requests to servers that do not support them (and return the entire
+file) still work, but are inefficient.
 
 For 8-bit RGB(A) images, a default shader displays the image in color; if the
 ``GDAL_NODATA`` value is ``0``, black pixels are transparent.
@@ -65,9 +76,13 @@ The CRS is determined from the GeoTIFF keys:
 - ``ProjectedCSTypeGeoKey`` or ``GeographicTypeGeoKey`` EPSG codes, for codes
   that are built in (WGS 84 and ETRS89/NAD83/GDA2020 UTM zones, Web Mercator,
   polar stereographic, and a number of common national and regional CRSs).
-- User-defined projected CRSs using the transverse Mercator, Mercator, Lambert
-  conformal conic, Lambert azimuthal equal area, Albers equal area, polar
-  stereographic, oblique stereographic, and equirectangular projections.
+- User-defined projected CRSs using the transverse Mercator, Mercator (1SP and
+  2SP), Lambert conformal conic, Lambert azimuthal equal area, Albers equal
+  area, polar stereographic, oblique stereographic, equirectangular, and
+  cylindrical equal area projections, with linear units of metres, feet, US
+  survey feet, kilometres, or a user-defined unit size
+  (``ProjLinearUnitSizeGeoKey``). Other linear units are rejected; specify the
+  CRS explicitly in that case.
 
 Auto detection
 --------------

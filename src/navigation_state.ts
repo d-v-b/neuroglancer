@@ -1080,9 +1080,20 @@ export class OrientationState extends RefCounted {
       self.changed.add(() => {
         if (!updatingSelf) {
           updatingPeer = true;
-          quat.multiply(peer.orientation, self.orientation, selfToPeer);
-          peer.changed.dispatch();
-          updatingPeer = false;
+          const newPeerOrientation = quat.multiply(
+            peer.orientation,
+            self.orientation,
+            selfToPeer,
+          );
+          const expected = quat.clone(newPeerOrientation);
+          try {
+            peer.changed.dispatch();
+          } finally {
+            updatingPeer = false;
+          }
+          // Handlers of the peer may have modified (e.g. constrained) its orientation while
+          // `updatingPeer` was set; propagate that back to self.
+          if (!quat.exactEquals(expected, peer.orientation)) updateSelf();
         }
       }),
     );

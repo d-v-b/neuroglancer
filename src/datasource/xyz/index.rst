@@ -29,7 +29,7 @@ placeholders, which are replaced by the zoom level, tile column, and tile row.
   level 0. Other CRSs require the ``resolution`` and ``origin`` options.
 
 ``tilesize``
-  Tile size in pixels (default 256).
+  Tile size in pixels (default 256, at most 2048).
 
 ``minzoom``, ``maxzoom``
   Range of zoom levels (default 0 and 18).

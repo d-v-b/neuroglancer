@@ -44,6 +44,8 @@ type PointFn = (coords: number[]) => number[];
  */
 const MAX_LATITUDE_OVERSHOOT = 95;
 
+const MAX_CYLINDRICAL_LATITUDE = 90 - 1e-9;
+
 function makeConverter(
   from: string,
   to: string,
@@ -72,11 +74,32 @@ export class GeographicTransform {
   private clampLatitude: number;
   private temp = [0, 0];
 
+  private isCylindricalProjected: boolean;
+
+  /**
+   * For projected cylindrical CRSs, the period in x corresponding to 360 degrees of longitude, and
+   * the x coordinate of the central meridian.  Longitude is then a linear function of x, which is
+   * used to unwrap longitudes continuously (also for CRSs specified as WKT, for which proj4 wraps
+   * longitudes into [-180, 180]).
+   */
+  private cylindricalPeriod: number | undefined;
+  private cylindricalCenterX = 0;
+
+  /**
+   * For projected cylindrical CRSs that can represent the poles, the y coordinate of the equator
+   * and the displacement in y from the equator to the north pole.  Proj4 folds latitudes of points
+   * beyond the poles (e.g. -89.9 instead of 90.1), and such points are instead clamped to the
+   * poles.
+   */
+  private cylindricalEquatorY = 0;
+  private cylindricalPoleOffsetY: number | undefined;
+
   /**
    * @param crs Target CRS.
    * @param referenceLongitude Longitudes computed by `toGeographic` are unwrapped to lie within 180
    *     degrees of this reference longitude.  If `undefined`, longitudes are returned as computed by
-   *     proj4.
+   *     proj4.  Ignored for geographic and cylindrical CRSs, whose longitudes are unwrapped
+   *     continuously.
    */
   constructor(
     public crs: Crs,
@@ -95,6 +118,40 @@ export class GeographicTransform {
       this.fromGeographic = c.forward;
     }
     this.clampLatitude = crs.maxLatitude;
+    const { worldPeriod } = crs;
+    this.isCylindricalProjected =
+      worldPeriod !== undefined && !crs.isGeographic;
+    if (this.isCylindricalProjected) {
+      const out = [0, 0];
+      if (
+        this.fromLonLat(crs.centralMeridian, 0, out) === TransformStatus.VALID
+      ) {
+        this.cylindricalPeriod = worldPeriod;
+        this.cylindricalCenterX = out[0];
+        this.cylindricalEquatorY = out[1];
+        if (
+          crs.maxLatitude === 90 &&
+          this.fromLonLat(crs.centralMeridian, 90, out) ===
+            TransformStatus.VALID
+        ) {
+          const offset = out[1] - this.cylindricalEquatorY;
+          if (
+            this.fromLonLat(crs.centralMeridian, 45, out) ===
+              TransformStatus.VALID &&
+            (out[1] - this.cylindricalEquatorY) / offset > 0
+          ) {
+            this.cylindricalPoleOffsetY = offset;
+          }
+        }
+      }
+    }
+  }
+
+  private getLinearLongitude(x: number) {
+    return (
+      this.crs.centralMeridian +
+      (360 * (x - this.cylindricalCenterX)) / this.cylindricalPeriod!
+    );
   }
 
   /**
@@ -107,7 +164,21 @@ export class GeographicTransform {
   ): TransformStatus {
     let lon: number;
     let lat: number;
-    const { toGeographic } = this;
+    const { toGeographic, cylindricalPoleOffsetY } = this;
+    const v =
+      cylindricalPoleOffsetY === undefined
+        ? 0
+        : (y - this.cylindricalEquatorY) / cylindricalPoleOffsetY;
+    if (Math.abs(v) > 1) {
+      // Beyond a pole of a cylindrical CRS.  The overshoot is approximated linearly in y (exact for
+      // equirectangular projections).
+      if (90 * Math.abs(v) > MAX_LATITUDE_OVERSHOOT) {
+        return TransformStatus.INVALID;
+      }
+      out[0] = this.getLinearLongitude(x);
+      out[1] = Math.sign(v) * 90;
+      return TransformStatus.VALID;
+    }
     if (toGeographic === undefined) {
       lon = x;
       lat = y;
@@ -134,9 +205,16 @@ export class GeographicTransform {
     // Coordinates slightly beyond the poles arise for cell edges of grids whose cell centers lie on
     // the poles.
     lat = Math.max(-90, Math.min(90, lat));
-    const { referenceLongitude } = this;
-    if (referenceLongitude !== undefined && !this.crs.isGeographic) {
-      lon = wrapLongitude(lon, referenceLongitude);
+    const { cylindricalPeriod } = this;
+    if (cylindricalPeriod !== undefined) {
+      // Longitude is determined by x, such that sources extending (slightly) beyond 360 degrees of
+      // longitude, e.g. grids whose cell centers lie on the antimeridian, are not folded.
+      lon += 360 * Math.round((this.getLinearLongitude(x) - lon) / 360);
+    } else {
+      const { referenceLongitude } = this;
+      if (referenceLongitude !== undefined && !this.crs.isGeographic) {
+        lon = wrapLongitude(lon, referenceLongitude);
+      }
     }
     out[0] = lon;
     out[1] = lat;
@@ -166,6 +244,14 @@ export class GeographicTransform {
       out[1] = lat;
       return status;
     }
+    if (this.isCylindricalProjected) {
+      // Proj4 folds latitudes of exactly +/-90 degrees in some cylindrical projections (e.g. eqc),
+      // due to rounding.
+      lat = Math.max(
+        -MAX_CYLINDRICAL_LATITUDE,
+        Math.min(MAX_CYLINDRICAL_LATITUDE, lat),
+      );
+    }
     const temp = this.temp;
     temp[0] = lon;
     temp[1] = lat;
@@ -175,10 +261,17 @@ export class GeographicTransform {
     } catch {
       return TransformStatus.INVALID;
     }
-    const x = r[0];
+    let x = r[0];
     const y = r[1];
     if (!Number.isFinite(x) || !Number.isFinite(y)) {
       return TransformStatus.INVALID;
+    }
+    const { cylindricalPeriod } = this;
+    if (cylindricalPeriod !== undefined) {
+      const linearX =
+        this.cylindricalCenterX +
+        (cylindricalPeriod * (lon - this.crs.centralMeridian)) / 360;
+      x += cylindricalPeriod * Math.round((linearX - x) / cylindricalPeriod);
     }
     out[0] = x;
     out[1] = y;
@@ -189,8 +282,9 @@ export class GeographicTransform {
 /**
  * Transformation from a source CRS to a target CRS.
  *
- * The forward transformation unwraps longitudes relative to `referenceLongitude`, such that a
- * source dataset spanning the antimeridian maps to a contiguous region in a cylindrical target CRS.
+ * The forward transformation unwraps longitudes relative to `referenceLongitude` (or, for
+ * geographic and cylindrical source CRSs, continuously), such that a source dataset spanning the
+ * antimeridian maps to a contiguous region in a cylindrical target CRS.
  */
 export class CrsTransform {
   readonly isIdentity: boolean;

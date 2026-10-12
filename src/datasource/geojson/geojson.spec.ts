@@ -18,6 +18,7 @@ import { describe, expect, it } from "vitest";
 import type { Point, PolyLine } from "#src/annotation/index.js";
 import { AnnotationType } from "#src/annotation/index.js";
 import {
+  detectFormat,
   elevationToGeoJsonVerticalCoordinate,
   GEOJSON_VERTICAL_ELEVATIONS,
   getGeoJsonDataSource,
@@ -28,6 +29,7 @@ import {
 import {
   inferVerticalCoordinate,
   isGeoJson,
+  normalizeLongitude,
   parseGeoJson,
   sanitizePropertyIdentifier,
 } from "#src/datasource/geojson/parse.js";
@@ -95,6 +97,8 @@ describe("parseGeoJson", () => {
     expect(inferVerticalCoordinate(BOUNDARIES)).toBe("elevation_m");
     expect(sanitizePropertyIdentifier("len-km")).toBe("len_km");
     expect(sanitizePropertyIdentifier("2x__y")).toBe("p_2x_y");
+    expect(sanitizePropertyIdentifier("_a-b_")).toBe("a_b");
+    expect(sanitizePropertyIdentifier("深さ")).toBe("p");
 
     const quakes = parseGeoJson(EARTHQUAKES, "depth_km");
     expect(quakes.hasVertical).toBe(true);
@@ -105,6 +109,7 @@ describe("parseGeoJson", () => {
       "depth_km",
     ]);
     expect(quakes.points[0]).toEqual({
+      id: "0",
       lon: -178,
       lat: -20,
       elevation: -600000,
@@ -265,5 +270,202 @@ describe("GeoJSON data source", () => {
     expect(shader).toContain("default=600");
     const boundaries = parseGeoJson(BOUNDARIES, "elevation_m");
     expect(getGeoJsonDefaultShader(boundaries)).not.toContain("prop_");
+  });
+});
+
+describe("GeoJSON longitudes", () => {
+  it("normalizes longitudes and splits lines at the antimeridian", () => {
+    expect(
+      [-180, -10, 180, 190, 350, 360, 540, -190].map(normalizeLongitude),
+    ).toEqual([-180, -10, 180, -170, -10, 0, -180, 170]);
+
+    const parsed = parseGeoJson(
+      {
+        type: "FeatureCollection",
+        features: [
+          // Longitudes in [0, 360).
+          {
+            type: "Feature",
+            geometry: { type: "Point", coordinates: [350, 10] },
+          },
+          // Eastward and westward crossings, with interpolated latitude and elevation.
+          {
+            type: "Feature",
+            geometry: {
+              type: "LineString",
+              coordinates: [
+                [178, 0, 0],
+                [-178, 4, 400],
+                [178, 8, 800],
+              ],
+            },
+          },
+          // A crossing at a vertex does not produce degenerate parts.
+          {
+            type: "Feature",
+            geometry: {
+              type: "LineString",
+              coordinates: [
+                [170, 0],
+                [180, 1],
+                [-170, 2],
+              ],
+            },
+          },
+        ],
+      },
+      "elevation_m",
+    );
+    expect(parsed.points[0].lon).toBe(-10);
+    expect(parsed.bounds).toEqual([-180, 0, 180, 10]);
+    expect(
+      parsed.lineStrings.map(({ id, positions }) => ({ id, positions })),
+    ).toEqual([
+      { id: "1.0", positions: [178, 0, 0, 180, 2, 200] },
+      { id: "1.1", positions: [-180, 2, 200, -178, 4, 400, -180, 6, 600] },
+      { id: "1.2", positions: [180, 6, 600, 178, 8, 800] },
+      { id: "2.0", positions: [170, 0, NaN, 180, 1, NaN] },
+      { id: "2.1", positions: [-180, 1, NaN, -170, 2, NaN] },
+    ]);
+
+    // Data source bounds include data given in [0, 360).
+    const dataSource = getGeoJsonDataSource(
+      parseGeoJson({ type: "Point", coordinates: [350, 10] }, "elevation_m"),
+      parseGeoJsonOptions(undefined),
+    );
+    const [box] = dataSource.modelTransform.inputSpace.boundingBoxes;
+    expect(box.box.lowerBounds[0]).toBe(-11);
+    expect(box.box.upperBounds[0]).toBe(-9);
+
+    // When reprojected, densification follows the short way across the antimeridian.
+    const warp = {
+      forward(x: number, y: number, out: Float64Array) {
+        out[0] = x;
+        out[1] = y;
+        return TransformStatus.VALID;
+      },
+      inverse() {
+        return TransformStatus.INVALID;
+      },
+    };
+    const lines = Array.from(
+      makeGeoJsonAnnotationSource(parsed, parseGeoJsonOptions(undefined), warp),
+    ) as PolyLine[];
+    expect(
+      lines
+        .filter((l) => l.type === AnnotationType.POLYLINE)
+        .map((l) => l.points.length),
+    ).toEqual([5, 9, 5, 21, 21]);
+  });
+});
+
+describe("GeoJSON annotation ids", () => {
+  it("derives annotation ids from features, independent of the warp", () => {
+    const parsed = parseGeoJson(
+      {
+        type: "FeatureCollection",
+        features: [
+          { type: "Feature", geometry: { type: "Point", coordinates: [5, 0] } },
+          { type: "Feature", geometry: { type: "Point", coordinates: [6, 0] } },
+          {
+            type: "Feature",
+            geometry: {
+              type: "MultiPoint",
+              coordinates: [
+                [7, 0],
+                [8, 0],
+              ],
+            },
+          },
+          {
+            type: "Feature",
+            geometry: {
+              type: "LineString",
+              coordinates: [
+                [0, 1],
+                [10, 1],
+              ],
+            },
+          },
+          {
+            type: "Feature",
+            geometry: {
+              type: "LineString",
+              coordinates: [
+                [0, 2],
+                [2, 2],
+              ],
+            },
+          },
+        ],
+      },
+      "none",
+    );
+    const options = parseGeoJsonOptions(undefined);
+    const makeWarp = (isValid: (x: number, y: number) => boolean) => ({
+      forward(x: number, y: number, out: Float64Array) {
+        out[0] = x;
+        out[1] = y;
+        return isValid(x, y) ? TransformStatus.VALID : TransformStatus.INVALID;
+      },
+      inverse() {
+        return TransformStatus.INVALID;
+      },
+    });
+    const getIds = (warp: ReturnType<typeof makeWarp> | undefined) =>
+      Array.from(makeGeoJsonAnnotationSource(parsed, options, warp)).map(
+        (a) => a.id,
+      );
+    const all = ["0", "1", "2.0", "2.1", "3", "4"];
+    expect(getIds(undefined)).toEqual(all);
+    expect(getIds(makeWarp(() => true))).toEqual(all);
+    // Invalidating the first point and the middle of the first line keeps the ids of the other
+    // features; the second run of the split line has a suffix.
+    expect(
+      getIds(makeWarp((x, y) => x !== 5 && !(y === 1 && x > 4 && x < 6))),
+    ).toEqual(["1", "2.0", "2.1", "3", "3.1", "4"]);
+  });
+});
+
+describe("parseGeoJson property identifiers", () => {
+  it("deduplicates property identifiers with numeric suffixes", () => {
+    const parsed = parseGeoJson(
+      {
+        type: "Feature",
+        geometry: { type: "Point", coordinates: [0, 0] },
+        properties: { "a b": 1, a_b: 2, "a-b": 3, 深さ: 4, 高さ: 5, a_b_2: 6 },
+      },
+      "none",
+    );
+    expect(parsed.properties.map((p) => p.identifier)).toEqual([
+      "a_b",
+      "a_b_2",
+      "a_b_3",
+      "p",
+      "p_2",
+      "a_b_2_2",
+    ]);
+  });
+});
+
+describe("detectFormat", () => {
+  it("detects GeoJSON feature collections and features", async () => {
+    const detect = (text: string) =>
+      detectFormat({
+        url: "",
+        prefix: new TextEncoder().encode(text),
+        suffix: undefined,
+        totalSize: undefined,
+      } as any);
+    const match = [{ suffix: "geojson:", description: "GeoJSON" }];
+    expect(await detect('{"type":"FeatureCollection","features":[]}')).toEqual(
+      match,
+    );
+    expect(await detect('﻿ {\n  "type" :\t"Feature",')).toEqual(match);
+    expect(await detect('{"metadata":{},"type": "FeatureCollection"')).toEqual(
+      match,
+    );
+    expect(await detect('{"type":"Topology"}')).toEqual([]);
+    expect(await detect('[{"type":"Feature"}]')).toEqual([]);
   });
 });

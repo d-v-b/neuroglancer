@@ -23,6 +23,7 @@ URL syntax
 - :file:`{KVSTORE-URL/}|zarr:#dimension_separator=/`
 - :file:`{KVSTORE-URL/}|zarr2:#dimension_separator=/`
 - :file:`{KVSTORE-URL/}|zarr:#variables=uo,vo` (xarray dataset)
+- :file:`{KVSTORE-URL/}|zarr:#georeference=false` (disable georeferencing)
 
 Specifying an :file:`{additional/path/}` after the zarr URL scheme is currently
 equivalent to including it in the :file:`{KVSTORE-URL/}`, but may be
@@ -79,29 +80,66 @@ xarray datasets and georeferencing
 Arrays written by xarray following the `CF conventions
 <https://cfconventions.org/>`__ are :ref:`georeferenced<geospatial>`
 automatically if their dimensions (given by the ``_ARRAY_DIMENSIONS`` attribute
-or the zarr v3 ``dimension_names``) include ``longitude``/``lon`` and
-``latitude``/``lat`` dimensions with regularly-spaced 1-d coordinate arrays of
-the same names in the parent group. Such arrays are displayed in WGS 84
-(``EPSG:4326``) coordinates over other georeferenced data, such as map tiles.
+or the zarr v3 ``dimension_names``) include longitude (``longitude``, ``lon``,
+``long``, ``nav_lon``) and latitude (``latitude``, ``lat``, ``nav_lat``)
+dimensions with regularly-spaced 1-d coordinate arrays of the same names in the
+parent group. Such arrays are displayed in WGS 84 (``EPSG:4326``) coordinates
+over other georeferenced data, such as map tiles.
+
+The coordinate arrays must hold degrees: if they have a CF ``units`` attribute,
+it must be ``degrees_east`` (or a variant such as ``degree_E``) for longitude,
+``degrees_north`` (or a variant) for latitude, or ``degrees``; if they have a
+``standard_name`` attribute, it must be ``longitude`` or ``latitude``; and their
+values must be within [-180, 360] for longitude and [-90, 90] for latitude.
+Coordinates packed with CF ``scale_factor``/``add_offset`` attributes are
+unpacked. A dimension with a single coordinate is georeferenced if the
+coordinate has a CF ``bounds`` array giving the cell size.
+
+Georeferencing may be disabled using the :file:`#georeference=false` URL
+parameter, in which case the array is displayed in index coordinates.
 
 Vertical dimensions (``depth``, ``elevation``, ``altitude``, ``height``,
-``lev``, ``level``, ``z``) with 1-d coordinate arrays are displayed with a scale
-corresponding to their mean level spacing, with 100x vertical exaggeration
-relative to horizontal distances. Vertical sections through such volumes show
-the sea level, the sky, depth ticks placed according to the actual level depths,
-and the solid Earth (regions without data, such as below the seafloor) in a
-crust color.
+``lev``, ``level``, ``plev``, ``z``) with 1-d coordinate arrays are displayed
+with a scale corresponding to their mean level spacing, with 100x vertical
+exaggeration relative to horizontal distances. The vertical coordinate is
+interpreted according to its CF attributes:
+
+- Lengths (``units`` of ``m``, ``km``, ``cm``, or ``mm``) are converted to
+  meters. Coordinates with ``positive: down``, or named ``depth*`` without a
+  ``positive`` attribute and with mostly non-negative values, are depths below
+  sea level. ``depth``, ``elevation``, ``altitude``, and ``height`` coordinates
+  without ``units`` are assumed to be in meters.
+- Pressures (``units`` of ``Pa``, ``hPa``, ``kPa``, ``mbar``, ``millibar``, or
+  ``bar``), such as ERA5 pressure levels, are converted to *approximate*
+  altitudes using the barometric formula of the International Standard
+  Atmosphere.
+- Dimensionless coordinates (such as sigma or hybrid levels, with ``units`` of
+  ``1``, a ``formula_terms`` attribute, or a ``standard_name`` of
+  ``atmosphere_*_coordinate`` or ``ocean_*_coordinate``), coordinates with other
+  or missing ``units``, and coordinates with an ``axis`` other than ``Z`` are
+  displayed as ordinary (non-vertical) dimensions.
+
+Vertical sections through such volumes show the sea level, the sky, depth ticks
+placed according to the actual level depths, and the solid Earth (regions
+without data, such as below the seafloor) in a crust color.
 
 A default shader maps the CF ``valid_min``/``valid_max`` (or ``valid_range``)
 attributes to a colormap and renders missing values (``_FillValue``,
-``missing_value``, or the zarr fill value) as transparent.
+``missing_value``, or the zarr fill value) as transparent. For variables packed
+with CF ``scale_factor``/``add_offset`` attributes (typically integer
+variables), the shader also computes the unpacked ``value``; as in the CF
+conventions, the valid range and fill value are in packed units.
 
 A Zarr group with consolidated metadata (``.zmetadata`` for zarr v2, or
 ``consolidated_metadata`` in ``zarr.json`` for zarr v3) written by xarray may be
 opened directly. Its data variables with identical dimensions, shape, chunking,
 and data type are combined along an additional channel dimension ``c^``.
-Specific variables may be selected using the :file:`#variables={a,b}` URL
-parameter. If the selected variables are the eastward and northward components
+By default, the primary data variable is chosen by preferring variables with
+longitude and latitude dimensions, then higher rank, then more elements;
+coordinates, auxiliary coordinates, and CF bounds arrays (referenced by a
+``bounds`` attribute, or with a trailing dimension such as ``bnds`` or ``nv``)
+are not data variables. Specific variables may be selected using the
+:file:`#variables={a,b}` URL parameter, which must list at least one variable. If the selected variables are the eastward and northward components
 of a vector field (indicated by CF standard names beginning with
 ``eastward_``/``northward_``), such as ocean currents or winds, the default
 shader shows the speed, optionally colored by direction.

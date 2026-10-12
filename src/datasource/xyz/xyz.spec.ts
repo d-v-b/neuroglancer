@@ -106,6 +106,12 @@ describe("parseXyzUrl", () => {
     ).toThrow(/Invalid XYZ zoom range/);
   });
 
+  it("rejects tile sizes that exceed the texture limit", () => {
+    expect(() =>
+      parseXyzUrl("https://example.com/{z}/{x}/{y}#tilesize=4096"),
+    ).toThrow(/Unsupported XYZ tile size: 4096 \(maximum is 2048\)/);
+  });
+
   it("requires an explicit tile matrix for other CRSs", () => {
     expect(() =>
       parseXyzUrl("https://example.com/{z}/{x}/{y}#crs=EPSG:3413"),

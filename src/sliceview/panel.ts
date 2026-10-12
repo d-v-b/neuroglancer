@@ -622,6 +622,7 @@ export class SliceViewPanel extends RenderedDataPanel {
   ) {
     const { mouseState } = this.viewer;
     mouseState.pickedRenderLayer = null;
+    mouseState.pickedSliceView = this.sliceView;
     const pickOffsetSequence = getPickOffsetSequence(pickRadius);
     const { viewportWidth, viewportHeight } = pickingData;
     const { value: voxelCoordinates } = this.navigationState.position;

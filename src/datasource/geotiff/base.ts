@@ -14,21 +14,20 @@
  * limitations under the License.
  */
 
-import type { TiffTileFormat } from "#src/datasource/geotiff/decode.js";
+import type {
+  TiffTileFormat,
+  TiffTileLayout,
+} from "#src/datasource/geotiff/decode.js";
 
 export class GeoTiffTileSourceParameters {
   url: string;
   format: TiffTileFormat;
-  samplesPerPixel: number;
-  planarConfiguration: number;
+  layout: TiffTileLayout;
   /**
-   * Number of tiles across the width of the image.
+   * Indicates that tiles (strips) may be shared by multiple chunks, such that decoded tiles should
+   * be cached.
    */
-  tilesAcross: number;
-  /**
-   * Number of tiles per sample plane.
-   */
-  tilesPerPlane: number;
+  cacheTiles: boolean;
   offsets: number[];
   byteCounts: number[];
 

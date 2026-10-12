@@ -34,6 +34,52 @@ import type { ProgressOptions } from "#src/util/progress_listener.js";
 const LONGITUDE_NAMES = ["longitude", "lon", "long", "nav_lon"];
 const LATITUDE_NAMES = ["latitude", "lat", "nav_lat"];
 
+// CF units of longitude and latitude, normalized by `normalizeDegreeUnits`.
+const LONGITUDE_UNITS = ["degreeseast", "degreeeast", "degreese", "degreee"];
+const LATITUDE_UNITS = ["degreesnorth", "degreenorth", "degreesn", "degreen"];
+const GENERIC_DEGREE_UNITS = ["degrees", "degree", "deg"];
+
+function normalizeDegreeUnits(units: string) {
+  return units.toLowerCase().replace(/[\s_]/g, "");
+}
+
+/**
+ * Determines whether a coordinate (named like a longitude or latitude) holds geographic
+ * longitudes or latitudes in degrees, based on its values and CF `units` and `standard_name`
+ * attributes.
+ *
+ * - If `units` is specified, it must be degrees (e.g. `degrees_east` for longitude, `degrees_north`
+ *   for latitude, or plain `degrees`).
+ * - If `standard_name` is specified, it must be `longitude` or `latitude`, respectively.
+ * - Longitudes must be within [-180, 360] and latitudes within [-90, 90].
+ */
+export function isGeographicCoordinate(
+  kind: "longitude" | "latitude",
+  values: ArrayLike<number>,
+  attrs: Record<string, unknown> = {},
+): boolean {
+  const { units, standard_name: standardName } = attrs;
+  if (standardName !== undefined && standardName !== kind) return false;
+  if (units !== undefined) {
+    if (typeof units !== "string") return false;
+    const normalized = normalizeDegreeUnits(units);
+    const allowed = kind === "longitude" ? LONGITUDE_UNITS : LATITUDE_UNITS;
+    if (
+      !allowed.includes(normalized) &&
+      !GENERIC_DEGREE_UNITS.includes(normalized)
+    ) {
+      return false;
+    }
+  }
+  const [min, max] = kind === "longitude" ? [-180, 360] : [-90, 90];
+  const tolerance = 1e-3;
+  for (let i = 0; i < values.length; ++i) {
+    const x = values[i];
+    if (!(x >= min - tolerance && x <= max + tolerance)) return false;
+  }
+  return true;
+}
+
 export interface CoordinateAxis {
   /**
    * Coordinate of the center of the first element.
@@ -81,6 +127,7 @@ const VERTICAL_NAMES = [
   "height",
   "lev",
   "level",
+  "plev",
   "z",
   "deptht",
   "depthu",
@@ -88,14 +135,115 @@ const VERTICAL_NAMES = [
 ];
 
 /**
- * Converts vertical coordinate values to elevations (positive up).  Coordinates named `depth*`
- * that are mostly non-negative are interpreted as depths (positive down).
+ * Vertical coordinate names that imply a length (in meters if no units are specified).
  */
-export function getElevations(name: string, values: number[]): number[] {
-  const isDepth =
-    name.startsWith("depth") &&
-    values.filter((x) => x >= 0).length >= values.length / 2;
-  return isDepth ? values.map((x) => -x) : values;
+const LENGTH_VERTICAL_NAMES = [
+  "depth",
+  "elevation",
+  "altitude",
+  "height",
+  "deptht",
+  "depthu",
+  "depthv",
+];
+
+const LENGTH_UNITS: Record<string, number> = {
+  m: 1,
+  meter: 1,
+  meters: 1,
+  metre: 1,
+  metres: 1,
+  km: 1000,
+  kilometer: 1000,
+  kilometers: 1000,
+  kilometre: 1000,
+  kilometres: 1000,
+  cm: 0.01,
+  centimeter: 0.01,
+  centimeters: 0.01,
+  centimetre: 0.01,
+  centimetres: 0.01,
+  mm: 0.001,
+};
+
+// Pressure units, in pascals.
+const PRESSURE_UNITS: Record<string, number> = {
+  pa: 1,
+  hpa: 100,
+  kpa: 1000,
+  mbar: 100,
+  millibar: 100,
+  millibars: 100,
+  bar: 1e5,
+  bars: 1e5,
+};
+
+/**
+ * Approximate altitude (in meters) corresponding to a pressure (in pascals), using the barometric
+ * formula of the International Standard Atmosphere.
+ */
+export function pressureToAltitude(pressure: number): number {
+  return 44330.8 * (1 - Math.pow(pressure / 101325, 0.190263));
+}
+
+/**
+ * Converts vertical coordinate values to elevations in meters (positive up), based on the CF
+ * `units`, `positive`, `standard_name`, and `axis` attributes of the coordinate.  Returns
+ * `undefined` if the coordinate is not a supported vertical coordinate, e.g. if it has unknown
+ * units or is a dimensionless (sigma or hybrid) coordinate.
+ *
+ * - Lengths (m, km, cm, mm) are converted to meters.  Coordinates with `positive: "down"`, or
+ *   named `depth*` without a `positive` attribute and mostly non-negative values, are depths.
+ *   Coordinates named `depth`, `elevation`, `altitude` or `height` without units are in meters.
+ * - Pressures (Pa, hPa, kPa, mbar, bar) are converted to approximate altitudes using the standard
+ *   atmosphere.
+ */
+export function getElevations(
+  name: string,
+  values: number[],
+  attrs: Record<string, unknown> = {},
+): number[] | undefined {
+  if (values.length === 0 || !values.every(Number.isFinite)) return undefined;
+  const { axis, positive, formula_terms: formulaTerms } = attrs;
+  const standardName = String(attrs.standard_name ?? "");
+  if (axis !== undefined && String(axis).toUpperCase() !== "Z")
+    return undefined;
+  // Dimensionless (sigma, hybrid, ...) parametric vertical coordinates.
+  if (
+    formulaTerms !== undefined ||
+    /^(atmosphere|ocean)_.*_coordinate$/.test(standardName)
+  ) {
+    return undefined;
+  }
+  const units =
+    typeof attrs.units === "string" ? attrs.units.trim().toLowerCase() : "";
+  const pressureFactor = PRESSURE_UNITS[units];
+  if (pressureFactor !== undefined) {
+    if (!values.every((x) => x >= 0)) return undefined;
+    return values.map((x) => pressureToAltitude(x * pressureFactor));
+  }
+  let lengthFactor = LENGTH_UNITS[units];
+  if (
+    lengthFactor === undefined &&
+    units === "" &&
+    LENGTH_VERTICAL_NAMES.includes(name)
+  ) {
+    lengthFactor = 1;
+  }
+  if (lengthFactor === undefined) return undefined;
+  let isDepth: boolean;
+  const positiveString = String(positive ?? "").toLowerCase();
+  if (positiveString === "down") {
+    isDepth = true;
+  } else if (positiveString === "up") {
+    isDepth = false;
+  } else {
+    isDepth =
+      (name.startsWith("depth") || standardName === "depth") &&
+      values.filter((x) => x >= 0).length >= values.length / 2;
+  }
+  const factor = isDepth ? -lengthFactor : lengthFactor;
+  return values.map((x) => x * factor);
 }
 
 /**
@@ -105,13 +253,23 @@ export const DEFAULT_VERTICAL_EXAGGERATION = 100;
 
 /**
  * Determines whether a coordinate array is regularly spaced, and returns its start and step.
+ *
+ * @param bounds CF cell bounds of the coordinate, used to determine the spacing of a single
+ *     coordinate.
  */
 export function getRegularAxis(
   values: ArrayLike<number>,
+  bounds?: ArrayLike<number>,
 ): CoordinateAxis | undefined {
   const n = values.length;
   if (n === 0) return undefined;
-  if (n === 1) return undefined;
+  if (n === 1) {
+    // The spacing of a single coordinate is given by its CF cell bounds, if available.
+    if (bounds === undefined || bounds.length !== 2) return undefined;
+    const step = bounds[1] - bounds[0];
+    if (!(Math.abs(step) > 0) || !Number.isFinite(step)) return undefined;
+    return { start: values[0], step };
+  }
   const start = values[0];
   const step = (values[n - 1] - start) / (n - 1);
   if (!(Math.abs(step) > 0) || !Number.isFinite(step)) return undefined;
@@ -129,6 +287,11 @@ export function getRegularAxis(
 interface CoordinateArrayInfo {
   shape: number;
   chunk: number;
+  /**
+   * Size of the second dimension of 2-d (e.g. CF bounds) arrays, or 1 for 1-d arrays.
+   */
+  rowSize: number;
+  attrs: Record<string, unknown>;
   dtype: string;
   littleEndian: boolean;
   compressors: { id: string; [key: string]: unknown }[];
@@ -151,6 +314,20 @@ function parseDtype(dtype: string): { dtype: string; littleEndian: boolean } {
   return { dtype: `${m[2]}${m[3]}`, littleEndian: m[1] !== ">" };
 }
 
+/**
+ * Coordinate arrays must be 1-d, or 2-d with a single chunk along the second dimension (as for CF
+ * bounds arrays).
+ */
+function isSupportedCoordinateShape(array: {
+  shape?: unknown;
+  chunks?: unknown;
+}): boolean {
+  const { shape, chunks } = array;
+  if (!Array.isArray(shape) || !Array.isArray(chunks)) return false;
+  if (shape.length === 1) return true;
+  return shape.length === 2 && chunks[1] === shape[1];
+}
+
 async function getCoordinateArrayInfo(
   sharedKvStoreContext: SharedKvStoreContext,
   url: string,
@@ -163,16 +340,31 @@ async function getCoordinateArrayInfo(
       `${url}.zarray`,
       options,
     );
-    if (zarray === undefined || zarray.shape?.length !== 1) return undefined;
+    if (zarray === undefined || !isSupportedCoordinateShape(zarray)) {
+      return undefined;
+    }
     if (zarray.filters != null && zarray.filters.length !== 0) return undefined;
+    if (zarray.order === "F" && zarray.shape.length !== 1) return undefined;
     const { dtype, littleEndian } = parseDtype(zarray.dtype);
+    let attrs: Record<string, unknown> = {};
+    try {
+      attrs =
+        (await readJson(sharedKvStoreContext, `${url}.zattrs`, options)) ?? {};
+    } catch {
+      // Ignore invalid attributes.
+    }
     return {
       shape: zarray.shape[0],
       chunk: zarray.chunks[0],
+      rowSize: zarray.shape[1] ?? 1,
+      attrs,
       dtype,
       littleEndian,
       compressors: zarray.compressor == null ? [] : [zarray.compressor],
-      chunkKey: (i) => `${i}`,
+      chunkKey: (i) =>
+        zarray.shape.length === 1
+          ? `${i}`
+          : `${i}${zarray.dimension_separator ?? "."}0`,
     };
   }
   const zarrJson = await readJson(
@@ -183,7 +375,10 @@ async function getCoordinateArrayInfo(
   if (
     zarrJson === undefined ||
     zarrJson.node_type !== "array" ||
-    zarrJson.shape?.length !== 1
+    !isSupportedCoordinateShape({
+      shape: zarrJson.shape,
+      chunks: zarrJson.chunk_grid?.configuration?.chunk_shape,
+    })
   ) {
     return undefined;
   }
@@ -219,13 +414,16 @@ async function getCoordinateArrayInfo(
   const encoding = zarrJson.chunk_key_encoding ?? { name: "default" };
   const separator =
     encoding.configuration?.separator ?? (encoding.name === "v2" ? "." : "/");
+  const suffix = zarrJson.shape.length === 1 ? "" : `${separator}0`;
   const chunkKey =
     encoding.name === "v2"
-      ? (i: number) => `${i}`
-      : (i: number) => `c${separator}${i}`;
+      ? (i: number) => `${i}${suffix}`
+      : (i: number) => `c${separator}${i}${suffix}`;
   return {
     shape: zarrJson.shape[0],
     chunk: chunkShape[0],
+    rowSize: zarrJson.shape[1] ?? 1,
+    attrs: zarrJson.attributes ?? {},
     dtype,
     littleEndian,
     compressors,
@@ -303,16 +501,56 @@ function decodeNumbers(
   return values;
 }
 
+export interface CoordinateArray {
+  /**
+   * Values (in C order for 2-d arrays), with CF `scale_factor` and `add_offset` applied.
+   */
+  values: number[];
+  attrs: Record<string, unknown>;
+}
+
 /**
- * Reads a 1-d zarr coordinate array.  Returns `undefined` if it does not exist or is not
- * supported.
+ * Applies the CF `scale_factor` and `add_offset` attributes to packed values.
+ */
+export function unpackCfValues(
+  values: number[],
+  attrs: Record<string, unknown>,
+): number[] {
+  const { scale, offset } = getCfPacking(attrs);
+  if (scale === 1 && offset === 0) return values;
+  return values.map((x) => x * scale + offset);
+}
+
+/**
+ * Returns the CF `scale_factor` and `add_offset` attributes (defaulting to 1 and 0).
+ */
+export function getCfPacking(attrs: Record<string, unknown>): {
+  scale: number;
+  offset: number;
+} {
+  const getNumber = (key: string, defaultValue: number) => {
+    let value = attrs[key];
+    if (Array.isArray(value) && value.length === 1) value = value[0];
+    return typeof value === "number" && Number.isFinite(value)
+      ? value
+      : defaultValue;
+  };
+  return {
+    scale: getNumber("scale_factor", 1),
+    offset: getNumber("add_offset", 0),
+  };
+}
+
+/**
+ * Reads a 1-d (or small 2-d) zarr coordinate array.  Returns `undefined` if it does not exist or
+ * is not supported.
  */
 export async function readCoordinateArray(
   sharedKvStoreContext: SharedKvStoreContext,
   url: string,
   zarrVersion: 2 | 3,
   options: Partial<ProgressOptions>,
-): Promise<number[] | undefined> {
+): Promise<CoordinateArray | undefined> {
   const info = await getCoordinateArrayInfo(
     sharedKvStoreContext,
     url,
@@ -332,11 +570,15 @@ export async function readCoordinateArray(
       for (let j = info.compressors.length; j--; ) {
         data = await decompress(data, info.compressors[j], options.signal);
       }
-      const count = Math.min(info.chunk, info.shape - i * info.chunk);
+      const count =
+        Math.min(info.chunk, info.shape - i * info.chunk) * info.rowSize;
       return decodeNumbers(data, info.dtype, info.littleEndian, count);
     }),
   );
-  return chunks.flat();
+  return {
+    values: unpackCfValues(chunks.flat(), info.attrs),
+    attrs: info.attrs,
+  };
 }
 
 /**
@@ -355,33 +597,46 @@ export async function getXarrayGeoreference(
   const lonDim = names.findIndex((x) => LONGITUDE_NAMES.includes(x));
   const latDim = names.findIndex((x) => LATITUDE_NAMES.includes(x));
   if (lonDim === -1 || latDim === -1) return undefined;
-  const readAxis = async (dim: number) => {
-    const name = metadata.dimensionNames[dim]!;
-    let url: string;
+  const resolveSibling = (name: string) => {
     try {
-      url = sharedKvStoreContext.kvStoreContext.resolveRelativePath(
+      return sharedKvStoreContext.kvStoreContext.resolveRelativePath(
         arrayUrl,
         `../${name}/`,
       );
     } catch {
       return undefined;
     }
+  };
+  const readSibling = async (name: string) => {
+    const url = resolveSibling(name);
+    if (url === undefined) return undefined;
     try {
-      const values = await readCoordinateArray(
+      return await readCoordinateArray(
         sharedKvStoreContext,
         url,
         metadata.zarrVersion,
         options,
       );
-      if (values === undefined || values.length !== metadata.shape[dim]) {
-        return undefined;
-      }
-      return getRegularAxis(values);
     } catch {
       return undefined;
     }
   };
-  const [lon, lat] = await Promise.all([readAxis(lonDim), readAxis(latDim)]);
+  const readAxis = async (dim: number, kind: "longitude" | "latitude") => {
+    const coordinate = await readSibling(metadata.dimensionNames[dim]!);
+    if (coordinate === undefined) return undefined;
+    const { values, attrs } = coordinate;
+    if (values.length !== metadata.shape[dim]) return undefined;
+    if (!isGeographicCoordinate(kind, values, attrs)) return undefined;
+    let bounds: number[] | undefined;
+    if (values.length === 1 && typeof attrs.bounds === "string") {
+      bounds = (await readSibling(attrs.bounds))?.values;
+    }
+    return getRegularAxis(values, bounds);
+  };
+  const [lon, lat] = await Promise.all([
+    readAxis(lonDim, "longitude"),
+    readAxis(latDim, "latitude"),
+  ]);
   if (lon === undefined || lat === undefined) return undefined;
   // Vertical dimensions are displayed with a scale corresponding to their mean level spacing (in
   // meters), exaggerated relative to horizontal distances.
@@ -390,27 +645,25 @@ export async function getXarrayGeoreference(
   await Promise.all(
     names.map(async (name, dim) => {
       if (!VERTICAL_NAMES.includes(name) || metadata.shape[dim] < 2) return;
-      const dimName = metadata.dimensionNames[dim]!;
-      try {
-        const url = sharedKvStoreContext.kvStoreContext.resolveRelativePath(
-          arrayUrl,
-          `../${dimName}/`,
-        );
-        const values = await readCoordinateArray(
-          sharedKvStoreContext,
-          url,
-          metadata.zarrVersion,
-          options,
-        );
-        if (values === undefined || values.length < 2) return;
-        const meanSpacing =
-          Math.abs(values[values.length - 1] - values[0]) / (values.length - 1);
-        if (!(meanSpacing > 0)) return;
-        verticalScales.set(dim, DEFAULT_VERTICAL_EXAGGERATION * meanSpacing);
-        verticalElevations.set(dim, getElevations(name, values));
-      } catch {
-        // Ignore vertical coordinates that cannot be read.
+      const coordinate = await readSibling(metadata.dimensionNames[dim]!);
+      if (
+        coordinate === undefined ||
+        coordinate.values.length !== metadata.shape[dim]
+      ) {
+        return;
       }
+      const elevations = getElevations(
+        name,
+        coordinate.values,
+        coordinate.attrs,
+      );
+      if (elevations === undefined) return;
+      const meanSpacing =
+        Math.abs(elevations[elevations.length - 1] - elevations[0]) /
+        (elevations.length - 1);
+      if (!(meanSpacing > 0)) return;
+      verticalScales.set(dim, DEFAULT_VERTICAL_EXAGGERATION * meanSpacing);
+      verticalElevations.set(dim, elevations);
     }),
   );
   return {
@@ -440,8 +693,7 @@ export function getMissingValue(metadata: ArrayMetadata): number | undefined {
 }
 
 /**
- * Returns a default shader for a georeferenced scalar array, mapping the valid range (from CF
- * attributes) to a colormap and rendering missing values as transparent.
+ * Returns a GLSL expression testing whether the float `expr` is a missing value.
  */
 function getMissingValueTest(metadata: ArrayMetadata, expr: string) {
   const missing = getMissingValue(metadata);
@@ -475,8 +727,13 @@ export function getXarrayDatasetDefaultShader(
   metadata: ArrayMetadata[],
 ): string | undefined {
   if (metadata.length === 1) return getXarrayDefaultShader(metadata[0]);
-  if (metadata.some((m) => m.dataType !== DataType.FLOAT32)) return undefined;
-  if (isVectorPair(metadata)) {
+  if (
+    isVectorPair(metadata) &&
+    metadata.every((m) => {
+      const { scale, offset } = getCfPacking(m.userAttributes);
+      return m.dataType === DataType.FLOAT32 && scale === 1 && offset === 0;
+    })
+  ) {
     const missingTest = getMissingValueTest(metadata[0], "u");
     return `#uicontrol float maxSpeed slider(min=0.05, max=3, default=1, step=0.05)
 #uicontrol bool colorByDirection checkbox(default=false)
@@ -505,11 +762,39 @@ void main() {
   return getXarrayDefaultShader(metadata[0], "0");
 }
 
+const SHADER_DATA_TYPES = [
+  DataType.FLOAT32,
+  DataType.UINT8,
+  DataType.INT8,
+  DataType.UINT16,
+  DataType.INT16,
+  DataType.UINT32,
+  DataType.INT32,
+];
+
+/**
+ * Formats a number as a GLSL float literal.
+ */
+function glslFloat(x: number) {
+  const s = String(x);
+  return /[.e]/.test(s) ? s : `${s}.0`;
+}
+
+/**
+ * Returns a default shader for a georeferenced scalar array, mapping the valid range (from CF
+ * attributes) to a colormap and rendering missing values as transparent.
+ *
+ * For packed integer (or float) variables with CF `scale_factor`/`add_offset` attributes, the
+ * shader computes the unpacked value; as in CF, the valid range and fill value are in packed
+ * units.
+ */
 export function getXarrayDefaultShader(
   metadata: ArrayMetadata,
   channel = "",
 ): string | undefined {
-  if (metadata.dataType !== DataType.FLOAT32) return undefined;
+  const { dataType } = metadata;
+  if (!SHADER_DATA_TYPES.includes(dataType)) return undefined;
+  const isFloat = dataType === DataType.FLOAT32;
   const attrs = metadata.userAttributes;
   let range: [number, number] | undefined;
   const validMin = attrs.valid_min;
@@ -524,49 +809,86 @@ export function getXarrayDefaultShader(
   ) {
     range = [validRange[0], validRange[1]];
   }
+  const { scale, offset } = getCfPacking(attrs);
+  const isPacked = scale !== 1 || offset !== 0;
+  // The range applies to the packed values; reverse it if unpacking reverses the order.
+  if (range !== undefined && scale < 0) range = [range[1], range[0]];
   const parameters: string[] = [];
   if (range !== undefined) parameters.push(`range=[${range[0]}, ${range[1]}]`);
   if (channel !== "") parameters.push(`channel=${channel}`);
   const parameterString =
     parameters.length === 0 ? "" : `(${parameters.join(", ")})`;
-  const missingTest = getMissingValueTest(metadata, "value");
-  return `#uicontrol invlerp normalized${parameterString}
-void main() {
-  float value = getDataValue(${channel});
-  if (${missingTest}) {
-    emitTransparent();
-    return;
+  const rawName = isPacked ? "raw" : "value";
+  const rawExpr = isFloat
+    ? `getDataValue(${channel})`
+    : `float(toRaw(getDataValue(${channel})))`;
+  let missingTest: string | undefined;
+  if (isFloat) {
+    missingTest = getMissingValueTest(metadata, rawName);
+  } else {
+    const missing = getMissingValue(metadata);
+    if (missing !== undefined && Number.isFinite(missing)) {
+      missingTest = `${rawName} == ${glslFloat(missing)}`;
+    }
   }
-  emitRGB(colormapJet(normalized()));
-}
-`;
+  const lines = [
+    `#uicontrol invlerp normalized${parameterString}`,
+    "void main() {",
+    `  float ${rawName} = ${rawExpr};`,
+  ];
+  if (missingTest !== undefined) {
+    lines.push(
+      `  if (${missingTest}) {`,
+      "    emitTransparent();",
+      "    return;",
+      "  }",
+    );
+  }
+  if (isPacked) {
+    lines.push(
+      "  // Unpacked value (the colormap range applies to the packed value).",
+      `  float value = raw * ${glslFloat(scale)} + ${glslFloat(offset)};`,
+    );
+  }
+  lines.push("  emitRGB(colormapJet(normalized()));", "}", "");
+  return lines.join("\n");
 }
 
+// Names of the trailing dimension of CF bounds arrays.
+const BOUNDS_DIMENSION_NAMES = [
+  "bnds",
+  "bnd",
+  "nbnd",
+  "nbnds",
+  "bounds",
+  "nv",
+  "nv4",
+  "nvertex",
+  "d2",
+];
+
 /**
- * Selects the data variables of an xarray dataset to display.  If `requested` is not specified,
- * selects all data variables with the same dimensions, shape, chunking, and data type as the first
- * data variable.
+ * Selects the data variables of an xarray dataset to display.
+ *
+ * If `requested` is not specified, selects the data variable that is most likely the primary one
+ * (preferring variables with both longitude and latitude dimensions, then higher rank, then more
+ * elements, then name), along with all other data variables with the same dimensions, shape,
+ * chunking, and data type.  Coordinates (including auxiliary coordinates and CF bounds arrays) are
+ * not data variables.
  */
 export function selectXarrayVariables(
-  arrays: Map<
-    string,
-    {
-      shape: number[];
-      dims: string[];
-      attrs: any;
-      dtype: string;
-      chunks: number[];
-    }
-  >,
+  arrays: Map<string, XarrayArrayInfo>,
   requested: string[] | undefined,
 ): string[] {
   const coordinates = new Set<string>();
   for (const [name, array] of arrays) {
     if (array.dims.length === 1 && array.dims[0] === name)
       coordinates.add(name);
-    const coordinatesAttr = array.attrs.coordinates;
-    if (typeof coordinatesAttr === "string") {
-      for (const c of coordinatesAttr.split(/\s+/)) coordinates.add(c);
+    for (const key of ["coordinates", "bounds", "climatology"]) {
+      const value = array.attrs[key];
+      if (typeof value === "string") {
+        for (const c of value.split(/\s+/)) coordinates.add(c);
+      }
     }
   }
   const signature = (name: string) => {
@@ -574,6 +896,9 @@ export function selectXarrayVariables(
     return JSON.stringify([shape, dims, dtype, chunks]);
   };
   if (requested !== undefined) {
+    if (requested.length === 0) {
+      throw new Error("variables option must list at least one variable");
+    }
     for (const name of requested) {
       if (!arrays.has(name)) {
         throw new Error(
@@ -592,13 +917,43 @@ export function selectXarrayVariables(
     return requested;
   }
   const candidates = Array.from(arrays.keys())
-    .filter(
-      (name) => !coordinates.has(name) && arrays.get(name)!.shape.length >= 2,
-    )
+    .filter((name) => {
+      const { shape, dims } = arrays.get(name)!;
+      return (
+        !coordinates.has(name) &&
+        shape.length >= 2 &&
+        !dims.some((d) => BOUNDS_DIMENSION_NAMES.includes(d.toLowerCase()))
+      );
+    })
     .sort();
   if (candidates.length === 0) {
     throw new Error("Dataset contains no data variables");
   }
-  const first = signature(candidates[0]);
+  const score = (name: string) => {
+    const { shape, dims } = arrays.get(name)!;
+    const lowerDims = dims.map((d) => d.toLowerCase());
+    const isGeographic =
+      lowerDims.some((d) => LONGITUDE_NAMES.includes(d)) &&
+      lowerDims.some((d) => LATITUDE_NAMES.includes(d));
+    return [
+      isGeographic ? 1 : 0,
+      shape.length,
+      shape.reduce((a, b) => a * b, 1),
+    ];
+  };
+  let best = candidates[0];
+  let bestScore = score(best);
+  for (const name of candidates) {
+    const s = score(name);
+    for (let i = 0; i < s.length; ++i) {
+      if (s[i] === bestScore[i]) continue;
+      if (s[i] > bestScore[i]) {
+        best = name;
+        bestScore = s;
+      }
+      break;
+    }
+  }
+  const first = signature(best);
   return candidates.filter((name) => signature(name) === first);
 }

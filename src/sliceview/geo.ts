@@ -56,9 +56,28 @@ const MAX_WORLD_COPIES = 3;
 const FOOTPRINT_SAMPLES_PER_EDGE = 8;
 
 /**
- * Maximum number of cached chunk meshes per source.
+ * Minimum number of chunk meshes retained in the cache of each source.  The cache additionally
+ * always retains the meshes used in the current and previous frame, and up to
+ * `MESH_CACHE_FRAME_MULTIPLIER` times the number of meshes used in the previous frame, such that
+ * the meshes of the visible chunks are not recomputed every frame when many chunks are visible.
  */
-const MAX_CACHED_MESHES = 2048;
+const MIN_CACHED_MESHES = 2048;
+
+const MESH_CACHE_FRAME_MULTIPLIER = 2;
+
+/**
+ * Maximum total number of vertices of the cached chunk meshes of a source.  The memory used by
+ * chunk meshes (CPU arrays plus GPU buffers, roughly 100 bytes per vertex including indices) is not
+ * tracked by the chunk manager; this bounds it to roughly 100 MB per source.  Meshes used in the
+ * current or previous frame are retained even if this limit is exceeded.
+ */
+const MAX_CACHED_MESH_VERTICES = 1 << 20;
+
+/**
+ * Maximum number of cached block footprints per source (see `forEachGeoVisibleChunk`).  Each entry
+ * uses roughly 150 bytes.
+ */
+const MAX_CACHED_FOOTPRINTS = 1 << 17;
 
 /**
  * Cached mesh for a single chunk.
@@ -84,6 +103,27 @@ export interface GeoChunkMesh {
    * Frontend only: GPU resources for rendering the mesh, disposed with the mesh.
    */
   gpuMesh?: { dispose(): void };
+  /**
+   * Value of `GeoMeshCache.generation` when the mesh was last used.
+   */
+  generation?: number;
+}
+
+/**
+ * Cache of chunk meshes of a source, in least-recently-used order.
+ */
+export class GeoMeshCache {
+  meshes = new Map<string, GeoChunkMesh>();
+  /**
+   * Incremented at the start of each frame by `beginGeoMeshFrame`.
+   */
+  generation = 0;
+  /**
+   * Number of distinct meshes used in the previous and current frame.
+   */
+  previousFrameCount = 0;
+  currentFrameCount = 0;
+  totalVertices = 0;
 }
 
 /**
@@ -110,7 +150,22 @@ export interface GeoTransformedSourceInfo {
   /**
    * Frontend only: cached chunk meshes.
    */
-  meshCache?: Map<string, GeoChunkMesh>;
+  meshCache?: GeoMeshCache;
+  /**
+   * Cached footprints of blocks of chunks (see `forEachGeoVisibleChunk`).
+   */
+  footprintCache?: GeoFootprintCache;
+}
+
+/**
+ * Footprints, in approximate chunk coordinates, of the blocks of chunks visited by
+ * `forEachGeoVisibleChunk`.  The footprints do not depend on the view, so they are computed once
+ * (which requires many evaluations of the warp) and reused across frames.  Valid as long as `key`,
+ * which encodes the clip and chunk bounds, is unchanged.
+ */
+interface GeoFootprintCache {
+  key: string;
+  nodes: Map<number, Float64Array>;
 }
 
 function findChunkDimensions(
@@ -406,33 +461,71 @@ const tempWarped = new Float64Array(2);
 const tempSubspace = new Float64Array(3);
 
 /**
- * Computes the clip-space bounds of the image of the rectangle `[x0, x1] x [y0, y1]` (true chunk
+ * Footprints are represented by their support function `h(d) = max_p d . p` sampled at
+ * `FOOTPRINT_NUM_DIRECTIONS` unit directions `d` spaced 45 degrees apart (i.e. as an 8-DOP), which
+ * allows the clip-space bounds to be computed conservatively, and exactly if the view is aligned
+ * with the warped axes, for any affine view transform.
+ *
+ * Layout of a footprint record: `[h_0, ..., h_7, numValid, invalid]`.
+ */
+const FOOTPRINT_NUM_DIRECTIONS = 8;
+const FOOTPRINT_RECORD_SIZE = FOOTPRINT_NUM_DIRECTIONS + 2;
+const FOOTPRINT_DIRECTION_X = Float64Array.of(
+  1,
+  Math.SQRT1_2,
+  0,
+  -Math.SQRT1_2,
+  -1,
+  -Math.SQRT1_2,
+  0,
+  Math.SQRT1_2,
+);
+const FOOTPRINT_DIRECTION_Y = Float64Array.of(
+  0,
+  Math.SQRT1_2,
+  1,
+  Math.SQRT1_2,
+  0,
+  -Math.SQRT1_2,
+  -1,
+  -Math.SQRT1_2,
+);
+
+/**
+ * Computes the footprint record of the image of the rectangle `[x0, x1] x [y0, y1]` (true chunk
  * coordinates of the warped dimensions) by sampling its boundary.  If some boundary points are
  * invalid, interior points are sampled as well.
  */
-function computeFootprintClipBounds(
-  bounds: ClipBounds,
+function computeFootprint(
   geo: GeoTransformedSourceInfo,
-  view: GeoViewParameters,
   x0: number,
   y0: number,
   x1: number,
   y1: number,
-) {
-  bounds.reset();
+): Float64Array {
+  const record = new Float64Array(FOOTPRINT_RECORD_SIZE);
+  record.fill(-Infinity, 0, FOOTPRINT_NUM_DIRECTIONS);
   const { warp } = geo;
-  const { si, sj, sk, subspaceToClip } = view;
-  tempSubspace[sk] = view.thirdCoordinate;
-  const n = FOOTPRINT_SAMPLES_PER_EDGE;
+  let numValid = 0;
+  let invalid = false;
   const addPoint = (x: number, y: number) => {
     if (warp.forward(x, y, tempWarped) === TransformStatus.INVALID) {
-      bounds.invalid = true;
+      invalid = true;
       return;
     }
-    tempSubspace[si] = tempWarped[0];
-    tempSubspace[sj] = tempWarped[1];
-    bounds.addSubspacePoint(subspaceToClip, tempSubspace);
+    const wx = tempWarped[0];
+    const wy = tempWarped[1];
+    if (!Number.isFinite(wx) || !Number.isFinite(wy)) {
+      invalid = true;
+      return;
+    }
+    ++numValid;
+    for (let k = 0; k < FOOTPRINT_NUM_DIRECTIONS; ++k) {
+      const h = FOOTPRINT_DIRECTION_X[k] * wx + FOOTPRINT_DIRECTION_Y[k] * wy;
+      if (h > record[k]) record[k] = h;
+    }
   };
+  const n = FOOTPRINT_SAMPLES_PER_EDGE;
   for (let i = 0; i < n; ++i) {
     const t = i / n;
     addPoint(x0 + t * (x1 - x0), y0);
@@ -440,11 +533,82 @@ function computeFootprintClipBounds(
     addPoint(x1 - t * (x1 - x0), y1);
     addPoint(x0, y1 - t * (y1 - y0));
   }
-  if (bounds.invalid) {
+  if (invalid) {
     for (let i = 1; i < n; ++i) {
       for (let j = 1; j < n; ++j) {
         addPoint(x0 + (i / n) * (x1 - x0), y0 + (j / n) * (y1 - y0));
       }
+    }
+  }
+  record[FOOTPRINT_NUM_DIRECTIONS] = numValid;
+  record[FOOTPRINT_NUM_DIRECTIONS + 1] = invalid ? 1 : 0;
+  return record;
+}
+
+/**
+ * Returns an upper bound on `max_p (a, b) . p` over the footprint represented by `record`.
+ */
+function evaluateFootprintSupport(record: Float64Array, a: number, b: number) {
+  if (a === 0 && b === 0) return 0;
+  let angle = Math.atan2(b, a);
+  if (angle < 0) angle += 2 * Math.PI;
+  const k = Math.floor(angle / (Math.PI / 4)) % FOOTPRINT_NUM_DIRECTIONS;
+  const k1 = (k + 1) % FOOTPRINT_NUM_DIRECTIONS;
+  // Decompose `(a, b) = alpha * d_k + beta * d_k1` with `alpha, beta >= 0`.
+  const xk = FOOTPRINT_DIRECTION_X[k];
+  const yk = FOOTPRINT_DIRECTION_Y[k];
+  const xk1 = FOOTPRINT_DIRECTION_X[k1];
+  const yk1 = FOOTPRINT_DIRECTION_Y[k1];
+  const det = xk * yk1 - yk * xk1;
+  const alpha = (a * yk1 - b * xk1) / det;
+  const beta = (xk * b - yk * a) / det;
+  let result = 0;
+  if (alpha !== 0) result += alpha * record[k];
+  if (beta !== 0) result += beta * record[k1];
+  return result;
+}
+
+const tempBounds = new ClipBounds();
+const tempPositionInChunks = vec3.create();
+
+/**
+ * Sets `bounds` to the clip-space bounds of the footprint represented by `record`.  Assumes that
+ * the view transform is affine (as is the case for cross-section views).
+ */
+function setClipBoundsFromFootprint(
+  bounds: ClipBounds,
+  record: Float64Array,
+  view: GeoViewParameters,
+) {
+  bounds.reset();
+  const numValid = record[FOOTPRINT_NUM_DIRECTIONS];
+  bounds.numValid = numValid;
+  bounds.invalid = record[FOOTPRINT_NUM_DIRECTIONS + 1] !== 0;
+  if (numValid === 0) return;
+  const { si, sj, sk, subspaceToClip: m, thirdCoordinate: z } = view;
+  const w = m[sk * 4 + 3] * z + m[15];
+  for (let row = 0; row < 2; ++row) {
+    const a = m[si * 4 + row];
+    const b = m[sj * 4 + row];
+    const c = m[sk * 4 + row] * z + m[12 + row];
+    let upper = (evaluateFootprintSupport(record, a, b) + c) / w;
+    let lower = (c - evaluateFootprintSupport(record, -a, -b)) / w;
+    if (!Number.isFinite(lower) || !Number.isFinite(upper)) {
+      bounds.numValid = 0;
+      bounds.invalid = true;
+      return;
+    }
+    if (lower > upper) {
+      const t = lower;
+      lower = upper;
+      upper = t;
+    }
+    if (row === 0) {
+      bounds.xMin = lower;
+      bounds.xMax = upper;
+    } else {
+      bounds.yMin = lower;
+      bounds.yMax = upper;
     }
   }
 }
@@ -474,12 +638,29 @@ function getWorldCopyOffsets(
   return result;
 }
 
-const tempBounds = new ClipBounds();
-const tempPositionInChunks = vec3.create();
+/**
+ * Maximum number of visible chunks of a single warped source.  Strongly anisotropic warps can make
+ * an enormous number of chunks of a single resolution visible at once, e.g. near a pole of a
+ * polar display CRS, where a small region covers all longitudes of a source in geographic
+ * coordinates.  Beyond this limit, the source is skipped, such that coarser resolutions are shown
+ * instead.
+ */
+export const MAX_GEO_VISIBLE_CHUNKS = 4096;
+
+/**
+ * Maximum depth of the block subdivision in `forEachGeoVisibleChunk`, used to form cache keys.
+ */
+const MAX_FOOTPRINT_DEPTH = 256;
 
 /**
  * Invokes `callback` for each visible chunk of a warped source.  Each chunk is reported once, even
- * if multiple world copies are visible.
+ * if multiple world copies are visible, along with the distance in pixels between the center of
+ * the view and the center of the (nearest visible copy of the) chunk footprint.
+ *
+ * The footprints of the blocks of chunks visited are cached in `tsource.geo` and reused across
+ * calls, such that the warp is only evaluated for blocks not visited previously.
+ *
+ * If more than `MAX_GEO_VISIBLE_CHUNKS` chunks are visible, no chunks are reported.
  */
 export function forEachGeoVisibleChunk<
   RLayer extends MultiscaleVolumetricDataRenderLayer,
@@ -488,7 +669,7 @@ export function forEachGeoVisibleChunk<
   localPosition: Float32Array,
   tsource: TransformedSource<RLayer>,
   chunkLayout: ChunkLayout,
-  callback: (positionInChunks: vec3) => void,
+  callback: (positionInChunks: vec3, screenDistance: number) => void,
 ) {
   const geo = tsource.geo!;
   if (
@@ -541,73 +722,110 @@ export function forEachGeoVisibleChunk<
   const upperX = upperChunkDisplayBound[si];
   const upperY = upperChunkDisplayBound[sj];
   if (!(clipX0 < clipX1 && clipY0 < clipY1)) return;
-
-  const bounds = tempBounds;
-  computeFootprintClipBounds(bounds, geo, view, clipX0, clipY0, clipX1, clipY1);
-  const copies = getWorldCopyOffsets(bounds, view, 0.1);
-  if (copies.length === 0) return;
-
-  const visited = new Set<number>();
   const numY = upperY - lowerY;
-  const positionInChunks = tempPositionInChunks;
-  positionInChunks[sk] = chunkK;
-  const chunkDimX = chunkDisplayDimensionIndices[si];
-  const chunkDimY = chunkDisplayDimensionIndices[sj];
-  const chunkDimK = chunkDisplayDimensionIndices[sk];
-  curPositionInChunks[chunkDimK] = chunkK;
 
-  const emit = (x: number, y: number) => {
-    const key = (x - lowerX) * numY + (y - lowerY);
-    if (visited.has(key)) return;
-    visited.add(key);
-    positionInChunks[si] = x;
-    positionInChunks[sj] = y;
-    curPositionInChunks[chunkDimX] = x;
-    curPositionInChunks[chunkDimY] = y;
-    curPositionInChunks[chunkDimK] = chunkK;
-    callback(positionInChunks);
-  };
-
-  for (let copyIndex = 0; copyIndex < copies.length; copyIndex += 3) {
-    const offsetX = copies[copyIndex + 1];
-    const offsetY = copies[copyIndex + 2];
-    const recurse = (x0: number, y0: number, x1: number, y1: number) => {
-      computeFootprintClipBounds(
-        bounds,
+  // Footprint cache.
+  let nodes: Map<number, Float64Array>;
+  {
+    const key = `${clipX0},${clipY0},${clipX1},${clipY1},${sizeX},${sizeY},${lowerX},${lowerY},${upperX},${upperY}`;
+    let cache = geo.footprintCache;
+    if (cache === undefined || cache.key !== key) {
+      cache = geo.footprintCache = { key, nodes: new Map() };
+    } else if (cache.nodes.size > MAX_CACHED_FOOTPRINTS) {
+      cache.nodes.clear();
+    }
+    nodes = cache.nodes;
+  }
+  const bounds = tempBounds;
+  const getBlockClipBounds = (
+    x0: number,
+    y0: number,
+    x1: number,
+    y1: number,
+    depth: number,
+  ) => {
+    const key =
+      ((x0 - lowerX) * numY + (y0 - lowerY)) * MAX_FOOTPRINT_DEPTH + depth;
+    let record = nodes.get(key);
+    if (record === undefined) {
+      record = computeFootprint(
         geo,
-        view,
         Math.max(clipX0, x0 * sizeX),
         Math.max(clipY0, y0 * sizeY),
         Math.min(clipX1, x1 * sizeX),
         Math.min(clipY1, y1 * sizeY),
       );
+      nodes.set(key, record);
+    }
+    setClipBoundsFromFootprint(bounds, record, view);
+  };
+
+  getBlockClipBounds(lowerX, lowerY, upperX, upperY, 0);
+  const copies = getWorldCopyOffsets(bounds, view, 0.1);
+  if (copies.length === 0) return;
+
+  // Map from chunk index to the minimum screen distance over the visible copies.
+  const visible = new Map<number, number>();
+  const halfWidth = projectionParameters.width / 2;
+  const halfHeight = projectionParameters.height / 2;
+
+  let tooManyChunks = false;
+  for (let copyIndex = 0; copyIndex < copies.length; copyIndex += 3) {
+    const offsetX = copies[copyIndex + 1];
+    const offsetY = copies[copyIndex + 2];
+    const recurse = (
+      x0: number,
+      y0: number,
+      x1: number,
+      y1: number,
+      depth: number,
+    ) => {
+      if (tooManyChunks) return;
+      getBlockClipBounds(x0, y0, x1, y1, depth);
       const nx = x1 - x0;
       const ny = y1 - y0;
-      if (
-        !bounds.intersectsViewport(
-          offsetX,
-          offsetY,
-          0.1,
-          /*isLeaf=*/ nx === 1 && ny === 1,
-        )
-      ) {
+      const isLeaf = nx === 1 && ny === 1;
+      if (!bounds.intersectsViewport(offsetX, offsetY, 0.1, isLeaf)) {
         return;
       }
-      if (nx === 1 && ny === 1) {
-        emit(x0, y0);
+      if (isLeaf) {
+        const key = (x0 - lowerX) * numY + (y0 - lowerY);
+        const dx = (0.5 * (bounds.xMin + bounds.xMax) + offsetX) * halfWidth;
+        const dy = (0.5 * (bounds.yMin + bounds.yMax) + offsetY) * halfHeight;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        const prev = visible.get(key);
+        if (prev === undefined || distance < prev) visible.set(key, distance);
+        if (visible.size > MAX_GEO_VISIBLE_CHUNKS) tooManyChunks = true;
         return;
       }
       if (nx >= ny) {
         const mid = x0 + Math.floor(nx / 2);
-        recurse(x0, y0, mid, y1);
-        recurse(mid, y0, x1, y1);
+        recurse(x0, y0, mid, y1, depth + 1);
+        recurse(mid, y0, x1, y1, depth + 1);
       } else {
         const mid = y0 + Math.floor(ny / 2);
-        recurse(x0, y0, x1, mid);
-        recurse(x0, mid, x1, y1);
+        recurse(x0, y0, x1, mid, depth + 1);
+        recurse(x0, mid, x1, y1, depth + 1);
       }
     };
-    recurse(lowerX, lowerY, upperX, upperY);
+    recurse(lowerX, lowerY, upperX, upperY, 0);
+  }
+  if (tooManyChunks) return;
+
+  const positionInChunks = tempPositionInChunks;
+  positionInChunks[sk] = chunkK;
+  const chunkDimX = chunkDisplayDimensionIndices[si];
+  const chunkDimY = chunkDisplayDimensionIndices[sj];
+  const chunkDimK = chunkDisplayDimensionIndices[sk];
+  for (const [key, distance] of visible) {
+    const y = lowerY + (key % numY);
+    const x = lowerX + (key - (key % numY)) / numY;
+    positionInChunks[si] = x;
+    positionInChunks[sj] = y;
+    curPositionInChunks[chunkDimX] = x;
+    curPositionInChunks[chunkDimY] = y;
+    curPositionInChunks[chunkDimK] = chunkK;
+    callback(positionInChunks, distance);
   }
 }
 
@@ -662,7 +880,30 @@ export function computeGeoChunkMesh(
 }
 
 /**
- * Returns the (cached) mesh for a chunk.
+ * Marks the start of a new frame for the mesh cache of a source.  Meshes used in the current or
+ * previous frame are never evicted.
+ */
+export function beginGeoMeshFrame(tsource: TransformedSource<any>) {
+  const geo = tsource.geo!;
+  let cache = geo.meshCache;
+  if (cache === undefined) {
+    cache = geo.meshCache = new GeoMeshCache();
+  }
+  ++cache.generation;
+  cache.previousFrameCount = cache.currentFrameCount;
+  cache.currentFrameCount = 0;
+}
+
+/**
+ * Maximum time in milliseconds spent computing new chunk meshes of a single source per frame.
+ * Chunks whose meshes would exceed the budget are drawn in subsequent frames, which keeps the
+ * viewer responsive when many new chunks become visible at once.
+ */
+export const GEO_MESH_BUILD_BUDGET_MS = 12;
+
+/**
+ * Returns the (cached) mesh for a chunk.  If the mesh is not cached and `allowCompute` is `false`,
+ * returns `undefined`.
  */
 export function getGeoChunkMesh(
   tsource: TransformedSource<any>,
@@ -672,25 +913,44 @@ export function getGeoChunkMesh(
   gridY: number,
   si: number,
   sj: number,
-): GeoChunkMesh {
+  allowCompute = true,
+): GeoChunkMesh | undefined {
   const geo = tsource.geo!;
   let cache = geo.meshCache;
   if (cache === undefined) {
-    cache = geo.meshCache = new Map();
+    cache = geo.meshCache = new GeoMeshCache();
   }
-  let mesh = cache.get(key);
+  const { meshes, generation } = cache;
+  let mesh = meshes.get(key);
   if (mesh !== undefined) {
     // Move to the end to maintain LRU order.
-    cache.delete(key);
-    cache.set(key, mesh);
-    return mesh;
+    meshes.delete(key);
+    meshes.set(key, mesh);
+  } else {
+    if (!allowCompute) return undefined;
+    mesh = computeGeoChunkMesh(tsource, chunkLayout, gridX, gridY, si, sj);
+    meshes.set(key, mesh);
+    cache.totalVertices += mesh.numVertices;
   }
-  mesh = computeGeoChunkMesh(tsource, chunkLayout, gridX, gridY, si, sj);
-  cache.set(key, mesh);
-  if (cache.size > MAX_CACHED_MESHES) {
-    const oldest = cache.keys().next().value!;
-    cache.get(oldest)!.gpuMesh?.dispose();
-    cache.delete(oldest);
+  if (mesh.generation !== generation) {
+    mesh.generation = generation;
+    ++cache.currentFrameCount;
+  }
+  const maxMeshes = Math.max(
+    MIN_CACHED_MESHES,
+    MESH_CACHE_FRAME_MULTIPLIER * cache.previousFrameCount,
+  );
+  while (
+    meshes.size > maxMeshes ||
+    cache.totalVertices > MAX_CACHED_MESH_VERTICES
+  ) {
+    const [oldestKey, oldest] = meshes.entries().next().value!;
+    // Meshes are in LRU order, so if the oldest mesh was used in the current or previous frame,
+    // all of them were.
+    if (oldest.generation! >= generation - 1) break;
+    oldest.gpuMesh?.dispose();
+    meshes.delete(oldestKey);
+    cache.totalVertices -= oldest.numVertices;
   }
   return mesh;
 }
@@ -701,10 +961,11 @@ export function getGeoChunkMesh(
 export function disposeGeoMeshCache(tsource: TransformedSource<any>) {
   const cache = tsource.geo?.meshCache;
   if (cache === undefined) return;
-  for (const mesh of cache.values()) {
+  for (const mesh of cache.meshes.values()) {
     mesh.gpuMesh?.dispose();
   }
-  cache.clear();
+  cache.meshes.clear();
+  cache.totalVertices = 0;
 }
 
 /**
@@ -806,23 +1067,72 @@ export function updateGeoEffectiveVoxelSize(
 }
 
 /**
+ * Maximum distance, in voxels, between a position and the result of mapping it through the inverse
+ * and forward warp for it to be considered to be within the image of the warp.
+ */
+const ROUND_TRIP_TOLERANCE = 1;
+
+/**
  * Converts approximate chunk coordinates (as computed from the affine chunk transform) of the
- * warped dimensions in `chunkPosition` to true chunk coordinates.  Returns `false` if the position
- * is outside the domain of the warp.
+ * warped dimensions in `chunkPosition` to true chunk coordinates.
+ *
+ * If the warp has a world period, the position may be within a world copy of the source rather than
+ * the canonical copy.  The position shifted by each multiple of the world period (starting with the
+ * unshifted position) is tried, and the first one that is in the image of the warp and whose true
+ * chunk coordinates are within `[lowerBound, upperBound)` is chosen.
+ *
+ * Returns `false` if there is no such position.
  */
 export function correctGeoChunkPosition(
   warp: ChunkGeoWarp,
   chunkPosition: Float32Array,
+  lowerBound: ArrayLike<number>,
+  upperBound: ArrayLike<number>,
 ): boolean {
   const [d0, d1] = warp.chunkDimensions;
-  if (warp.isIdentity) return true;
-  if (
-    warp.inverse(chunkPosition[d0], chunkPosition[d1], tempWarped) ===
-    TransformStatus.INVALID
-  ) {
-    return false;
+  const x = chunkPosition[d0];
+  const y = chunkPosition[d1];
+  const { worldPeriod, isIdentity } = warp;
+  const maxCopy = worldPeriod === undefined ? 0 : MAX_WORLD_COPIES;
+  const lower0 = lowerBound[d0];
+  const lower1 = lowerBound[d1];
+  const upper0 = upperBound[d0];
+  const upper1 = upperBound[d1];
+  for (let i = 0; i <= 2 * maxCopy; ++i) {
+    // k = 0, -1, 1, -2, 2, ...
+    const k = i & 1 ? -((i + 1) >> 1) : i >> 1;
+    let px = x;
+    let py = y;
+    if (k !== 0) {
+      px -= k * worldPeriod![0];
+      py -= k * worldPeriod![1];
+    }
+    let tx = px;
+    let ty = py;
+    if (!isIdentity) {
+      if (warp.inverse(px, py, tempWarped) === TransformStatus.INVALID) {
+        continue;
+      }
+      tx = tempWarped[0];
+      ty = tempWarped[1];
+      if (!(tx >= lower0 && tx < upper0 && ty >= lower1 && ty < upper1)) {
+        continue;
+      }
+      // The inverse may map a position outside the canonical copy to the source (e.g. if
+      // longitudes are wrapped), in which case the forward warp does not return to it.
+      if (
+        warp.forward(tx, ty, tempWarped) === TransformStatus.INVALID ||
+        Math.abs(tempWarped[0] - px) > ROUND_TRIP_TOLERANCE ||
+        Math.abs(tempWarped[1] - py) > ROUND_TRIP_TOLERANCE
+      ) {
+        continue;
+      }
+    } else if (!(tx >= lower0 && tx < upper0 && ty >= lower1 && ty < upper1)) {
+      continue;
+    }
+    chunkPosition[d0] = tx;
+    chunkPosition[d1] = ty;
+    return true;
   }
-  chunkPosition[d0] = tempWarped[0];
-  chunkPosition[d1] = tempWarped[1];
-  return true;
+  return false;
 }

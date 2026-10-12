@@ -31,8 +31,14 @@ import {
   makeIdentityTransformedBoundingBox,
 } from "#src/coordinate_transform.js";
 import { GeoTiffTileSourceParameters } from "#src/datasource/geotiff/base.js";
-import type { TiffTileFormat } from "#src/datasource/geotiff/decode.js";
-import { getTiffDataType } from "#src/datasource/geotiff/decode.js";
+import type {
+  TiffTileFormat,
+  TiffTileLayout,
+} from "#src/datasource/geotiff/decode.js";
+import {
+  getTiffChunkSize,
+  getTiffDataType,
+} from "#src/datasource/geotiff/decode.js";
 import { getGeoTiffGeoreference } from "#src/datasource/geotiff/geokeys.js";
 import {
   getGeoTiffDefaultShader,
@@ -45,6 +51,7 @@ import type {
 } from "#src/datasource/geotiff/tiff.js";
 import {
   BlockCachingReader,
+  getByteRangeFromResponse,
   isTiffHeader,
   readTiff,
 } from "#src/datasource/geotiff/tiff.js";
@@ -141,17 +148,28 @@ export class GeoTiffMultiscaleVolumeChunkSource extends MultiscaleVolumeChunkSou
         chunkToMultiscaleTransform[stride + 1] = base.height / image.height;
         chunkToMultiscaleTransform[2 * stride + 2] = 1;
         chunkToMultiscaleTransform[stride * stride - 1] = 1;
-        const tilesAcross = Math.ceil(image.width / image.tileWidth);
-        const tilesDown = Math.ceil(image.height / image.tileHeight);
+        const layout: TiffTileLayout = {
+          width: image.width,
+          height: image.height,
+          tileWidth: image.tileWidth,
+          tileHeight: image.tileHeight,
+          isTiled: image.isTiled,
+          samplesPerPixel: spp,
+          planarConfiguration: image.planarConfiguration,
+        };
+        const [chunkWidth, chunkHeight] = getTiffChunkSize(layout);
+        // Strips are shared by multiple chunks if the chunks do not consist of whole strips.
+        const cacheTiles =
+          chunkWidth !== image.tileWidth ||
+          (chunkHeight % image.tileHeight !== 0 &&
+            chunkHeight !== image.height);
         return makeDefaultVolumeChunkSpecifications({
           rank,
           dataType: this.dataType,
           chunkToMultiscaleTransform,
           upperVoxelBound: Float32Array.of(image.width, image.height, spp),
           volumeType: this.volumeType,
-          chunkDataSizes: [
-            Uint32Array.of(image.tileWidth, image.tileHeight, spp),
-          ],
+          chunkDataSizes: [Uint32Array.of(chunkWidth, chunkHeight, spp)],
           volumeSourceOptions,
         }).map(
           (spec): SliceViewSingleResolutionSource<VolumeChunkSource> => ({
@@ -161,10 +179,8 @@ export class GeoTiffMultiscaleVolumeChunkSource extends MultiscaleVolumeChunkSou
               parameters: {
                 url: this.url,
                 format: getTileFormat(image, tiff.littleEndian),
-                samplesPerPixel: spp,
-                planarConfiguration: image.planarConfiguration,
-                tilesAcross,
-                tilesPerPlane: tilesAcross * tilesDown,
+                layout,
+                cacheTiles,
                 offsets: image.offsets,
                 byteCounts: image.byteCounts,
               },
@@ -213,7 +229,8 @@ export function getGeoTiffDataSource(
     crs = crsOverride ?? georeference.crs;
     if (crs === undefined) {
       throw new Error(
-        `Unsupported GeoTIFF CRS${georeference.citation ? ` (${JSON.stringify(georeference.citation)})` : ""}: ` +
+        `Unsupported GeoTIFF CRS${georeference.citation ? ` (${JSON.stringify(georeference.citation)})` : ""}` +
+          `${georeference.crsError ? ` (${georeference.crsError})` : ""}: ` +
           `specify the CRS explicitly, e.g. "|geotiff:#crs=EPSG:<code>" or "|geotiff:#crs=+proj=..."`,
       );
     }
@@ -287,7 +304,7 @@ function makeKvStoreReader(
         byteRange: { offset, length },
         throwIfMissing: true,
       });
-      return new Uint8Array(await response.response.arrayBuffer());
+      return getByteRangeFromResponse(response, offset, length);
     },
   };
 }
@@ -313,7 +330,12 @@ async function readTiffMetadata(
     initial.totalSize,
   );
   if (initial.offset === 0) {
-    reader.seedBlock(0, new Uint8Array(await initial.response.arrayBuffer()));
+    const data = new Uint8Array(await initial.response.arrayBuffer());
+    // The server may ignore the byte range and return the entire file.
+    reader.seedBlock(
+      0,
+      data.length > blockSize ? data.slice(0, blockSize) : data,
+    );
   }
   return await readTiff(reader);
 }

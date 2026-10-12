@@ -114,13 +114,28 @@ export class ViewerSettingsPanel extends SidePanel {
       );
       labelElement.appendChild(checkbox.element);
       scroll.appendChild(labelElement);
+      return labelElement;
     };
     addCheckbox("Show axis lines", viewer.showAxisLines);
     addCheckbox("Show scale bar", viewer.showScaleBar);
-    addCheckbox(
-      "Show graticule (geospatial data)",
-      viewer.geoView.showGraticule,
-    );
+    {
+      const { geoView } = viewer;
+      const graticuleElement = addCheckbox(
+        "Show graticule (geospatial data)",
+        geoView.showGraticule,
+      );
+      // Only relevant for geospatial displays.
+      const updateVisibility = () => {
+        const { displayCrs } = geoView;
+        // The `hidden` attribute is overridden by the `display` style of the labels.
+        graticuleElement.style.display =
+          displayCrs.numGeoSources === 0 && displayCrs.value === undefined
+            ? "none"
+            : "";
+      };
+      this.registerDisposer(geoView.changed.add(updateVisibility));
+      updateVisibility();
+    }
     addCheckbox("Show cross sections in 3-d", viewer.showPerspectiveSliceViews);
     addCheckbox(
       "Hide sections background 3-d",

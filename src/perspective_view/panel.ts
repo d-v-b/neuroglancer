@@ -718,6 +718,7 @@ export class PerspectivePanel extends RenderedDataPanel {
   ) {
     const { mouseState } = this.viewer;
     mouseState.pickedRenderLayer = null;
+    mouseState.pickedSliceView = undefined;
     const pickDiameter = getPickDiameter(pickRadius);
     const pickOffsetSequence = getPickOffsetSequence(pickRadius);
     const resolvedPick = resolveNearestPanelPickSample(

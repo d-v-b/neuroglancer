@@ -710,6 +710,13 @@ export class Viewer extends RefCounted implements ViewerState {
         this.navigationState,
       ),
     );
+    // The 3-d view shares the position of the cross sections, but has its own zoom.
+    this.registerDisposer(
+      this.geoView.registerNavigationTarget(() => ({
+        position: undefined,
+        zooms: [this.perspectiveNavigationState.zoomFactor],
+      })),
+    );
 
     this.registerDisposer(
       display.updateStarted.add(() => {
@@ -744,6 +751,8 @@ export class Viewer extends RefCounted implements ViewerState {
           this.navigationState.reset();
           this.perspectiveNavigationState.pose.orientation.reset();
           this.perspectiveNavigationState.zoomFactor.reset();
+          // Let the next georeferenced data source determine the display CRS.
+          this.layerSpecification.displayCrs.reset();
           this.layout.restoreState("4panel-alt");
           this.resetInitiated.dispatch();
           if (

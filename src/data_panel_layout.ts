@@ -20,7 +20,6 @@ import { debounce } from "lodash-es";
 import type { ChunkManager } from "#src/chunk_manager/frontend.js";
 import type { DisplayContext } from "#src/display_context.js";
 import type { GeoViewState } from "#src/geo/geo_view.js";
-import { GEO_YZ_RELATIVE_ORIENTATION } from "#src/geo/geo_view.js";
 import type {
   LayerManager,
   MouseSelectionState,
@@ -132,7 +131,7 @@ const LAYOUT_SYMBOLS = new Map<string, string>([
 export function makeSliceView(
   viewerState: SliceViewViewerState,
   baseToSelf?: quat,
-  geoBaseToSelf?: quat,
+  geoVerticalSection = false,
 ) {
   let navigationState: NavigationState;
   let orientation: ReturnType<typeof OrientationState.makeRelative> | undefined;
@@ -163,12 +162,14 @@ export function makeSliceView(
   const { geoView } = viewerState;
   if (
     orientation !== undefined &&
-    geoBaseToSelf !== undefined &&
+    geoVerticalSection &&
     geoView !== undefined
   ) {
+    // For geospatial displays, orient the section with north to the right and the vertical
+    // dimension upward.
     const updateOrientation = () => {
       orientation.setPeerToSelf(
-        geoView.info !== undefined ? geoBaseToSelf : baseToSelf!,
+        geoView.getYzRelativeOrientation() ?? baseToSelf!,
       );
     };
     sliceView.registerDisposer(geoView.changed.add(updateOrientation));
@@ -184,7 +185,7 @@ export function makeNamedSliceView(
   return makeSliceView(
     viewerState,
     AXES_RELATIVE_ORIENTATION.get(axes)!,
-    axes === "yz" ? GEO_YZ_RELATIVE_ORIENTATION : undefined,
+    axes === "yz",
   );
 }
 

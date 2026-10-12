@@ -76,7 +76,7 @@ export class RenderLayer extends RefCounted {
     // Do nothing by default.
   }
 
-  getValueAt(_x: Float32Array): any {
+  getValueAt(_x: Float32Array, _pickState?: PickState): any {
     return undefined;
   }
 

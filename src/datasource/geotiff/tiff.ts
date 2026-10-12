@@ -74,6 +74,28 @@ export interface ByteRangeReader {
 }
 
 /**
+ * Extracts the requested byte range from a read response.  Servers that ignore the HTTP `Range`
+ * header return the entire file (or a larger range), in which case the requested range is sliced
+ * out.
+ */
+export async function getByteRangeFromResponse(
+  response: { response: Response; offset: number },
+  offset: number,
+  length: number,
+): Promise<Uint8Array<ArrayBuffer>> {
+  const data = new Uint8Array(await response.response.arrayBuffer());
+  const start = offset - response.offset;
+  if (start < 0 || start + length > data.length) {
+    throw new Error(
+      `Received truncated response: expected ${length} bytes at offset ${offset}, ` +
+        `but received ${data.length} bytes at offset ${response.offset}`,
+    );
+  }
+  if (start === 0 && data.length === length) return data;
+  return data.slice(start, start + length);
+}
+
+/**
  * Wraps a `ByteRangeReader`, reading and caching aligned blocks.  Efficient for reading the many
  * small, nearby byte ranges that make up the image file directories.
  */
@@ -111,7 +133,12 @@ export class BlockCachingReader implements ByteRangeReader {
   }
 
   async read(offset: number, length: number): Promise<Uint8Array> {
-    const { blockSize } = this;
+    const { blockSize, size } = this;
+    if (size !== undefined && offset + length > size) {
+      throw new Error(
+        `Unexpected end of file reading ${length} bytes at offset ${offset}`,
+      );
+    }
     const firstBlock = Math.floor(offset / blockSize);
     const lastBlock = Math.floor(
       (offset + Math.max(length, 1) - 1) / blockSize,
@@ -287,12 +314,68 @@ function decodeValues(
   return values;
 }
 
+/**
+ * Maximum number of entries in an image file directory.
+ */
+const MAX_IFD_ENTRIES = 65535;
+
+/**
+ * Maximum size of the value of a tag other than the tile/strip offsets and byte counts, whose
+ * size is instead validated against the image dimensions.
+ */
+const MAX_TAG_BYTES = 16 * 1024 * 1024;
+
+const TILE_OFFSET_TAGS = new Set<number>([
+  TiffTag.StripOffsets,
+  TiffTag.StripByteCounts,
+  TiffTag.TileOffsets,
+  TiffTag.TileByteCounts,
+]);
+
+/**
+ * Computes the expected number of tiles (or strips) from the inline tag values, or returns
+ * `undefined` if the dimensions are not available.
+ */
+function getExpectedTileCount(
+  tags: Map<number, TiffTagValue>,
+): number | undefined {
+  const get = (tag: number) => {
+    const value = tags.get(tag);
+    return Array.isArray(value) && value.length > 0 ? value[0] : undefined;
+  };
+  const width = get(TiffTag.ImageWidth);
+  const height = get(TiffTag.ImageLength);
+  if (width === undefined || height === undefined) return undefined;
+  const planes =
+    get(TiffTag.PlanarConfiguration) === 2
+      ? (get(TiffTag.SamplesPerPixel) ?? 1)
+      : 1;
+  let tileWidth: number | undefined;
+  let tileHeight: number | undefined;
+  if (tags.has(TiffTag.TileWidth)) {
+    tileWidth = get(TiffTag.TileWidth);
+    tileHeight = get(TiffTag.TileLength);
+  } else {
+    tileWidth = width;
+    tileHeight = Math.min(height, get(TiffTag.RowsPerStrip) ?? height);
+  }
+  if (!tileWidth || !tileHeight) return undefined;
+  return Math.ceil(width / tileWidth) * Math.ceil(height / tileHeight) * planes;
+}
+
+/**
+ * Reads the entries of an image file directory.  Tag values stored outside the directory are read
+ * by the returned `readTags` function.
+ */
 async function readImageFileDirectory(
   reader: ByteRangeReader,
   offset: number,
   littleEndian: boolean,
   bigTiff: boolean,
-): Promise<{ ifd: TiffImageFileDirectory; nextOffset: number }> {
+): Promise<{
+  readTags: () => Promise<TiffImageFileDirectory>;
+  nextOffset: number;
+}> {
   const countSize = bigTiff ? 8 : 2;
   const entrySize = bigTiff ? 20 : 12;
   const offsetSize = bigTiff ? 8 : 4;
@@ -301,6 +384,11 @@ async function readImageFileDirectory(
   const numEntries = bigTiff
     ? getUint64(countView, 0, littleEndian)
     : countView.getUint16(0, littleEndian);
+  if (numEntries > MAX_IFD_ENTRIES) {
+    throw new Error(
+      `Invalid TIFF file: image file directory has ${numEntries} entries (maximum is ${MAX_IFD_ENTRIES})`,
+    );
+  }
   const entriesBytes = await reader.read(
     offset + countSize,
     numEntries * entrySize + offsetSize,
@@ -310,46 +398,72 @@ async function readImageFileDirectory(
     entriesBytes.byteOffset,
     entriesBytes.byteLength,
   );
-  const tags = new Map<number, TiffTagValue>();
-  const pending: Promise<void>[] = [];
-  for (let i = 0; i < numEntries; ++i) {
-    const entryOffset = i * entrySize;
-    const tag = view.getUint16(entryOffset, littleEndian);
-    const type = view.getUint16(entryOffset + 2, littleEndian);
-    const count = bigTiff
-      ? getUint64(view, entryOffset + 4, littleEndian)
-      : view.getUint32(entryOffset + 4, littleEndian);
-    const typeSize = TYPE_SIZES[type];
-    if (typeSize === undefined) continue;
-    const byteLength = typeSize * count;
-    const valueOffset = entryOffset + (bigTiff ? 12 : 8);
-    if (byteLength <= offsetSize) {
-      tags.set(
-        tag,
-        decodeValues(
-          type,
-          count,
-          entriesBytes.subarray(valueOffset, valueOffset + byteLength),
-          littleEndian,
-        ),
-      );
-    } else {
-      const dataOffset = bigTiff
-        ? getUint64(view, valueOffset, littleEndian)
-        : view.getUint32(valueOffset, littleEndian);
-      pending.push(
-        reader.read(dataOffset, byteLength).then((bytes) => {
-          tags.set(tag, decodeValues(type, count, bytes, littleEndian));
-        }),
-      );
-    }
-  }
-  await Promise.all(pending);
   const nextOffsetPosition = numEntries * entrySize;
   const nextOffset = bigTiff
     ? getUint64(view, nextOffsetPosition, littleEndian)
     : view.getUint32(nextOffsetPosition, littleEndian);
-  return { ifd: { tags }, nextOffset };
+  const readTags = async () => {
+    const tags = new Map<number, TiffTagValue>();
+    const external: {
+      tag: number;
+      type: number;
+      count: number;
+      dataOffset: number;
+      byteLength: number;
+    }[] = [];
+    for (let i = 0; i < numEntries; ++i) {
+      const entryOffset = i * entrySize;
+      const tag = view.getUint16(entryOffset, littleEndian);
+      const type = view.getUint16(entryOffset + 2, littleEndian);
+      const count = bigTiff
+        ? getUint64(view, entryOffset + 4, littleEndian)
+        : view.getUint32(entryOffset + 4, littleEndian);
+      const typeSize = TYPE_SIZES[type];
+      if (typeSize === undefined) continue;
+      const byteLength = typeSize * count;
+      const valueOffset = entryOffset + (bigTiff ? 12 : 8);
+      if (byteLength <= offsetSize) {
+        tags.set(
+          tag,
+          decodeValues(
+            type,
+            count,
+            entriesBytes.subarray(valueOffset, valueOffset + byteLength),
+            littleEndian,
+          ),
+        );
+      } else {
+        const dataOffset = bigTiff
+          ? getUint64(view, valueOffset, littleEndian)
+          : view.getUint32(valueOffset, littleEndian);
+        external.push({ tag, type, count, dataOffset, byteLength });
+      }
+    }
+    // Validate the sizes of values stored outside the directory before reading them, to avoid
+    // huge reads for malformed files.  The image dimensions are always stored inline.
+    const expectedTiles = getExpectedTileCount(tags);
+    for (const { tag, count, byteLength } of external) {
+      if (TILE_OFFSET_TAGS.has(tag) && expectedTiles !== undefined) {
+        if (count > expectedTiles) {
+          throw new Error(
+            `Invalid TIFF file: tag ${tag} has ${count} values but ${expectedTiles} expected`,
+          );
+        }
+      } else if (byteLength > MAX_TAG_BYTES) {
+        throw new Error(
+          `Invalid TIFF file: tag ${tag} value of ${byteLength} bytes exceeds maximum of ${MAX_TAG_BYTES} bytes`,
+        );
+      }
+    }
+    await Promise.all(
+      external.map(async ({ tag, type, count, dataOffset, byteLength }) => {
+        const bytes = await reader.read(dataOffset, byteLength);
+        tags.set(tag, decodeValues(type, count, bytes, littleEndian));
+      }),
+    );
+    return { tags };
+  };
+  return { readTags, nextOffset };
 }
 
 function getNumber(
@@ -385,6 +499,9 @@ export function parseTiffImage(ifd: TiffImageFileDirectory): TiffImage {
   const { tags } = ifd;
   const width = getNumber(tags, TiffTag.ImageWidth);
   const height = getNumber(tags, TiffTag.ImageLength);
+  if (!(width > 0 && height > 0)) {
+    throw new Error(`Invalid TIFF image dimensions: ${width}x${height}`);
+  }
   const samplesPerPixel = getNumber(tags, TiffTag.SamplesPerPixel, 1);
   const bitsPerSampleValues = tags.has(TiffTag.BitsPerSample)
     ? getNumbers(tags, TiffTag.BitsPerSample)
@@ -417,6 +534,9 @@ export function parseTiffImage(ifd: TiffImageFileDirectory): TiffImage {
     );
     offsets = getNumbers(tags, TiffTag.StripOffsets);
     byteCounts = getNumbers(tags, TiffTag.StripByteCounts);
+  }
+  if (!(tileWidth > 0 && tileHeight > 0)) {
+    throw new Error(`Invalid TIFF tile dimensions: ${tileWidth}x${tileHeight}`);
   }
   const planarConfiguration = getNumber(tags, TiffTag.PlanarConfiguration, 1);
   const tilesPerPlane =
@@ -470,7 +590,9 @@ export function parseTiffImage(ifd: TiffImageFileDirectory): TiffImage {
 const MAX_IMAGES = 1024;
 
 /**
- * Reads the structure of a TIFF file.
+ * Reads the structure of a TIFF file.  Errors in the first image propagate; subsequent images
+ * (overviews, masks, thumbnails, additional pages) that cannot be parsed are skipped with a
+ * warning.
  */
 export async function readTiff(reader: ByteRangeReader): Promise<TiffFile> {
   const header = await reader.read(0, 16);
@@ -504,19 +626,33 @@ export async function readTiff(reader: ByteRangeReader): Promise<TiffFile> {
   }
   const images: TiffImage[] = [];
   const seen = new Set<number>();
-  while (offset !== 0) {
-    if (seen.has(offset) || images.length >= MAX_IMAGES) {
-      throw new Error("Invalid TIFF file: cyclic image file directories");
+  for (let index = 0; offset !== 0; ++index) {
+    let readTags: () => Promise<TiffImageFileDirectory>;
+    try {
+      if (seen.has(offset) || index >= MAX_IMAGES) {
+        throw new Error("Invalid TIFF file: cyclic image file directories");
+      }
+      seen.add(offset);
+      let nextOffset: number;
+      ({ readTags, nextOffset } = await readImageFileDirectory(
+        reader,
+        offset,
+        littleEndian,
+        bigTiff,
+      ));
+      offset = nextOffset;
+    } catch (e) {
+      if (index === 0) throw e;
+      // The chain of image file directories cannot be followed further.
+      console.warn(`Ignoring TIFF image file directories from #${index}:`, e);
+      break;
     }
-    seen.add(offset);
-    const { ifd, nextOffset } = await readImageFileDirectory(
-      reader,
-      offset,
-      littleEndian,
-      bigTiff,
-    );
-    images.push(parseTiffImage(ifd));
-    offset = nextOffset;
+    try {
+      images.push(parseTiffImage(await readTags()));
+    } catch (e) {
+      if (index === 0) throw e;
+      console.warn(`Ignoring TIFF image #${index}:`, e);
+    }
   }
   if (images.length === 0) {
     throw new Error("TIFF file contains no images");

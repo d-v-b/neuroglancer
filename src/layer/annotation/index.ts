@@ -448,6 +448,9 @@ export class AnnotationUserLayer extends Base {
   private localAnnotationRelationships: string[];
   private localAnnotationsJson: any = undefined;
   private pointAnnotationsJson: any = undefined;
+  // Default shader suggested by a data source that was applied to `annotationDisplayState.shader`,
+  // if the shader has not been modified since.
+  private appliedDefaultShader: string | undefined = undefined;
   static supportColorPickerInAnnotationTab = false;
 
   linkedSegmentationLayers = this.registerDisposer(
@@ -598,6 +601,8 @@ export class AnnotationUserLayer extends Base {
 
   activateDataSubsources(subsources: Iterable<LoadedDataSubsource>) {
     let hasLocalAnnotations = false;
+    let hasAnnotationSources = false;
+    let defaultShader: string | undefined;
     let properties:
       | WatchableValue<readonly Readonly<AnnotationPropertySpec>[]>
       | undefined;
@@ -631,6 +636,7 @@ export class AnnotationUserLayer extends Base {
         }
         hasLocalAnnotations = true;
         if (!setProperties(this.localAnnotationProperties)) continue;
+        hasAnnotationSources = true;
         loadedSubsource.activate((refCounted) => {
           const localAnnotations = (this.localAnnotations =
             new LocalAnnotationSource(
@@ -686,14 +692,9 @@ export class AnnotationUserLayer extends Base {
       const { annotation } = subsourceEntry.subsource;
       if (annotation !== undefined) {
         if (!setProperties(annotation.properties)) continue;
-        // Data sources may suggest a shader, used if the user has not specified one.
-        const { defaultShader } = annotation as { defaultShader?: string };
-        if (
-          defaultShader !== undefined &&
-          this.annotationDisplayState.shader.value === DEFAULT_FRAGMENT_MAIN
-        ) {
-          this.annotationDisplayState.shader.value = defaultShader;
-        }
+        hasAnnotationSources = true;
+        defaultShader ??= (annotation as { defaultShader?: string })
+          .defaultShader;
         loadedSubsource.activate(() => {
           const state = new AnnotationLayerState({
             localPosition: this.localPosition,
@@ -711,6 +712,7 @@ export class AnnotationUserLayer extends Base {
       }
       loadedSubsource.deactivate("Not compatible with annotation layer");
     }
+    if (hasAnnotationSources) this.applyDefaultShader(defaultShader);
     const prevAnnotationProperties =
       this.annotationDisplayState.annotationProperties.value;
     if (
@@ -728,6 +730,26 @@ export class AnnotationUserLayer extends Base {
         ...properties.value,
       ];
     }
+  }
+
+  // Data sources may suggest a shader, used if the user has not specified one: the shader is
+  // replaced only if it is the generic default, or the default previously suggested by a data
+  // source (e.g. before the data source was changed).  A shader restored from the layer state
+  // that matches a data source default is treated as specified by the user.
+  private applyDefaultShader(defaultShader: string | undefined) {
+    const { shader } = this.annotationDisplayState;
+    const { appliedDefaultShader } = this;
+    if (
+      shader.value !== DEFAULT_FRAGMENT_MAIN &&
+      (appliedDefaultShader === undefined ||
+        shader.value !== appliedDefaultShader)
+    ) {
+      this.appliedDefaultShader = undefined;
+      return;
+    }
+    const newShader = defaultShader ?? DEFAULT_FRAGMENT_MAIN;
+    if (shader.value !== newShader) shader.value = newShader;
+    this.appliedDefaultShader = defaultShader;
   }
 
   initializeAnnotationLayerViewTab(tab: AnnotationLayerView) {

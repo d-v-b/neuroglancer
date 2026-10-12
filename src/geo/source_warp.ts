@@ -35,7 +35,11 @@
 
 import type { Crs } from "#src/geo/crs.js";
 import { getCrs } from "#src/geo/crs.js";
-import { CrsTransform, TransformStatus } from "#src/geo/transform.js";
+import {
+  CrsTransform,
+  GeographicTransform,
+  TransformStatus,
+} from "#src/geo/transform.js";
 import type { Warp2d } from "#src/geo/warp_mesh.js";
 
 /**
@@ -122,6 +126,18 @@ export interface GeoWarpSpec {
  * and would otherwise cause loss of precision in rendering.
  */
 const MAX_WARPED_DISTANCE_FACTOR = 1000;
+
+/**
+ * Maximum relative difference between the Jacobian estimates obtained with two different finite
+ * difference step sizes for a linearization to be accepted.
+ */
+const LINEARIZATION_TOLERANCE = 0.02;
+
+/**
+ * Minimum value of `|det(J)| / |J|_F^2` (approximately the inverse of the condition number) for a
+ * linearization to be accepted.
+ */
+const MIN_LINEARIZATION_INVERSE_CONDITION = 1e-6;
 
 /**
  * Warp `W` from multiscale coordinates to approximate multiscale coordinates.
@@ -220,6 +236,81 @@ export class MultiscaleGeoWarp implements Warp2d {
     applyAffine2d(this.spec.multiscaleToDisplay, x, y, temp);
     return this.fromDisplay(temp[0], temp[1], out);
   }
+
+  /**
+   * Invokes `callback` with points, in approximate multiscale coordinates, sampling the image of
+   * each pole that lies within the rectangle `[lower, upper]` of multiscale coordinates.
+   *
+   * In a projected source CRS (e.g. polar stereographic), a pole is a single point, but its image
+   * in the display CRS may be a line (e.g. latitude ±90 in geographic coordinates), which extends
+   * beyond the image of any finite set of samples around it.
+   */
+  /**
+   * Returns a predicate indicating whether a multiscale position maps into the display domain of
+   * the display CRS (see `Crs.displayDomain`).
+   */
+  makeDisplayDomainTest(): (x: number, y: number) => boolean {
+    const [xMin, yMin, xMax, yMax] = this.crsTransform.targetCrs.displayDomain;
+    const out = new Float64Array(2);
+    return (x, y) =>
+      this.toDisplay(x, y, out) !== TransformStatus.INVALID &&
+      out[0] >= xMin &&
+      out[0] <= xMax &&
+      out[1] >= yMin &&
+      out[1] <= yMax;
+  }
+
+  forEachPoleImage(
+    lower: ArrayLike<number>,
+    upper: ArrayLike<number>,
+    callback: (x: number, y: number) => void,
+    numSamples = 64,
+  ) {
+    const { sourceCrs, targetCrs } = this.crsTransform;
+    if (this.isIdentity || sourceCrs.isGeographic) return;
+    const source = new GeographicTransform(sourceCrs);
+    const display = new GeographicTransform(targetCrs);
+    const sourcePoint = new Float64Array(2);
+    const m = new Float64Array(2);
+    const { referenceLongitude } = this.spec;
+    for (const lat of [90, -90]) {
+      if (
+        source.fromLonLat(referenceLongitude, lat, sourcePoint) !==
+        TransformStatus.VALID
+      ) {
+        continue;
+      }
+      applyAffine2d(this.sourceToMultiscale, sourcePoint[0], sourcePoint[1], m);
+      let inside = true;
+      for (let i = 0; i < 2; ++i) {
+        const lo = Math.min(lower[i], upper[i]);
+        const hi = Math.max(lower[i], upper[i]);
+        if (!(m[i] >= lo && m[i] <= hi)) inside = false;
+      }
+      if (!inside) continue;
+      for (let i = 0; i <= numSamples; ++i) {
+        const lon = referenceLongitude - 180 + (360 * i) / numSamples;
+        if (
+          display.fromLonLat(lon, lat, sourcePoint) === TransformStatus.INVALID
+        ) {
+          continue;
+        }
+        applyAffine2d(
+          this.displayToMultiscale,
+          sourcePoint[0],
+          sourcePoint[1],
+          m,
+        );
+        if (
+          Math.abs(m[0] - this.centerX) > this.maxDistance ||
+          Math.abs(m[1] - this.centerY) > this.maxDistance
+        ) {
+          continue;
+        }
+        callback(m[0], m[1]);
+      }
+    }
+  }
 }
 
 const warpCache = new Map<string, MultiscaleGeoWarp>();
@@ -289,8 +380,9 @@ export function computeGeoWarpSpec(
   if (crsTransform.isIdentity) {
     return spec;
   }
-  // Compute linearization at a valid point near the center.  Try the center first, then points
-  // progressively closer to the corners in case the center is outside the display domain.
+  // Compute linearization at a valid, well-conditioned point near the center.  Try the center
+  // first, then points progressively closer to the corners in case the center is outside the
+  // display domain or at a singularity.
   const out0 = new Float64Array(2);
   const outX = new Float64Array(2);
   const outY = new Float64Array(2);
@@ -314,21 +406,31 @@ export function computeGeoWarpSpec(
       candidates.push([lower[0] + fx * extentX, lower[1] + fy * extentY]);
     }
   }
-  for (const [cx, cy] of candidates) {
+  // Estimates the Jacobian at `(cx, cy)` by forward differences with steps `s * hx` and `s * hy`.
+  const jacobian = (cx: number, cy: number, s: number) => {
     if (
-      !toDisplay(cx, cy, out0) ||
-      !toDisplay(cx + hx, cy, outX) ||
-      !toDisplay(cx, cy + hy, outY)
+      !toDisplay(cx + s * hx, cy, outX) ||
+      !toDisplay(cx, cy + s * hy, outY)
     ) {
-      continue;
+      return undefined;
     }
-    const a00 = (outX[0] - out0[0]) / hx;
-    const a10 = (outX[1] - out0[1]) / hx;
-    const a01 = (outY[0] - out0[0]) / hy;
-    const a11 = (outY[1] - out0[1]) / hy;
+    return [
+      (outX[0] - out0[0]) / (s * hx),
+      (outX[1] - out0[1]) / (s * hx),
+      (outY[0] - out0[0]) / (s * hy),
+      (outY[1] - out0[1]) / (s * hy),
+    ];
+  };
+  let fallback: Affine2d | undefined;
+  for (const [cx, cy] of candidates) {
+    if (!toDisplay(cx, cy, out0)) continue;
+    const j = jacobian(cx, cy, 1);
+    const j2 = jacobian(cx, cy, 2);
+    if (j === undefined || j2 === undefined) continue;
+    const [a00, a10, a01, a11] = j;
     const det = a00 * a11 - a01 * a10;
     if (det === 0 || !Number.isFinite(det)) continue;
-    spec.multiscaleToDisplay = [
+    const affine: Affine2d = [
       a00,
       a10,
       a01,
@@ -336,6 +438,24 @@ export function computeGeoWarpSpec(
       out0[0] - (a00 * cx + a01 * cy),
       out0[1] - (a10 * cx + a11 * cy),
     ];
+    // Reject linearizations at or near singularities of the reprojection (e.g. a pole, at which
+    // the longitude is undefined, or a discontinuity of the display CRS), where the finite
+    // difference estimate depends on the step size, and ill-conditioned linearizations.
+    const norm2 = a00 * a00 + a10 * a10 + a01 * a01 + a11 * a11;
+    let diff2 = 0;
+    for (let i = 0; i < 4; ++i) diff2 += (j[i] - j2[i]) ** 2;
+    if (
+      diff2 > LINEARIZATION_TOLERANCE ** 2 * norm2 ||
+      Math.abs(det) < MIN_LINEARIZATION_INVERSE_CONDITION * norm2
+    ) {
+      fallback ??= affine;
+      continue;
+    }
+    spec.multiscaleToDisplay = affine;
+    return spec;
+  }
+  if (fallback !== undefined) {
+    spec.multiscaleToDisplay = fallback;
     return spec;
   }
   throw new Error(
@@ -346,24 +466,37 @@ export function computeGeoWarpSpec(
 
 /**
  * Computes the bounding box, in approximate multiscale coordinates, of the image under the warp of
- * the rectangle `[lower, upper]`, by sampling its boundary.  Returns `undefined` if no boundary
- * point maps to a valid position.
+ * the rectangle `[lower, upper]`, by sampling its boundary densely and its interior on a coarser
+ * grid.  For a `MultiscaleGeoWarp`, the images of poles within the rectangle are also included.
+ * Returns `undefined` if no point maps to a valid position.
  */
 export function computeWarpedBounds(
   warp: Warp2d,
   lower: ArrayLike<number>,
   upper: ArrayLike<number>,
-  samplesPerEdge = 64,
+  samplesPerEdge = 256,
+  interiorSamplesPerDimension = 32,
 ): { lower: Float64Array; upper: Float64Array } | undefined {
   const resultLower = Float64Array.of(Infinity, Infinity);
   const resultUpper = Float64Array.of(-Infinity, -Infinity);
   const out = new Float64Array(2);
+  const include = (x: number, y: number) => {
+    resultLower[0] = Math.min(resultLower[0], x);
+    resultLower[1] = Math.min(resultLower[1], y);
+    resultUpper[0] = Math.max(resultUpper[0], x);
+    resultUpper[1] = Math.max(resultUpper[1], y);
+  };
+  // Points outside the display domain of the display CRS (e.g. near the antipodal singularity of
+  // a polar stereographic projection) are excluded, since they would make the bounds arbitrarily
+  // large.
+  const inDisplayDomain =
+    warp instanceof MultiscaleGeoWarp
+      ? warp.makeDisplayDomainTest()
+      : () => true;
   const add = (x: number, y: number) => {
     if (warp.forward(x, y, out) === TransformStatus.INVALID) return;
-    for (let i = 0; i < 2; ++i) {
-      resultLower[i] = Math.min(resultLower[i], out[i]);
-      resultUpper[i] = Math.max(resultUpper[i], out[i]);
-    }
+    if (!inDisplayDomain(x, y)) return;
+    include(out[0], out[1]);
   };
   const [x0, y0] = [lower[0], lower[1]];
   const [x1, y1] = [upper[0], upper[1]];
@@ -375,6 +508,17 @@ export function computeWarpedBounds(
     add(x, y1);
     add(x0, y);
     add(x1, y);
+  }
+  // The interior may map outside the image of the boundary, e.g. if the source contains a pole.
+  const n = interiorSamplesPerDimension;
+  for (let i = 1; i < n; ++i) {
+    const x = x0 + (i / n) * (x1 - x0);
+    for (let j = 1; j < n; ++j) {
+      add(x, y0 + (j / n) * (y1 - y0));
+    }
+  }
+  if (warp instanceof MultiscaleGeoWarp) {
+    warp.forEachPoleImage(lower, upper, include);
   }
   if (!(resultLower[0] <= resultUpper[0])) return undefined;
   return { lower: resultLower, upper: resultUpper };

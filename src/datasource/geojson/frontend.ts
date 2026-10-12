@@ -227,14 +227,15 @@ export function makeGeoJsonAnnotationSource(
     );
   };
   const densify = warp !== undefined && !warp.isIdentity;
+  // Annotation identifiers are derived from the feature (and part) identifiers, such that they
+  // do not depend on the warp.
   const annotations: Annotation[] = [];
-  let nextId = 0;
   for (const point of parsed.points) {
     const p = toModel(point.lon, point.lat, point.elevation ?? Number.NaN);
     if (p === undefined) continue;
     annotations.push({
       type: AnnotationType.POINT,
-      id: `${nextId++}`,
+      id: point.id,
       point: p,
       properties: point.properties,
       description: point.description,
@@ -242,13 +243,16 @@ export function makeGeoJsonAnnotationSource(
   }
   for (const lineString of parsed.lineStrings) {
     const { positions } = lineString;
-    // Split the line string into contiguous runs of valid points.
+    // Split the line string into contiguous runs of valid points.  The first run has the
+    // identifier of the line string; subsequent runs have a `.<run index>` suffix.
     let run: Float32Array[] = [];
+    let runIndex = 0;
     const flush = () => {
       if (run.length >= 2) {
+        const index = runIndex++;
         annotations.push({
           type: AnnotationType.POLYLINE,
-          id: `${nextId++}`,
+          id: index === 0 ? lineString.id : `${lineString.id}.${index}`,
           points: run,
           properties: lineString.properties,
           description: lineString.description,
@@ -423,7 +427,7 @@ export class GeoJsonDataSourceProvider
   }
 }
 
-async function detectFormat(
+export async function detectFormat(
   options: AutoDetectFileOptions,
 ): Promise<AutoDetectMatch[]> {
   const text = new TextDecoder().decode(options.prefix).trimStart();
@@ -436,7 +440,9 @@ async function detectFormat(
 
 export function registerAutoDetect(registry: AutoDetectRegistry) {
   registry.registerFileFormat({
-    prefixLength: 4096,
+    // Sufficient for files in which the "type" member appears near the start (e.g. as written by
+    // most tools).  Other files may be specified explicitly with the `geojson:` URL scheme.
+    prefixLength: 512,
     suffixLength: 0,
     match: detectFormat,
   });

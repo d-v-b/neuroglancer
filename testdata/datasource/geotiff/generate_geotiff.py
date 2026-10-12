@@ -173,6 +173,24 @@ def main():
         compression="jpeg",
         tile=(32, 32),
     )
+    write_rgb_jpeg_strips()
+
+
+def write_rgb_jpeg_strips():
+    # The last strip is encoded with only the remaining 13 rows.  Smooth vertical gradient, such
+    # that the lossy compression error is small.
+    y = np.arange(HEIGHT)[:, np.newaxis]
+    data = np.empty((HEIGHT, WIDTH, 3), dtype=np.uint8)
+    data[..., 0] = y * 5
+    data[..., 1] = 128
+    data[..., 2] = 255 - y * 5
+    write(
+        "rgb_jpeg_strips.tif",
+        data,
+        photometric="rgb",
+        compression="jpeg",
+        rowsperstrip=16,
+    )
 
 
 if __name__ == "__main__":

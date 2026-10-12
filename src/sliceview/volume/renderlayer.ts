@@ -32,6 +32,8 @@ import type {
 } from "#src/sliceview/frontend.js";
 import type { GeoChunkMesh } from "#src/sliceview/geo.js";
 import {
+  beginGeoMeshFrame,
+  GEO_MESH_BUILD_BUDGET_MS,
   correctGeoChunkPosition,
   getGeoChunkMesh,
   getGeoChunkMeshCopies,
@@ -650,9 +652,46 @@ void main() {
     return this.multiscaleSource.dataType;
   }
 
-  getValueAt(globalPosition: Float32Array) {
+  /**
+   * Returns the georeferenced sources that are not shown (`GeoRenderingMode.HIDDEN`) in
+   * `sliceView`, e.g. 2-d map tiles in a vertical section.
+   */
+  private getHiddenGeoSources(
+    sliceView: SliceView | undefined,
+  ): Set<unknown> | undefined {
+    if (sliceView === undefined) return undefined;
+    const layerInfo = sliceView.visibleLayers.get(this);
+    if (layerInfo === undefined) return undefined;
+    const projectionParameters = sliceView.projectionParameters.value;
+    let hidden: Set<unknown> | undefined;
+    for (const scales of layerInfo.allSources) {
+      for (const tsource of scales) {
+        if (tsource.geo === undefined) continue;
+        const mode = getGeoRenderingMode(
+          tsource,
+          projectionParameters,
+          getNormalizedChunkLayout(projectionParameters, tsource.chunkLayout),
+        );
+        if (mode === GeoRenderingMode.HIDDEN) {
+          (hidden ??= new Set()).add(tsource.source);
+        }
+      }
+    }
+    return hidden;
+  }
+
+  /**
+   * @param pickState If it specifies the slice view in which `globalPosition` was picked, sources
+   *     that are not shown in that view are skipped.
+   */
+  getValueAt(
+    globalPosition: Float32Array,
+    pickState?: { pickedSliceView?: SliceView },
+  ) {
     const { tempChunkPosition } = this;
+    const hiddenSources = this.getHiddenGeoSources(pickState?.pickedSliceView);
     for (const { source, chunkTransform, geoWarp } of this.visibleSourcesList) {
+      if (hiddenSources?.has(source)) continue;
       if (
         !getChunkPositionFromCombinedGlobalLocalPositions(
           tempChunkPosition,
@@ -666,7 +705,12 @@ void main() {
       }
       if (
         geoWarp !== undefined &&
-        !correctGeoChunkPosition(geoWarp, tempChunkPosition)
+        !correctGeoChunkPosition(
+          geoWarp,
+          tempChunkPosition,
+          source.spec.lowerVoxelBound,
+          source.spec.upperVoxelBound,
+        )
       ) {
         continue;
       }
@@ -825,6 +869,9 @@ void main() {
       : WebGL2RenderingContext.TRIANGLES;
     let presentCount = 0;
     let notPresentCount = 0;
+    beginGeoMeshFrame(transformedSource);
+    const meshDeadline = performance.now() + GEO_MESH_BUILD_BUDGET_MS;
+    let meshesDeferred = false;
     sliceView.forEachVisibleChunk(transformedSource, chunkLayout, (key) => {
       const chunk = chunks.get(key) as VolumeChunk | undefined;
       if (chunk === undefined || chunk.state !== ChunkState.GPU_MEMORY) {
@@ -841,7 +888,15 @@ void main() {
         chunkGridPosition[chunkDimY],
         si,
         sj,
+        performance.now() < meshDeadline,
       );
+      if (mesh === undefined) {
+        // Exceeded the mesh computation budget for this frame.
+        meshesDeferred = true;
+        --presentCount;
+        ++notPresentCount;
+        return;
+      }
       if (mesh.indices.length === 0) return;
       const gpuMesh = getGeoChunkGpuMesh(gl, mesh, staticTransform, si, sj);
       const copies = getGeoChunkMeshCopies(mesh, view);
@@ -924,6 +979,10 @@ void main() {
     gl.disableVertexAttribArray(GEO_POSITION_LOW_ATTRIBUTE_LOCATION);
     gl.disableVertexAttribArray(GEO_CHUNK_POSITION_ATTRIBUTE_LOCATION);
     this.vertexIdHelper.enable();
+    if (meshesDeferred) {
+      // Draw the remaining chunks in the next frame.
+      requestAnimationFrame(() => this.redrawNeeded.dispatch());
+    }
     return [presentCount, notPresentCount];
   }
 

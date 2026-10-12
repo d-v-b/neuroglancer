@@ -968,6 +968,11 @@ export function forEachVisibleVolumetricChunk<
   );
 }
 
+/**
+ * Invokes `callback` for each chunk intersecting the cross section plane.  For warped
+ * (georeferenced) sources, `screenDistance` is the distance in pixels between the center of the view
+ * and the center of the chunk footprint; it is `undefined` for other sources.
+ */
 export function forEachPlaneIntersectingVolumetricChunk<
   RLayer extends MultiscaleVolumetricDataRenderLayer,
 >(
@@ -975,7 +980,7 @@ export function forEachPlaneIntersectingVolumetricChunk<
   localPosition: Float32Array,
   transformedSource: TransformedSource<RLayer>,
   chunkLayout: ChunkLayout,
-  callback: (positionInChunks: vec3) => void,
+  callback: (positionInChunks: vec3, screenDistance?: number) => void,
 ) {
   const geoMode = getGeoRenderingMode(
     transformedSource,
@@ -1075,7 +1080,7 @@ export function forEachPlaneIntersectingVolumetricChunk<
   forEachVolumetricChunkWithinFrustum(
     clippingPlanes,
     transformedSource,
-    callback,
+    (positionInChunks) => callback(positionInChunks),
     isAABBIntersectingPlane,
   );
 }

@@ -223,6 +223,16 @@ export class Crs {
    */
   readonly semiMajorAxis: number;
 
+  /**
+   * Region `[xMin, yMin, xMax, yMax]` (in CRS units) outside of which coordinates are not
+   * meaningful for display, e.g. because they correspond to extreme distortion near a projection
+   * singularity.  For projected CRSs, this extends half the circumference of the Earth from the
+   * false origin (a full world period in x for cylindrical projections, to allow sources spanning
+   * the antimeridian); for geographic CRSs, it covers latitudes within ±90° and longitudes within
+   * ±540°.
+   */
+  readonly displayDomain: [number, number, number, number];
+
   /** @internal */
   readonly proj: Converter;
 
@@ -287,11 +297,33 @@ export class Crs {
     } else {
       this.worldPeriod = undefined;
     }
+    if (this.isGeographic) {
+      this.displayDomain = [-540, -90, 540, 90];
+    } else {
+      const halfHeight = (Math.PI * a) / this.metersPerUnit;
+      const halfWidth = this.worldPeriod ?? halfHeight;
+      const x0: number = (oProj.x0 ?? 0) / this.metersPerUnit;
+      const y0: number = (oProj.y0 ?? 0) / this.metersPerUnit;
+      this.displayDomain = [
+        x0 - halfWidth,
+        y0 - halfHeight,
+        x0 + halfWidth,
+        y0 + halfHeight,
+      ];
+    }
   }
 
   toJSON() {
     return this.id;
   }
+}
+
+/**
+ * Indicates whether `crs` can be used as the display CRS, which requires units of meters or
+ * degrees.
+ */
+export function isDisplayCrsUnitSupported(crs: Crs): boolean {
+  return crs.unit === "m" || crs.unit === "deg";
 }
 
 const crsCache = new Map<string, Crs>();

@@ -178,34 +178,49 @@ export function applySharding(
     chunkGridPosition: ArrayLike<number>,
     baseKey: string,
   ): unknown {
-    let key: unknown = pathPrefix + baseKey;
-    const rank = chunkGridPosition.length;
-    let curCodecs = codecs;
-    while (curCodecs.shardingInfo !== undefined) {
-      const layoutInfo = codecs.layoutInfo[codecs.layoutInfo.length - 1];
-      const { physicalToLogicalDimension, readChunkShape } = layoutInfo;
-      const { subChunkShape, subChunkGridShape, subChunkCodecs } =
-        curCodecs.shardingInfo;
-      const subChunk = new Array<number>(rank);
-      for (
-        let fOrderPhysicalDim = 0;
-        fOrderPhysicalDim < rank;
-        ++fOrderPhysicalDim
-      ) {
-        const subChunkDim =
-          physicalToLogicalDimension[rank - 1 - fOrderPhysicalDim];
-        subChunk[subChunkDim] =
-          Math.floor(
-            (chunkGridPosition[fOrderPhysicalDim] *
-              readChunkShape[subChunkDim]) /
-              subChunkShape[subChunkDim],
-          ) % subChunkGridShape[subChunkDim];
-      }
-      key = { base: key, subChunk };
-      curCodecs = subChunkCodecs;
-    }
-    return key;
+    return getShardedChunkKey(codecs, chunkGridPosition, pathPrefix + baseKey);
   }
 
   return { kvStore, getChunkKey, decodeCodecs };
+}
+
+/**
+ * Returns the key of the (sub-)chunk at `chunkGridPosition` within the (possibly sharded) chunk
+ * stored under `baseKey`.
+ *
+ * `chunkGridPosition` may have additional trailing dimensions beyond the rank of the array (e.g.
+ * the channel dimension added when combining multiple variables), which are ignored.
+ */
+export function getShardedChunkKey(
+  codecs: CodecChainSpec,
+  chunkGridPosition: ArrayLike<number>,
+  baseKey: string,
+): unknown {
+  let key: unknown = baseKey;
+  const layoutInfo = codecs.layoutInfo[codecs.layoutInfo.length - 1];
+  const { physicalToLogicalDimension, readChunkShape } = layoutInfo;
+  // Rank of the array, which excludes any additional dimensions of `chunkGridPosition`.
+  const rank = physicalToLogicalDimension.length;
+  let curCodecs = codecs;
+  while (curCodecs.shardingInfo !== undefined) {
+    const { subChunkShape, subChunkGridShape, subChunkCodecs } =
+      curCodecs.shardingInfo;
+    const subChunk = new Array<number>(rank);
+    for (
+      let fOrderPhysicalDim = 0;
+      fOrderPhysicalDim < rank;
+      ++fOrderPhysicalDim
+    ) {
+      const subChunkDim =
+        physicalToLogicalDimension[rank - 1 - fOrderPhysicalDim];
+      subChunk[subChunkDim] =
+        Math.floor(
+          (chunkGridPosition[fOrderPhysicalDim] * readChunkShape[subChunkDim]) /
+            subChunkShape[subChunkDim],
+        ) % subChunkGridShape[subChunkDim];
+    }
+    key = { base: key, subChunk };
+    curCodecs = subChunkCodecs;
+  }
+  return key;
 }

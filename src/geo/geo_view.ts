@@ -32,26 +32,90 @@
 import type { CoordinateSpace } from "#src/coordinate_transform.js";
 import { makeCoordinateSpace } from "#src/coordinate_transform.js";
 import type { Crs } from "#src/geo/crs.js";
-import { getCrs } from "#src/geo/crs.js";
 import type { TrackableDisplayCrs } from "#src/geo/display_crs.js";
+import { getDisplayCrs } from "#src/geo/display_crs.js";
 import {
   GeographicTransform,
   haversineDistance,
   TransformStatus,
 } from "#src/geo/transform.js";
 import { VerticalAxis } from "#src/geo/vertical.js";
-import type { NavigationState } from "#src/navigation_state.js";
+import type {
+  NavigationState,
+  Position,
+  TrackableZoomInterface,
+} from "#src/navigation_state.js";
 import { TrackableBoolean } from "#src/trackable_boolean.js";
 import type { WatchableValueInterface } from "#src/trackable_value.js";
 import { RefCounted } from "#src/util/disposable.js";
-import { quat } from "#src/util/geom.js";
+import { mat3, quat, vec3 } from "#src/util/geom.js";
 import { NullarySignal } from "#src/util/signal.js";
 
 /**
- * Orientation of north-up cross sections: a rotation by 180 degrees about the x axis, such that
- * the y axis (northing) points up on the screen.
+ * Orientation of north-up cross sections when the display CRS x and y dimensions are the first
+ * and second display dimensions: a rotation by 180 degrees about the x axis, such that the y axis
+ * (northing) points up on the screen.  See `getNorthUpOrientation`.
  */
 export const NORTH_UP_ORIENTATION = quat.fromValues(1, 0, 0, 0);
+
+/**
+ * Returns the orientation (mapping view coordinates to display coordinates) with the specified
+ * display directions of screen right and screen down.
+ */
+function getOrientationFromViewAxes(right: vec3, down: vec3): quat {
+  const normal = vec3.cross(vec3.create(), right, down);
+  const m = mat3.fromValues(
+    right[0],
+    right[1],
+    right[2],
+    down[0],
+    down[1],
+    down[2],
+    normal[0],
+    normal[1],
+    normal[2],
+  );
+  const q = quat.fromMat3(quat.create(), m);
+  return quat.normalize(q, q);
+}
+
+/**
+ * Returns the orientation of north-up cross sections, with screen right along +x (easting) and
+ * screen up along +y (northing).
+ *
+ * @param xDisplay Display dimension (0, 1, or 2) of the display CRS x dimension.
+ * @param yDisplay Display dimension (0, 1, or 2) of the display CRS y dimension.
+ */
+export function getNorthUpOrientation(xDisplay: number, yDisplay: number) {
+  const right = vec3.create();
+  right[xDisplay] = 1;
+  const down = vec3.create();
+  down[yDisplay] = -1;
+  return getOrientationFromViewAxes(right, down);
+}
+
+/**
+ * Returns the orientation of the "yz" cross section relative to the north-up orientation for
+ * geospatial displays: north to the right, and the remaining display dimension (normally the
+ * vertical dimension) upward.  For display dimensions `[x, y, vertical]`, this is
+ * `GEO_YZ_RELATIVE_ORIENTATION`.
+ */
+export function getGeoYzRelativeOrientation(
+  xDisplay: number,
+  yDisplay: number,
+) {
+  const verticalDisplay = 3 - xDisplay - yDisplay;
+  const right = vec3.create();
+  right[yDisplay] = 1;
+  const down = vec3.create();
+  down[verticalDisplay] = -1;
+  const northUp = getNorthUpOrientation(xDisplay, yDisplay);
+  return quat.multiply(
+    quat.create(),
+    quat.invert(northUp, northUp),
+    getOrientationFromViewAxes(right, down),
+  );
+}
 
 /**
  * Describes how the display CRS maps to the global coordinate space.
@@ -215,9 +279,10 @@ export type GeoPanelView =
 
 /**
  * Orientation of the "yz" cross section relative to the north-up map orientation, for geospatial
- * displays: north to the right and the vertical dimension upward (rather than horizontal, as for
- * the default "yz" orientation).  Composed with the north-up orientation, it maps view x (right)
- * to +y, view y (down) to -z, and view z (into the screen) to -x.
+ * displays with display dimensions `[x, y, vertical]`: north to the right and the vertical
+ * dimension upward (rather than horizontal, as for the default "yz" orientation).  Composed with
+ * the north-up orientation, it maps view x (right) to +y, view y (down) to -z, and view z (into the
+ * screen) to -x.  See `getGeoYzRelativeOrientation` for other display dimension orders.
  */
 export const GEO_YZ_RELATIVE_ORIENTATION = quat.fromValues(
   0.5,
@@ -348,10 +413,13 @@ export function formatLatitudeLongitude(
  * Restricts an orientation to rotations about the view normal relative to the north-up
  * orientation (swing-twist decomposition).
  */
-export function restrictToMapPlane(orientation: quat): boolean {
+export function restrictToMapPlane(
+  orientation: quat,
+  northUpOrientation: quat = NORTH_UP_ORIENTATION,
+): boolean {
   const rel = quat.multiply(
     quat.create(),
-    quat.invert(quat.create(), NORTH_UP_ORIENTATION),
+    quat.invert(quat.create(), northUpOrientation),
     orientation,
   );
   // Twist about the z axis.
@@ -366,7 +434,7 @@ export function restrictToMapPlane(orientation: quat): boolean {
     z /= norm;
   }
   const twist = quat.fromValues(0, 0, z, w);
-  const restricted = quat.multiply(quat.create(), NORTH_UP_ORIENTATION, twist);
+  const restricted = quat.multiply(quat.create(), northUpOrientation, twist);
   let changed = false;
   for (let i = 0; i < 4; ++i) {
     if (Math.abs(restricted[i] - orientation[i]) > 1e-7) changed = true;
@@ -408,6 +476,19 @@ export function normalizeCrsPosition(
 }
 
 /**
+ * Navigation state (other than the position and cross-section zoom of the viewer) that is
+ * converted to preserve the geographic location and ground resolution when the display CRS
+ * changes.
+ */
+export interface GeoNavigationTarget {
+  /**
+   * Position to convert, or `undefined` if it is linked to the viewer position.
+   */
+  position: Position | undefined;
+  zooms: TrackableZoomInterface[];
+}
+
+/**
  * Viewer-level geospatial state.
  */
 export class GeoViewState extends RefCounted {
@@ -420,6 +501,15 @@ export class GeoViewState extends RefCounted {
 
   private info_: GeoDisplayInfo | undefined;
   private infoStale = true;
+  private infoCoordinateSpace: CoordinateSpace | undefined;
+  private navigationTargets = new Set<() => GeoNavigationTarget>();
+
+  /**
+   * Names of the vertical dimensions registered since the display CRS was set, including those of
+   * data sources that are currently unloaded (e.g. while being reprojected).  Their scales are
+   * converted along with the display CRS units.
+   */
+  private verticalDimensionNames = new Set<string>();
 
   constructor(
     public displayCrs: TrackableDisplayCrs,
@@ -431,10 +521,25 @@ export class GeoViewState extends RefCounted {
       this.infoStale = true;
       this.changed.dispatch();
     };
-    this.registerDisposer(displayCrs.changed.add(invalidate));
-    this.registerDisposer(displayCrs.verticalAxesChanged.add(invalidate));
+    this.registerDisposer(
+      displayCrs.changed.add(() => {
+        if (displayCrs.value === undefined) this.verticalDimensionNames.clear();
+        invalidate();
+      }),
+    );
+    this.registerDisposer(
+      displayCrs.verticalAxesChanged.add(() => {
+        for (const name of displayCrs.verticalAxes.keys()) {
+          this.verticalDimensionNames.add(name);
+        }
+        invalidate();
+      }),
+    );
     this.registerDisposer(displayCrs.numGeoSourcesChanged.add(invalidate));
     this.registerDisposer(coordinateSpace.changed.add(invalidate));
+    this.registerDisposer(
+      navigationState.displayDimensions.changed.add(this.changed.dispatch),
+    );
     this.registerDisposer(
       this.showGraticule.changed.add(this.changed.dispatch),
     );
@@ -445,10 +550,24 @@ export class GeoViewState extends RefCounted {
     this.registerDisposer(
       orientation.changed.add(() => this.handleOrientationChanged()),
     );
-    // Orient north-up when a geospatial display is first established.
     this.registerDisposer(
-      this.changed.add(() => this.maybeInitializeOrientation()),
+      this.changed.add(() => {
+        this.maybeEstablishDisplay();
+        // Orient north-up, also when the display dimensions change.
+        this.handleOrientationChanged();
+      }),
     );
+  }
+
+  /**
+   * Registers additional navigation state to convert when the display CRS changes.  Returns a
+   * function that unregisters it.
+   */
+  registerNavigationTarget(getTarget: () => GeoNavigationTarget) {
+    this.navigationTargets.add(getTarget);
+    return () => {
+      this.navigationTargets.delete(getTarget);
+    };
   }
 
   private verticalAxisCache = new Map<number[], VerticalAxis>();
@@ -490,32 +609,139 @@ export class GeoViewState extends RefCounted {
   }
 
   get info(): GeoDisplayInfo | undefined {
-    if (this.infoStale) {
+    const coordinateSpace = this.coordinateSpace.value;
+    // The info is also recomputed if the coordinate space changed but the change has not yet been
+    // signaled to this object, e.g. when handling a position change signaled first.
+    if (this.infoStale || coordinateSpace !== this.infoCoordinateSpace) {
       this.infoStale = false;
+      this.infoCoordinateSpace = coordinateSpace;
       this.info_ = getGeoDisplayInfo(
         this.displayCrs.numGeoSources === 0 ? undefined : this.displayCrs.crs,
         this.displayCrs.dimensionNames,
-        this.coordinateSpace.value,
+        coordinateSpace,
       );
     }
     return this.info_;
   }
 
-  private orientationInitialized = false;
+  /**
+   * Returns the display dimensions (0, 1, or 2) of the display CRS x and y dimensions, or
+   * `undefined` if they are not both display dimensions.
+   */
+  private getGeoDisplayDimensions(info: GeoDisplayInfo) {
+    const { displayDimensionIndices, displayRank } =
+      this.navigationState.displayDimensions.value;
+    let xDisplay = -1;
+    let yDisplay = -1;
+    for (let d = 0; d < displayRank; ++d) {
+      const dim = displayDimensionIndices[d];
+      if (dim === info.xDim) xDisplay = d;
+      else if (dim === info.yDim) yDisplay = d;
+    }
+    if (xDisplay === -1 || yDisplay === -1) return undefined;
+    return { xDisplay, yDisplay };
+  }
 
-  private maybeInitializeOrientation() {
-    if (this.orientationInitialized || this.info === undefined) return;
-    this.orientationInitialized = true;
-    this.handleOrientationChanged();
+  /**
+   * Returns the orientation of north-up cross sections, or `undefined` if the display is not
+   * geospatial.
+   */
+  getNorthUpOrientation(): quat | undefined {
+    const info = this.info;
+    if (info === undefined) return undefined;
+    const dims = this.getGeoDisplayDimensions(info);
+    if (dims === undefined) return undefined;
+    return getNorthUpOrientation(dims.xDisplay, dims.yDisplay);
+  }
+
+  /**
+   * Returns the orientation of "yz" cross sections relative to the north-up orientation, or
+   * `undefined` if the display is not geospatial.  See `getGeoYzRelativeOrientation`.
+   */
+  getYzRelativeOrientation(): quat | undefined {
+    const info = this.info;
+    if (info === undefined) return undefined;
+    const dims = this.getGeoDisplayDimensions(info);
+    if (dims === undefined) return undefined;
+    return getGeoYzRelativeOrientation(dims.xDisplay, dims.yDisplay);
+  }
+
+  /**
+   * Indicates that the geospatial display has been established (see `maybeEstablishDisplay`);
+   * cleared when no georeferenced data source remains loaded.
+   */
+  private established = false;
+
+  /**
+   * When a geospatial display is first established, ensures that the display CRS x and y
+   * dimensions are the first two display dimensions, followed by a vertical dimension if any, and
+   * orients the view north-up.  Data sources may order the dimensions differently, e.g.
+   * `(time, depth, lat, lon)`, such that the default display dimensions would not include both.
+   */
+  private maybeEstablishDisplay() {
+    if (this.displayCrs.numGeoSources === 0) {
+      this.established = false;
+      return;
+    }
+    if (this.established) return;
+    const info = this.info;
+    if (info === undefined) return;
+    this.established = true;
+    // The default (identity) orientation, which may be a rotation within the map plane, becomes
+    // north-up; other orientations are restricted to the map plane by `handleOrientationChanged`.
+    // This is determined before changing the display dimensions, which may restrict the
+    // orientation.
+    const { orientation } = this.navigationState.pose;
+    const q = orientation.orientation;
+    const isDefaultOrientation = q[0] === 0 && q[1] === 0 && q[2] === 0;
+    this.initializeDisplayDimensions(info);
+    const northUp = this.getNorthUpOrientation();
+    if (northUp !== undefined && isDefaultOrientation) {
+      quat.copy(q, northUp);
+      orientation.changed.dispatch();
+    }
+  }
+
+  private initializeDisplayDimensions(info: GeoDisplayInfo) {
+    const { displayDimensions } = this.navigationState;
+    const { displayDimensionIndices, displayRank } = displayDimensions.value;
+    const { xDim, yDim } = info;
+    const current = Array.from(
+      displayDimensionIndices.subarray(0, displayRank),
+    );
+    const xDisplay = current.indexOf(xDim);
+    const yDisplay = current.indexOf(yDim);
+    if (xDisplay === 0 && yDisplay === 1) return;
+    // Respect an explicitly-specified order of display dimensions that includes both.
+    if (xDisplay !== -1 && yDisplay !== -1 && !displayDimensions.default) {
+      return;
+    }
+    let third = -1;
+    const { rank } = this.coordinateSpace.value;
+    for (let dim = 0; dim < rank; ++dim) {
+      if (dim === xDim || dim === yDim) continue;
+      if (this.getVerticalAxis(dim) !== undefined) {
+        third = dim;
+        break;
+      }
+    }
+    if (third === -1) {
+      third = current.find((dim) => dim !== xDim && dim !== yDim) ?? -1;
+    }
+    displayDimensions.setDimensionIndices(
+      third === -1 ? 2 : 3,
+      Int32Array.of(xDim, yDim, third),
+    );
   }
 
   private updatingOrientation = false;
 
   private handleOrientationChanged() {
-    if (this.updatingOrientation || this.info === undefined) return;
+    if (this.updatingOrientation) return;
+    const northUp = this.getNorthUpOrientation();
+    if (northUp === undefined) return;
     const orientation = this.navigationState.pose.orientation;
-    this.orientationInitialized = true;
-    if (restrictToMapPlane(orientation.orientation)) {
+    if (restrictToMapPlane(orientation.orientation, northUp)) {
       this.updatingOrientation = true;
       try {
         orientation.changed.dispatch();
@@ -566,44 +792,56 @@ export class GeoViewState extends RefCounted {
 
   /**
    * Changes the display CRS, preserving the geographic location and ground resolution of the
-   * view.
+   * view (of the viewer, and of registered navigation targets).
+   *
+   * @throws Error if the CRS is not supported, or its units are not supported for display.
    */
   setDisplayCrs(specification: string) {
-    const newCrs = getCrs(specification);
+    const newCrs = getDisplayCrs(specification);
     const { displayCrs, navigationState } = this;
     if (displayCrs.value === newCrs.id) return;
-    const info = this.info;
-    const center = this.getCenterLonLat();
-    let metersPerPixel: number | undefined;
-    if (info !== undefined && center !== undefined) {
-      const { zoomFactor } = navigationState;
-      const renderInfo = navigationState.displayDimensionRenderInfo.value;
-      const unitsPerPixel =
-        zoomFactor.value * renderInfo.canonicalVoxelPhysicalSize;
-      const distance = groundDistance(
-        info,
-        navigationState.position.value,
-        unitsPerPixel / info.xScale,
-        0,
-      );
-      if (distance !== undefined) metersPerPixel = distance;
-    }
-    if (info !== undefined) {
+    // The display CRS dimensions are converted even if no georeferenced data source is currently
+    // loaded (e.g. while data sources are reprojected after a previous change), such that their
+    // units remain consistent with the display CRS.
+    const oldInfo = getGeoDisplayInfo(
+      displayCrs.crs,
+      displayCrs.dimensionNames,
+      this.coordinateSpace.value,
+    );
+    const restorers: ((newInfo: GeoDisplayInfo) => void)[] = [];
+    if (oldInfo !== undefined) {
+      const targets: GeoNavigationTarget[] = [
+        {
+          position: navigationState.position,
+          zooms: [navigationState.zoomFactor],
+        },
+      ];
+      for (const getTarget of this.navigationTargets) {
+        targets.push(getTarget());
+      }
+      for (const target of targets) {
+        const restore = captureNavigationTarget(
+          oldInfo,
+          target,
+          navigationState.position,
+        );
+        if (restore !== undefined) restorers.push(restore);
+      }
       // Convert the units and scales of the display CRS dimensions of the global coordinate space,
       // such that layers reprojected into the new CRS are merged into the same dimensions.
       const space = this.coordinateSpace.value;
       const unit = newCrs.unit === "deg" ? "deg" : "m";
       const units = Array.from(space.units);
       const scales = new Float64Array(space.scales);
-      const conversion = info.crs.metersPerUnit / newCrs.metersPerUnit;
-      for (const dim of [info.xDim, info.yDim]) {
+      const conversion = oldInfo.crs.metersPerUnit / newCrs.metersPerUnit;
+      for (const dim of [oldInfo.xDim, oldInfo.yDim]) {
         units[dim] = unit;
         scales[dim] = space.scales[dim] * conversion;
       }
       // Vertical dimensions are scaled relative to the CRS units to preserve vertical
       // exaggeration.
       for (let dim = 0; dim < space.rank; ++dim) {
-        if (this.getVerticalAxis(dim) !== undefined) {
+        if (this.verticalDimensionNames.has(space.names[dim])) {
           scales[dim] = space.scales[dim] * conversion;
         }
       }
@@ -620,21 +858,73 @@ export class GeoViewState extends RefCounted {
         });
     }
     displayCrs.value = newCrs.id;
-    const newInfo = this.info;
-    if (newInfo === undefined || center === undefined) return;
-    const { position } = navigationState;
-    const newPosition = new Float32Array(position.value);
-    if (lonLatToGlobal(newInfo, center[0], center[1], newPosition)) {
-      position.value = newPosition;
-    }
-    if (metersPerPixel !== undefined) {
-      const metersPerUnit = groundDistance(newInfo, newPosition, 1, 0);
-      const renderInfo = navigationState.displayDimensionRenderInfo.value;
-      if (metersPerUnit !== undefined && metersPerUnit > 0) {
-        const unitsPerPixel = (metersPerPixel / metersPerUnit) * newInfo.xScale;
-        navigationState.zoomFactor.value =
-          unitsPerPixel / renderInfo.canonicalVoxelPhysicalSize;
+    const newInfo = getGeoDisplayInfo(
+      newCrs,
+      displayCrs.dimensionNames,
+      this.coordinateSpace.value,
+    );
+    if (newInfo === undefined) return;
+    for (const restore of restorers) restore(newInfo);
+  }
+}
+
+/**
+ * Returns the ground distance in meters per display CRS unit along the x axis at the specified
+ * position, or `undefined` if it cannot be determined.
+ */
+function getMetersPerCrsUnit(
+  info: GeoDisplayInfo,
+  globalPosition: ArrayLike<number>,
+) {
+  const distance = groundDistance(info, globalPosition, 1, 0);
+  if (distance === undefined || !(distance > 0) || !Number.isFinite(distance)) {
+    return undefined;
+  }
+  return distance / info.xScale;
+}
+
+/**
+ * Captures the geographic location and ground resolution of a navigation target before a display
+ * CRS change, and returns a function that restores them after the change.
+ *
+ * @param viewerPosition Position at which to compute the ground resolution if the target's position
+ *     is linked to the viewer position.
+ */
+function captureNavigationTarget(
+  info: GeoDisplayInfo,
+  target: GeoNavigationTarget,
+  viewerPosition: Position,
+): ((newInfo: GeoDisplayInfo) => void) | undefined {
+  const position = target.position ?? viewerPosition;
+  if (!position.valid) return undefined;
+  const oldPosition = Float32Array.from(position.value);
+  if (oldPosition.length <= Math.max(info.xDim, info.yDim)) return undefined;
+  const lonLat = new Float64Array(2);
+  const lonLatValid =
+    target.position !== undefined && globalToLonLat(info, oldPosition, lonLat);
+  const oldMetersPerUnit = getMetersPerCrsUnit(info, oldPosition);
+  const physicalZooms = target.zooms.map(
+    (zoom) => zoom.value * zoom.canonicalVoxelPhysicalSize,
+  );
+  return (newInfo: GeoDisplayInfo) => {
+    if (lonLatValid) {
+      const newPosition = new Float32Array(position.value);
+      if (lonLatToGlobal(newInfo, lonLat[0], lonLat[1], newPosition)) {
+        position.value = newPosition;
       }
     }
-  }
+    if (oldMetersPerUnit === undefined) return;
+    const newMetersPerUnit = getMetersPerCrsUnit(newInfo, position.value);
+    if (newMetersPerUnit === undefined) return;
+    const factor = oldMetersPerUnit / newMetersPerUnit;
+    target.zooms.forEach((zoom, i) => {
+      const physical = physicalZooms[i];
+      if (!Number.isFinite(physical)) return;
+      // Reading the value first updates it for the new coordinate space.
+      if (Number.isNaN(zoom.value)) return;
+      const { canonicalVoxelPhysicalSize } = zoom;
+      if (!(canonicalVoxelPhysicalSize > 0)) return;
+      zoom.value = (physical * factor) / canonicalVoxelPhysicalSize;
+    });
+  };
 }

@@ -14,9 +14,14 @@ their data, e.g. a UTM zone for a Sentinel-2 image. All georeferenced data
 sources are reprojected on the fly into a single *display CRS*, specified by the
 :json:schema:`ViewerState.crs` property of the viewer state as an EPSG code
 (e.g. ``"EPSG:4326"`` for longitude/latitude, ``"EPSG:3857"`` for Web Mercator,
-``"EPSG:3413"`` for polar stereographic) or a proj4 definition. If it is not
-specified, the CRS of the first georeferenced data source that is loaded is
-used.
+``"EPSG:3413"`` for polar stereographic) or a proj4 definition. The display CRS
+must have units of metres or degrees. If it is not specified, the CRS of the
+first georeferenced data source that is loaded is adopted (or ``EPSG:4326``, if
+the units of that CRS are not supported for display, e.g. US survey feet). An
+adopted display CRS is cleared again when the last georeferenced layer is
+removed or archived, such that the next georeferenced data source determines
+it. Restoring a viewer state without a :json:schema:`ViewerState.crs` property
+keeps the current display CRS.
 
 The two horizontal dimensions of every georeferenced data source are named
 ``x`` (easting or longitude) and ``y`` (northing or latitude), and hold display
@@ -25,7 +30,11 @@ dimensions, such as time, depth, or spectral bands, are unaffected.
 
 The display CRS can be changed using the CRS field in the top bar. Changing the
 display CRS preserves the geographic location and ground resolution of the
-view.
+view, including the 3-d view and layer groups with unlinked position or zoom.
+Georeferenced data sources are then reloaded to reproject them; customizations
+of their coordinate transforms are preserved, except for the georeferenced and
+vertical dimensions, which are reset to their defaults since they depend on the
+display CRS units.
 
 Supported CRSs
 ~~~~~~~~~~~~~~
@@ -82,8 +91,13 @@ User interface
 
 When a display CRS is set, the viewer adapts to the geometry of the Earth:
 
-- Cross sections are oriented north-up, and may only be rotated within the map
-  plane.
+- Cross sections are oriented north-up (east to the right and north up,
+  regardless of the order of the display dimensions), and may only be rotated
+  within the map plane. When a geospatial display is established, the display
+  dimensions are set to ``x``, ``y``, and the vertical dimension (if any),
+  unless explicitly specified display dimensions include both ``x`` and ``y``.
+  The ``yz`` panel of the 4-panel layouts shows a north-south vertical section,
+  with north to the right and the vertical dimension upward.
 - The top bar shows the latitude and longitude under the mouse pointer (or at
   the center of the view), and the display CRS.
 - Scale bars show great-circle ground distance at the center of the view. If the

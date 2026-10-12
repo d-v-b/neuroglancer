@@ -61,9 +61,11 @@ export class GeoStatusWidget extends RefCounted {
     crsInput.addEventListener("change", () => this.applyCrsInput());
     crsInput.addEventListener("keydown", (event) => {
       if (event.key === "Enter") {
-        this.applyCrsInput();
-        crsInput.blur();
+        // Keep the focus on errors, to keep the error message visible.
+        if (this.applyCrsInput()) crsInput.blur();
       } else if (event.key === "Escape") {
+        crsInput.classList.remove("neuroglancer-geo-status-crs-invalid");
+        crsInput.setCustomValidity("");
         this.updateView();
         crsInput.blur();
       }
@@ -85,20 +87,30 @@ export class GeoStatusWidget extends RefCounted {
     this.updateView();
   }
 
-  private applyCrsInput() {
+  /**
+   * Applies the entered display CRS.  Returns `false` if it is invalid.
+   */
+  private applyCrsInput(): boolean {
     const { crsInput } = this;
     const value = crsInput.value.trim();
     if (value === "" || value === this.geoView.displayCrs.value) {
       this.updateView();
-      return;
+      return true;
     }
     try {
       this.geoView.setDisplayCrs(value);
       crsInput.classList.remove("neuroglancer-geo-status-crs-invalid");
+      crsInput.setCustomValidity("");
       crsInput.title = this.geoView.displayCrs.value ?? "";
+      return true;
     } catch (e) {
+      // E.g. unsupported CRS, or units other than metres or degrees.
+      const { message } = e as Error;
       crsInput.classList.add("neuroglancer-geo-status-crs-invalid");
-      crsInput.title = (e as Error).message;
+      crsInput.title = message;
+      crsInput.setCustomValidity(message);
+      crsInput.reportValidity();
+      return false;
     }
   }
 

@@ -25,7 +25,7 @@ import {
 } from "#src/coordinate_transform.js";
 import type { DataSource, DataSubsourceEntry } from "#src/datasource/index.js";
 import type { Crs } from "#src/geo/crs.js";
-import { getCrs } from "#src/geo/crs.js";
+import { getCrs, isDisplayCrsUnitSupported } from "#src/geo/crs.js";
 import { GEO_DIMENSION_NAMES } from "#src/geo/display_crs.js";
 import type { Affine2d, GeoWarpSpec } from "#src/geo/source_warp.js";
 import {
@@ -99,6 +99,11 @@ export interface ReprojectedDataSourceInfo {
   geoWarp: GeoWarpSpec;
   sourceCrs: Crs;
   displayCrs: Crs;
+  /**
+   * Identifiers of subsources omitted because they cannot be reprojected (geometric subsources
+   * other than volumes and georeferenced annotations, if the reprojection is not the identity).
+   */
+  droppedSubsources: string[];
 }
 
 /**
@@ -114,7 +119,7 @@ export function reprojectDataSource(
     throw new Error("Data source is not georeferenced");
   }
   const sourceCrs = getCrs(geoReference.crs);
-  if (displayCrs.unit !== "m" && displayCrs.unit !== "deg") {
+  if (!isDisplayCrsUnitSupported(displayCrs)) {
     throw new Error(
       `Display CRS ${displayCrs.id} must have units of meters or degrees`,
     );
@@ -252,6 +257,7 @@ export function reprojectDataSource(
   };
 
   const subsources: DataSubsourceEntry[] = [];
+  const droppedSubsources: string[] = [];
   for (const entry of dataSource.subsources) {
     const { subsource } = entry;
     if (subsource.geoAnnotations !== undefined) {
@@ -274,12 +280,15 @@ export function reprojectDataSource(
         },
       });
     } else if (
-      subsource.staticAnnotations !== undefined ||
-      subsource.annotation !== undefined ||
-      subsource.mesh !== undefined ||
-      subsource.singleMesh !== undefined
+      !multiscaleWarp.isIdentity &&
+      (subsource.staticAnnotations !== undefined ||
+        subsource.annotation !== undefined ||
+        subsource.mesh !== undefined ||
+        subsource.singleMesh !== undefined)
     ) {
-      // Geometric subsources other than volumes are not reprojected.
+      // Geometric subsources other than volumes are not reprojected.  If the reprojection is the
+      // identity, the affine approximation of the model transform is exact, and they are retained.
+      droppedSubsources.push(entry.id);
       continue;
     } else {
       subsources.push(entry);
@@ -295,6 +304,6 @@ export function reprojectDataSource(
       modelDimensions: [o0, o1],
       verticalDimensions: geoReference.verticalDimensions,
     },
-    reprojection: { geoWarp, sourceCrs, displayCrs },
+    reprojection: { geoWarp, sourceCrs, displayCrs, droppedSubsources },
   };
 }

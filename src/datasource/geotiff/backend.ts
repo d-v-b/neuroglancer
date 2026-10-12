@@ -19,13 +19,20 @@ import { decodeZstd } from "#src/async_computation/decode_zstd_request.js";
 import { requestAsyncComputation } from "#src/async_computation/request.js";
 import { WithParameters } from "#src/chunk_manager/backend.js";
 import { GeoTiffTileSourceParameters } from "#src/datasource/geotiff/base.js";
-import type { ImageDecoders } from "#src/datasource/geotiff/decode.js";
-import {
-  copyTileToChunk,
-  decodeSamples,
-  decompressTile,
-  makeChunkData,
+import type {
+  DecodedTiffTile,
+  ImageDecoders,
 } from "#src/datasource/geotiff/decode.js";
+import {
+  decodeTiffTile,
+  makeChunkData,
+  readTiffChunk,
+} from "#src/datasource/geotiff/decode.js";
+import { getByteRangeFromResponse } from "#src/datasource/geotiff/tiff.js";
+import {
+  CoalescingRangeReader,
+  DecodedTileCache,
+} from "#src/datasource/geotiff/tile_cache.js";
 import { WithSharedKvStoreContextCounterpart } from "#src/kvstore/backend.js";
 import { postProcessRawData } from "#src/sliceview/backend_chunk_decoders/postprocess.js";
 import type { VolumeChunk } from "#src/sliceview/volume/backend.js";
@@ -34,6 +41,11 @@ import {
   VolumeChunkSource,
 } from "#src/sliceview/volume/backend.js";
 import { registerSharedObject } from "#src/worker_rpc.js";
+
+/**
+ * Maximum total size of the decoded strips cached per chunk source.
+ */
+const MAX_CACHED_TILE_BYTES = 64 * 1024 * 1024;
 
 async function decodeWebp(
   data: Uint8Array<ArrayBuffer>,
@@ -74,27 +86,47 @@ export class GeoTiffTileSource extends WithParameters(
     this.parameters.url,
   );
 
-  async download(chunk: VolumeChunk, signal: AbortSignal): Promise<void> {
-    const { parameters, spec } = this;
-    computeChunkBounds(this, chunk);
-    const chunkDataSize = chunk.chunkDataSize!;
-    const [width, height] = chunkDataSize;
-    const [tx, ty] = chunk.chunkGridPosition;
-    const { format, samplesPerPixel, planarConfiguration, tilesAcross } =
-      parameters;
-    const tileIndex = ty * tilesAcross + tx;
-    const planes = planarConfiguration === 2 ? samplesPerPixel : 1;
+  private rangeReader = new CoalescingRangeReader(
+    async (offset, length, signal) => {
+      const { store, path } = this.kvStore;
+      const response = await store.read(path, {
+        signal,
+        byteRange: { offset, length },
+        throwIfMissing: true,
+      });
+      return getByteRangeFromResponse(response!, offset, length);
+    },
+  );
+
+  private tileCache = new DecodedTileCache<DecodedTiffTile | undefined>(
+    MAX_CACHED_TILE_BYTES,
+    (tile) => tile?.data.byteLength ?? 0,
+  );
+
+  private async downloadTile(
+    index: number,
+    rows: number,
+    signal: AbortSignal,
+  ): Promise<DecodedTiffTile | undefined> {
+    const { parameters } = this;
+    const { format } = parameters;
+    const offset = parameters.offsets[index];
+    const length = parameters.byteCounts[index];
+    if (!length) {
+      // Sparse tile.
+      return undefined;
+    }
     const decoders: ImageDecoders = {
-      jpeg: async (data, numComponents) =>
+      jpeg: async (data, numComponents, width, height) =>
         (
           await requestAsyncComputation(
             decodeJpeg,
             signal,
             [data.buffer as ArrayBuffer],
             data as Uint8Array<ArrayBuffer>,
+            width,
+            height,
             undefined,
-            undefined,
-            format.tileWidth * format.tileHeight,
             numComponents,
             false,
           )
@@ -109,48 +141,36 @@ export class GeoTiffTileSource extends WithParameters(
       webp: (data, numComponents) =>
         decodeWebp(data as Uint8Array<ArrayBuffer>, numComponents),
     };
+    // Must be called synchronously, such that the reads of all tiles of a chunk are coalesced.
+    const compressed = await this.rangeReader.read(offset, length, signal);
+    return decodeTiffTile(compressed, format, rows, decoders);
+  }
+
+  async download(chunk: VolumeChunk, signal: AbortSignal): Promise<void> {
+    const { parameters, spec } = this;
+    const [x0, y0] = computeChunkBounds(this, chunk);
+    const [width, height] = chunk.chunkDataSize!;
+    const { layout } = parameters;
     const output = makeChunkData(
       spec.dataType,
-      width * height * samplesPerPixel,
+      width * height * layout.samplesPerPixel,
     );
-    let empty = true;
-    await Promise.all(
-      Array.from({ length: planes }, async (_, plane) => {
-        const index = plane * parameters.tilesPerPlane + tileIndex;
-        const offset = parameters.offsets[index];
-        const length = parameters.byteCounts[index];
-        if (!length) {
-          // Sparse tile.
-          return;
-        }
-        const { store, path } = this.kvStore;
-        const response = await store.read(path, {
-          signal,
-          byteRange: { offset, length },
-          throwIfMissing: true,
-        });
-        const compressed = new Uint8Array(
-          await response!.response.arrayBuffer(),
-        );
-        const decompressed = await decompressTile(compressed, format, decoders);
-        const samples = decompressed.planar
-          ? decompressed.data
-          : decodeSamples(decompressed.data, format);
-        copyTileToChunk(
-          output,
-          width,
-          height,
-          samples,
-          decompressed.planar,
-          format.tileWidth,
-          format.tileHeight,
-          format.samplesPerTile,
-          plane,
-        );
-        empty = false;
-      }),
+    const getTile = parameters.cacheTiles
+      ? (index: number, rows: number) =>
+          this.tileCache.get(index, signal, (sharedSignal) =>
+            this.downloadTile(index, rows, sharedSignal),
+          )
+      : (index: number, rows: number) => this.downloadTile(index, rows, signal);
+    const nonEmpty = await readTiffChunk(
+      output,
+      x0,
+      y0,
+      width,
+      height,
+      layout,
+      getTile,
     );
-    if (empty) return;
+    if (!nonEmpty) return;
     await postProcessRawData(
       chunk,
       signal,

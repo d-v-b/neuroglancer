@@ -442,6 +442,24 @@ export class LayerGroupViewer extends RefCounted {
         );
       }, this.viewerNavigationState.position.link),
     );
+    const { geoView } = viewerState;
+    if (geoView !== undefined) {
+      // Unlinked navigation state is not converted along with that of the viewer when the display
+      // CRS changes.
+      const navigation = this.viewerNavigationState;
+      const unlinked = (link: { value: NavigationLinkType }) =>
+        link.value === NavigationLinkType.UNLINKED;
+      this.registerDisposer(
+        geoView.registerNavigationTarget(() => ({
+          position: unlinked(navigation.position.link)
+            ? navigation.position.value
+            : undefined,
+          zooms: [navigation.crossSectionScale, navigation.projectionScale]
+            .filter((zoom) => unlinked(zoom.link))
+            .map((zoom) => zoom.value),
+        })),
+      );
+    }
     if (!(this.layerSpecification instanceof LayerSubsetSpecification)) {
       this.state.add("layers", {
         changed: this.layerSpecification.changed,

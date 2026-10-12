@@ -21,8 +21,11 @@ import {
   getRegularAxis,
   getXarrayDatasetDefaultShader,
   getXarrayDefaultShader,
+  isGeographicCoordinate,
   isVectorPair,
+  pressureToAltitude,
   selectXarrayVariables,
+  unpackCfValues,
 } from "#src/datasource/zarr/geo.js";
 import type { ArrayMetadata } from "#src/datasource/zarr/metadata/index.js";
 import { DataType } from "#src/util/data_type.js";
@@ -30,21 +33,22 @@ import { DataType } from "#src/util/data_type.js";
 function makeMetadata(
   attrs: Record<string, unknown>,
   fillValue: number = Number.NaN,
+  dataType: DataType = DataType.FLOAT32,
 ): ArrayMetadata {
   return {
-    dataType: DataType.FLOAT32,
+    dataType,
     fillValue,
     userAttributes: attrs,
   } as unknown as ArrayMetadata;
 }
 
 function makeArrays(
-  entries: [string, string[], number[]][],
+  entries: [string, string[], number[], Record<string, unknown>?][],
 ): Map<string, XarrayArrayInfo> {
   return new Map(
-    entries.map(([name, dims, shape]) => [
+    entries.map(([name, dims, shape, attrs = {}]) => [
       name,
-      { dims, shape, chunks: shape, dtype: '"<f4"', attrs: {} },
+      { dims, shape, chunks: shape, dtype: '"<f4"', attrs },
     ]),
   );
 }
@@ -72,13 +76,137 @@ describe("xarray georeferencing", () => {
     }
   });
 
+  it("uses CF bounds for the spacing of a single coordinate", () => {
+    expect(getRegularAxis([45], [44.5, 45.5])).toEqual({ start: 45, step: 1 });
+    expect(getRegularAxis([45], [45.5, 44.5])).toEqual({
+      start: 45,
+      step: -1,
+    });
+    expect(getRegularAxis([45], [45, 45])).toBe(undefined);
+  });
+
+  it("detects geographic coordinates", () => {
+    const cases: [
+      "longitude" | "latitude",
+      number[],
+      Record<string, unknown>,
+    ][] = [
+      ["longitude", [-180, 0, 179.5], {}],
+      ["longitude", [0, 180, 359.75], { units: "degrees_east" }],
+      ["longitude", [0, 1], { units: "degree_E", standard_name: "longitude" }],
+      ["longitude", [0, 1], { units: "degreesE" }],
+      ["longitude", [0, 1], { units: "degrees" }],
+      ["latitude", [-90, 0, 90], { units: "degrees_north" }],
+      ["latitude", [90.00001, 0], { units: "degree_N" }],
+      ["latitude", [10, 20], { standard_name: "latitude" }],
+    ];
+    for (const [kind, values, attrs] of cases) {
+      expect(
+        isGeographicCoordinate(kind, values, attrs),
+        JSON.stringify([kind, values, attrs]),
+      ).toBe(true);
+    }
+  });
+
+  it("rejects geographic coordinates with non-degree units", () => {
+    expect(isGeographicCoordinate("longitude", [0, 1000], { units: "m" })).toBe(
+      false,
+    );
+    expect(
+      isGeographicCoordinate("longitude", [0, 1], { units: "degrees_north" }),
+    ).toBe(false);
+  });
+
+  it("rejects geographic coordinates with another standard name", () => {
+    expect(
+      isGeographicCoordinate("longitude", [0, 1], {
+        standard_name: "grid_longitude",
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects geographic coordinates out of range", () => {
+    expect(isGeographicCoordinate("longitude", [0, 500, 1000])).toBe(false);
+    expect(isGeographicCoordinate("latitude", [-100, 0, 100])).toBe(false);
+  });
+
   it("converts vertical coordinates to elevations", () => {
-    expect(getElevations("depth", [0.5, 10, 100])).toEqual([-0.5, -10, -100]);
-    expect(getElevations("elevation", [-100, -10, -0.5])).toEqual([
-      -100, -10, -0.5,
-    ]);
-    // Depth coordinates stored as negative values are already elevations.
-    expect(getElevations("depth", [-0.5, -10])).toEqual([-0.5, -10]);
+    const cases: [string, number[], Record<string, unknown>, number[]][] = [
+      ["depth", [0.5, 10, 100], {}, [-0.5, -10, -100]],
+      ["elevation", [-100, -10, -0.5], {}, [-100, -10, -0.5]],
+      // Depth coordinates stored as negative values are already elevations.
+      ["depth", [-0.5, -10], {}, [-0.5, -10]],
+      ["depth", [-0.5, -10], { units: "m", positive: "up" }, [-0.5, -10]],
+      ["z", [5, 15], { units: "m" }, [5, 15]],
+      ["z", [5, 15], { units: "m", positive: "down" }, [-5, -15]],
+      ["height", [1, 2], { units: "km", axis: "Z" }, [1000, 2000]],
+      // CESM ocean levels in centimeters.
+      [
+        "lev",
+        [500, 1500],
+        { units: "centimeters", positive: "down" },
+        [-5, -15],
+      ],
+      // ERA5 pressure levels.
+      [
+        "level",
+        [1000, 500],
+        { units: "millibars" },
+        [pressureToAltitude(100000), pressureToAltitude(50000)],
+      ],
+      [
+        "plev",
+        [101325, 50000],
+        { units: "Pa" },
+        [0, pressureToAltitude(50000)],
+      ],
+    ];
+    for (const [name, values, attrs, expected] of cases) {
+      const result = getElevations(name, values, attrs);
+      expect(result, JSON.stringify([name, values, attrs])).toBeDefined();
+      for (let i = 0; i < expected.length; ++i) {
+        expect(result![i]).toBeCloseTo(expected[i], 6);
+      }
+    }
+    // Standard atmosphere: 500 hPa is at approximately 5.6 km.
+    expect(pressureToAltitude(50000)).toBeCloseTo(5574, -1);
+  });
+
+  it("rejects dimensionless vertical coordinates", () => {
+    expect(getElevations("lev", [0.1, 0.5, 0.9], { units: "1" })).toBe(
+      undefined,
+    );
+    expect(getElevations("lev", [0.1, 0.5, 0.9], {})).toBe(undefined);
+    expect(
+      getElevations("lev", [0.1, 0.5], {
+        standard_name: "atmosphere_hybrid_sigma_pressure_coordinate",
+      }),
+    ).toBe(undefined);
+    expect(
+      getElevations("lev", [0.1, 0.5], { formula_terms: "sigma: lev" }),
+    ).toBe(undefined);
+  });
+
+  it("rejects vertical coordinates with unknown units", () => {
+    expect(getElevations("level", [1, 2], { units: "K" })).toBe(undefined);
+  });
+
+  it("rejects non-vertical axes", () => {
+    expect(getElevations("z", [1, 2], { units: "m", axis: "X" })).toBe(
+      undefined,
+    );
+  });
+
+  it("rejects negative pressures", () => {
+    expect(getElevations("plev", [-1, 2], { units: "Pa" })).toBe(undefined);
+  });
+
+  it("unpacks coordinate values", () => {
+    expect(unpackCfValues([1, 2], {})).toEqual([1, 2]);
+    expect(
+      unpackCfValues([0, 10], { scale_factor: 0.5, add_offset: -90 }),
+    ).toEqual([-90, -85]);
+    expect(unpackCfValues([0, 10], { scale_factor: [2] })).toEqual([0, 20]);
   });
 
   it("selects data variables", () => {
@@ -90,8 +218,8 @@ describe("xarray georeferencing", () => {
       ["uo", ["time", "latitude", "longitude"], [3, 10, 20]],
       ["mask", ["latitude", "longitude"], [10, 20]],
     ]);
-    // Default: variables matching the first data variable in sorted order ("mask").
-    expect(selectXarrayVariables(arrays, undefined)).toEqual(["mask"]);
+    // Default: variables matching the highest-rank variable ("uo" and "vo").
+    expect(selectXarrayVariables(arrays, undefined)).toEqual(["uo", "vo"]);
     expect(selectXarrayVariables(arrays, ["uo", "vo"])).toEqual(["uo", "vo"]);
     const currents = makeArrays([
       ["latitude", ["latitude"], [10]],
@@ -99,6 +227,33 @@ describe("xarray georeferencing", () => {
       ["vo", ["latitude", "longitude"], [10, 20]],
     ]);
     expect(selectXarrayVariables(currents, undefined)).toEqual(["uo", "vo"]);
+    // CMIP6-style dataset with CF bounds arrays.
+    const cmip = makeArrays([
+      ["lat", ["lat"], [10], { bounds: "lat_bnds" }],
+      ["lon", ["lon"], [20], { bounds: "lon_bnds" }],
+      ["time", ["time"], [3], { bounds: "time_bnds" }],
+      ["lat_bnds", ["lat", "bnds"], [10, 2]],
+      ["lon_bnds", ["lon", "bnds"], [20, 2]],
+      ["time_bnds", ["time", "bnds"], [3, 2]],
+      // Bounds-like dimension without a `bounds` attribute referencing it.
+      ["vertices", ["lat", "lon", "nv"], [10, 20, 4]],
+      ["areacello", ["y", "x"], [10, 20]],
+      ["sst", ["time", "lat", "lon"], [3, 10, 20]],
+    ]);
+    expect(selectXarrayVariables(cmip, undefined)).toEqual(["sst"]);
+    // Variables with longitude and latitude dimensions are preferred.
+    const mixed = makeArrays([
+      ["a", ["t", "y", "x"], [3, 10, 20]],
+      ["b", ["lat", "lon"], [10, 20]],
+    ]);
+    expect(selectXarrayVariables(mixed, undefined)).toEqual(["b"]);
+  });
+
+  it("rejects an empty list of variables", () => {
+    const arrays = makeArrays([["uo", ["y", "x"], [2, 2]]]);
+    expect(() => selectXarrayVariables(arrays, [])).toThrow(
+      /must list at least one variable/,
+    );
   });
 
   it("rejects missing variables", () => {
@@ -144,6 +299,51 @@ describe("xarray georeferencing", () => {
     // Other multi-variable datasets show the first variable.
     expect(getXarrayDatasetDefaultShader([temperature, temperature])).toContain(
       "getDataValue(0)",
+    );
+    // Packed integer variables.
+    const packed = makeMetadata(
+      {
+        scale_factor: 0.01,
+        add_offset: 273,
+        _FillValue: -32767,
+        valid_range: [-30000, 30000],
+      },
+      0,
+      DataType.INT16,
+    );
+    expect(getXarrayDefaultShader(packed))
+      .toBe(`#uicontrol invlerp normalized(range=[-30000, 30000])
+void main() {
+  float raw = float(toRaw(getDataValue()));
+  if (raw == -32767.0) {
+    emitTransparent();
+    return;
+  }
+  // Unpacked value (the colormap range applies to the packed value).
+  float value = raw * 0.01 + 273.0;
+  emitRGB(colormapJet(normalized()));
+}
+`);
+    // A negative scale factor reverses the range.
+    expect(
+      getXarrayDefaultShader(
+        makeMetadata(
+          { scale_factor: -1, valid_min: 0, valid_max: 100 },
+          0,
+          DataType.UINT8,
+        ),
+      ),
+    ).toContain("range=[100, 0]");
+    // Unpacked integer variables without a fill value.
+    expect(getXarrayDefaultShader(makeMetadata({}, 0, DataType.UINT16)))
+      .toBe(`#uicontrol invlerp normalized
+void main() {
+  float value = float(toRaw(getDataValue()));
+  emitRGB(colormapJet(normalized()));
+}
+`);
+    expect(getXarrayDefaultShader(makeMetadata({}, 0, DataType.UINT64))).toBe(
+      undefined,
     );
   });
 });

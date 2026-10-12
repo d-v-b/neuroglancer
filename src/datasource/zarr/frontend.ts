@@ -88,6 +88,7 @@ import {
 import {
   parseQueryStringParameters,
   verifyObject,
+  verifyOptionalBoolean,
   verifyOptionalObjectProperty,
 } from "#src/util/json.js";
 import * as matrix from "#src/util/matrix.js";
@@ -239,6 +240,17 @@ const supportedQueryParameters = [
         "Comma-separated data variables of an xarray dataset to combine as channels",
     },
     values: [],
+  },
+  {
+    key: {
+      value: "georeference",
+      description:
+        "Whether to georeference arrays with longitude/latitude coordinates",
+    },
+    values: [
+      { value: "true", description: "(default)" },
+      { value: "false", description: "" },
+    ],
   },
 ];
 
@@ -743,6 +755,12 @@ export class ZarrDataSource implements KvStoreBasedDataSourceProvider {
           .map((v) => v.trim())
           .filter((v) => v !== ""),
     );
+    const georeference =
+      verifyOptionalObjectProperty(
+        parameters,
+        "georeference",
+        verifyOptionalBoolean,
+      ) ?? true;
     return options.registry.chunkManager.memoize.getAsync(
       {
         type: "zarr:MultiscaleVolumeChunkSource",
@@ -750,6 +768,7 @@ export class ZarrDataSource implements KvStoreBasedDataSourceProvider {
         kvStoreUrl,
         dimensionSeparator,
         requestedVariables,
+        georeference,
       },
       options,
       async (progressOptions) => {
@@ -791,12 +810,14 @@ export class ZarrDataSource implements KvStoreBasedDataSourceProvider {
               );
             }
             const [first] = variables;
-            geo = await getXarrayGeoreference(
-              sharedKvStoreContext,
-              first.url,
-              first.metadata,
-              progressOptions,
-            );
+            if (georeference) {
+              geo = await getXarrayGeoreference(
+                sharedKvStoreContext,
+                first.url,
+                first.metadata,
+                progressOptions,
+              );
+            }
             multiscaleInfo = getMultiscaleInfoForXarrayDataset(variables, geo);
             channelMetadata = {
               channels: variables.map((v) => ({ label: v.name })),
@@ -819,12 +840,14 @@ export class ZarrDataSource implements KvStoreBasedDataSourceProvider {
             );
           }
         } else {
-          geo = await getXarrayGeoreference(
-            sharedKvStoreContext,
-            kvStoreUrl,
-            metadata,
-            progressOptions,
-          );
+          if (georeference) {
+            geo = await getXarrayGeoreference(
+              sharedKvStoreContext,
+              kvStoreUrl,
+              metadata,
+              progressOptions,
+            );
+          }
           multiscaleInfo = getMultiscaleInfoForSingleArray(
             kvStoreUrl,
             metadata,

@@ -33,6 +33,11 @@
  * the rectangle independently, using only information about that edge.  Since adjacent chunks
  * compute identical subdivisions of their shared edge, their meshes join exactly.  Interior
  * refinement never splits boundary edges.
+ *
+ * The warp may be discontinuous, e.g. across the antimeridian when the display CRS is not periodic
+ * or the source is unwrapped relative to a reference longitude.  Triangles straddling such a
+ * discontinuity ("seam") are refined, like triangles straddling the boundary of the valid domain,
+ * and then omitted, leaving a thin gap rather than a triangle smeared across the output.
  */
 
 import { TransformStatus } from "#src/geo/transform.js";
@@ -102,7 +107,49 @@ const BOUNDARY_REFINEMENT_DIVISIONS = 4096;
  */
 const BOUNDARY_TRIANGLE_ERROR = 1;
 
+/**
+ * Triangles straddling a discontinuity of the warp are refined until their area is below the area
+ * of the rectangle divided by this value.
+ */
+const SEAM_REFINEMENT_DIVISIONS = 262144;
+
+/**
+ * Error assigned to triangles straddling a discontinuity of the warp.  These are refined before
+ * all other triangles, such that the gap left by omitting them is thin even if refinement is
+ * stopped by the vertex limit (e.g. near singularities of the warp).
+ */
+const SEAM_TRIANGLE_ERROR = 1e30;
+
+/**
+ * Edges are tested for a discontinuity only if their length in output coordinates exceeds this
+ * multiple of their length in source coordinates (and `SEAM_MIN_JUMP`).  Warps used for rendering
+ * are normalized to approximately preserve lengths near the center of the source, such that
+ * larger stretch factors arise only near discontinuities and singularities.
+ */
+const SEAM_MIN_STRETCH = 32;
+
+/**
+ * Minimum length, in output coordinates, of a discontinuity.
+ */
+const SEAM_MIN_JUMP = 1;
+
+/**
+ * Bisection of an edge to locate a discontinuity stops once the remaining interval is shorter than
+ * this (in source coordinates).
+ */
+const SEAM_RESOLUTION = 1e-3;
+
+/**
+ * An edge is considered to cross a discontinuity if, after bisecting it down to `SEAM_RESOLUTION`,
+ * the output length of the interval containing the discontinuity is at least this fraction of the
+ * output length of the edge.
+ */
+const SEAM_JUMP_FRACTION = 0.5;
+
 const tempOut = new Float64Array(2);
+
+// Multiplier for encoding an edge between vertices `u` and `v` as `u * MAX_EDGE_KEY_VERTICES + v`.
+const MAX_EDGE_KEY_VERTICES = 2 ** 26;
 
 function isValidStatus(status: TransformStatus) {
   return status !== TransformStatus.INVALID;
@@ -211,6 +258,64 @@ function subdivideEdge(
   return result;
 }
 
+/**
+ * Determines whether the warp is discontinuous along the edge from source point `a` to `b`, with
+ * output positions `oa` and `ob`.
+ *
+ * A continuous warp maps short intervals to short intervals, while across a discontinuity the
+ * output length of an interval does not decrease as it shrinks.  The edge is bisected repeatedly,
+ * keeping the half with the longer output length.
+ */
+function isDiscontinuous(
+  warp: Warp2d,
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number,
+  oax: number,
+  oay: number,
+  obx: number,
+  oby: number,
+): boolean {
+  const length = Math.hypot(bx - ax, by - ay);
+  const jump = Math.hypot(obx - oax, oby - oay);
+  if (!(jump > Math.max(SEAM_MIN_STRETCH * length, SEAM_MIN_JUMP))) {
+    return false;
+  }
+  const minJump = SEAM_JUMP_FRACTION * jump;
+  let t0 = 0;
+  let t1 = 1;
+  let o0x = oax;
+  let o0y = oay;
+  let o1x = obx;
+  let o1y = oby;
+  while ((t1 - t0) * length > SEAM_RESOLUTION) {
+    const tm = 0.5 * (t0 + t1);
+    if (
+      warp.forward(ax + tm * (bx - ax), ay + tm * (by - ay), tempOut) ===
+      TransformStatus.INVALID
+    ) {
+      return false;
+    }
+    const omx = tempOut[0];
+    const omy = tempOut[1];
+    const d0 = Math.hypot(omx - o0x, omy - o0y);
+    const d1 = Math.hypot(o1x - omx, o1y - omy);
+    if (d0 >= d1) {
+      if (d0 < minJump) return false;
+      t1 = tm;
+      o1x = omx;
+      o1y = omy;
+    } else {
+      if (d1 < minJump) return false;
+      t0 = tm;
+      o0x = omx;
+      o0y = omy;
+    }
+  }
+  return true;
+}
+
 function compareLexicographic(ax: number, ay: number, bx: number, by: number) {
   return ax < bx || (ax === bx && ay < by);
 }
@@ -299,18 +404,26 @@ class MeshBuilder {
   outputs: number[] = [];
   outputStatus: TransformStatus[] = [];
   triangles: number[] = [];
+  // Indicates for each triangle whether it straddles a discontinuity of the warp.
+  seams: boolean[] = [];
+  // Results of `isDiscontinuous` for edges, keyed by `edgeKey`.
+  discontinuousEdges = new Map<number, boolean>();
   halfedges: number[] = [];
   candidates: number[] = [];
   queueIndices: number[] = [];
   queue: number[] = [];
   errors: number[] = [];
   pending: number[] = [];
+  // Index in `pending` of each triangle, if it is pending (valid only if `pending` at that index
+  // refers back to the triangle).
+  pendingIndices: number[] = [];
   pendingLen = 0;
 
   constructor(
     public warp: Warp2d,
     public maxError: number,
     public minBoundaryTriangleArea: number,
+    public minSeamTriangleArea: number,
   ) {}
 
   addPoint(x: number, y: number): number {
@@ -347,6 +460,7 @@ class MeshBuilder {
       this.candidates[2 * t] = 0;
       this.candidates[2 * t + 1] = 0;
       this.queueIndices[t] = -1;
+      this.pendingIndices[t] = this.pendingLen;
       this.pending[this.pendingLen++] = t;
     }
     for (let t = 0; t < n; ++t) {
@@ -362,6 +476,7 @@ class MeshBuilder {
       this.candidates[2 * t] = 0;
       this.candidates[2 * t + 1] = 0;
       this.queueIndices[t] = -1;
+      this.pendingIndices[t] = this.pendingLen;
       this.pending[this.pendingLen++] = t;
     }
   }
@@ -397,7 +512,17 @@ class MeshBuilder {
       (isValidStatus(outputStatus[a]) ? 1 : 0) +
       (isValidStatus(outputStatus[b]) ? 1 : 0) +
       (isValidStatus(outputStatus[c]) ? 1 : 0);
-    if (numValid !== 0 && numValid !== 3) {
+    const isSeam = numValid === 3 && this.straddlesSeam(a, b, c);
+    this.seams[t] = isSeam;
+    if (isSeam) {
+      // Refine to localize the discontinuity, such that the gap left by omitting this triangle is
+      // thin.  The interpolation error is not meaningful.
+      if (area >= this.minSeamTriangleArea) {
+        maxError = SEAM_TRIANGLE_ERROR;
+        maxX = (p0x + p1x + p2x) / 3;
+        maxY = (p0y + p1y + p2y) / 3;
+      }
+    } else if (numValid !== 0 && numValid !== 3) {
       // Triangle straddles the boundary of the valid domain: refine to localize the boundary, such
       // that valid regions are not omitted.
       if (area >= this.minBoundaryTriangleArea) {
@@ -443,6 +568,35 @@ class MeshBuilder {
     this.candidates[2 * t] = maxX;
     this.candidates[2 * t + 1] = maxY;
     this.queuePush(t, maxError);
+  }
+
+  private straddlesSeam(a: number, b: number, c: number): boolean {
+    const { positions: p, outputs: o, warp } = this;
+    for (const [i, j] of [
+      [a, b],
+      [b, c],
+      [c, a],
+    ]) {
+      const [u, v] = i < j ? [i, j] : [j, i];
+      const key = u * MAX_EDGE_KEY_VERTICES + v;
+      let result = this.discontinuousEdges.get(key);
+      if (result === undefined) {
+        result = isDiscontinuous(
+          warp,
+          p[2 * u],
+          p[2 * u + 1],
+          p[2 * v],
+          p[2 * v + 1],
+          o[2 * u],
+          o[2 * u + 1],
+          o[2 * v],
+          o[2 * v + 1],
+        );
+        this.discontinuousEdges.set(key, result);
+      }
+      if (result) return true;
+    }
+    return false;
   }
 
   step() {
@@ -506,6 +660,7 @@ class MeshBuilder {
     this.candidates[2 * t] = 0;
     this.candidates[2 * t + 1] = 0;
     this.queueIndices[t] = -1;
+    this.pendingIndices[t] = this.pendingLen;
     this.pending[this.pendingLen++] = t;
     return e;
   }
@@ -614,12 +769,14 @@ class MeshBuilder {
   private queueRemove(t: number) {
     const i = this.queueIndices[t];
     if (i < 0) {
-      const it = this.pending.indexOf(t);
-      if (it !== -1 && it < this.pendingLen) {
-        this.pending[it] = this.pending[--this.pendingLen];
-      } else {
+      const { pending, pendingIndices } = this;
+      const it = pendingIndices[t];
+      if (!(it >= 0 && it < this.pendingLen && pending[it] === t)) {
         throw new Error("Broken triangulation");
       }
+      const last = pending[--this.pendingLen];
+      pending[it] = last;
+      pendingIndices[last] = it;
       return;
     }
     const n = this.queue.length - 1;
@@ -691,13 +848,12 @@ export function computeWarpMesh(
     maxVertices = DEFAULT_MAX_VERTICES,
     maxEdgeDepth = DEFAULT_MAX_EDGE_DEPTH,
   } = options;
+  const area = Math.abs(x1 - x0) * Math.abs(y1 - y0);
   const builder = new MeshBuilder(
     warp,
     maxError,
-    Math.max(
-      MIN_TRIANGLE_AREA,
-      (Math.abs(x1 - x0) * Math.abs(y1 - y0)) / BOUNDARY_REFINEMENT_DIVISIONS,
-    ),
+    Math.max(MIN_TRIANGLE_AREA, area / BOUNDARY_REFINEMENT_DIVISIONS),
+    Math.max(MIN_TRIANGLE_AREA, area / SEAM_REFINEMENT_DIVISIONS),
   );
 
   // Boundary ring: corners in order (x0,y0) -> (x1,y0) -> (x1,y1) -> (x0,y1), with edge
@@ -734,13 +890,14 @@ export function computeWarpMesh(
     builder.step();
   }
 
-  const { triangles, outputStatus } = builder;
+  const { triangles, outputStatus, seams } = builder;
   const indices: number[] = [];
   for (let i = 0, n = triangles.length; i < n; i += 3) {
     const a = triangles[i];
     const b = triangles[i + 1];
     const c = triangles[i + 2];
     if (
+      !seams[i / 3] &&
       isValidStatus(outputStatus[a]) &&
       isValidStatus(outputStatus[b]) &&
       isValidStatus(outputStatus[c])

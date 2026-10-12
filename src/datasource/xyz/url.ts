@@ -55,6 +55,11 @@ export interface XyzUrlInfo {
 const WEB_MERCATOR_HALF_EXTENT = Math.PI * 6378137;
 
 /**
+ * Maximum supported tile size, such that a tile fits in a single texture.
+ */
+const MAX_TILE_SIZE = 2048;
+
+/**
  * Parses an `xyz://` provider URL (excluding the `xyz://` prefix).
  */
 export function parseXyzUrl(providerUrl: string): XyzUrlInfo {
@@ -99,8 +104,14 @@ export function parseXyzUrl(providerUrl: string): XyzUrlInfo {
   const crsId = getCrs(options.get("crs") ?? "EPSG:3857").id;
   options.delete("crs");
   const tileSize = parseNumber("tilesize", 256);
-  if (!Number.isInteger(tileSize) || tileSize <= 0 || tileSize > 4096) {
+  if (!Number.isInteger(tileSize) || tileSize <= 0) {
     throw new Error(`Invalid XYZ tile size: ${tileSize}`);
+  }
+  if (tileSize > MAX_TILE_SIZE) {
+    // Each tile is a single chunk, which must fit in a texture.
+    throw new Error(
+      `Unsupported XYZ tile size: ${tileSize} (maximum is ${MAX_TILE_SIZE})`,
+    );
   }
   const minZoom = parseNumber("minzoom", 0);
   const maxZoom = parseNumber("maxzoom", 18);

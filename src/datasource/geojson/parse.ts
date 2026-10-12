@@ -40,6 +40,14 @@ export interface GeoJsonNumericProperty {
 }
 
 export interface GeoJsonPoint {
+  /**
+   * Identifier, derived from the index of the feature and, for features with multiple parts, the
+   * index of the part (e.g. `3` or `3.1`).
+   */
+  id: string;
+  /**
+   * Longitude in degrees, in `[-180, 180]`.
+   */
   lon: number;
   lat: number;
   /**
@@ -52,7 +60,13 @@ export interface GeoJsonPoint {
 
 export interface GeoJsonLineString {
   /**
-   * Positions `[lon0, lat0, elevation0, lon1, ...]`, with elevation `NaN` if not specified.
+   * Identifier, as for `GeoJsonPoint.id`.  Line strings crossing the antimeridian are split into
+   * separate parts.
+   */
+  id: string;
+  /**
+   * Positions `[lon0, lat0, elevation0, lon1, ...]`, with elevation `NaN` if not specified, and
+   * longitudes in `[-180, 180]`.  Consecutive longitudes differ by at most 180 degrees.
    */
   positions: number[];
   properties: number[];
@@ -85,11 +99,20 @@ const DESCRIPTION_KEYS = ["title", "name", "Name", "NAME", "place", "label"];
  * Converts a property name to a valid GLSL identifier suffix.
  */
 export function sanitizePropertyIdentifier(key: string): string {
-  let identifier = key.replace(/[^A-Za-z0-9_]/g, "_");
-  if (!/^[A-Za-z]/.test(identifier)) identifier = `p_${identifier}`;
   // GLSL reserves identifiers containing consecutive underscores.
-  identifier = identifier.replace(/__+/g, "_");
+  let identifier = key.replace(/[^A-Za-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  if (identifier === "") return "p";
+  if (!/^[A-Za-z]/.test(identifier)) identifier = `p_${identifier}`;
   return identifier;
+}
+
+/**
+ * Wraps a longitude in degrees into `[-180, 180]`.  Longitudes already in that range are
+ * unchanged; others (e.g. in `[0, 360)`) are wrapped into `[-180, 180)`.
+ */
+export function normalizeLongitude(lon: number): number {
+  if (lon >= -180 && lon <= 180) return lon;
+  return lon - 360 * Math.floor((lon + 180) / 360);
 }
 
 function isFeatureCollection(json: any) {
@@ -178,8 +201,11 @@ export function parseGeoJson(
     name: string,
     description?: string,
   ) => {
-    let identifier = sanitizePropertyIdentifier(name);
-    while (usedIdentifiers.has(identifier)) identifier += "_";
+    const base = sanitizePropertyIdentifier(name);
+    let identifier = base;
+    for (let i = 2; usedIdentifiers.has(identifier); ++i) {
+      identifier = `${base}_${i}`;
+    }
     usedIdentifiers.add(identifier);
     properties.push({ key, identifier, description });
   };
@@ -209,7 +235,14 @@ export function parseGeoJson(
     elevationRange[1] = Math.max(elevationRange[1], elevation);
     return elevation;
   };
-  const checkPosition = (position: any) => {
+  const updateBounds = (lon: number, lat: number) => {
+    bounds[0] = Math.min(bounds[0], lon);
+    bounds[1] = Math.min(bounds[1], lat);
+    bounds[2] = Math.max(bounds[2], lon);
+    bounds[3] = Math.max(bounds[3], lat);
+  };
+  // Returns the normalized longitude of a valid position, or `undefined`.
+  const getLongitude = (position: any): number | undefined => {
     if (
       !Array.isArray(position) ||
       position.length < 2 ||
@@ -218,17 +251,19 @@ export function parseGeoJson(
       !Number.isFinite(position[0]) ||
       !Number.isFinite(position[1])
     ) {
-      return false;
+      return undefined;
     }
-    bounds[0] = Math.min(bounds[0], position[0]);
-    bounds[1] = Math.min(bounds[1], position[1]);
-    bounds[2] = Math.max(bounds[2], position[0]);
-    bounds[3] = Math.max(bounds[3], position[1]);
-    return true;
+    const lon = normalizeLongitude(position[0]);
+    updateBounds(lon, position[1]);
+    return lon;
   };
 
-  for (const feature of features) {
+  for (let featureIndex = 0; featureIndex < features.length; ++featureIndex) {
+    const feature = features[featureIndex];
     if (feature == null || typeof feature !== "object") continue;
+    // Points and line strings of this feature, which are assigned identifiers once the number of
+    // parts is known.
+    const parts: (GeoJsonPoint | GeoJsonLineString)[] = [];
     const props = feature.properties ?? {};
     const propertyValues = properties.map(({ key }) => {
       if (key === undefined) return 0;
@@ -243,33 +278,76 @@ export function parseGeoJson(
       }
     }
     const addPoint = (position: any) => {
-      if (!checkPosition(position)) return;
-      points.push({
-        lon: position[0],
+      const lon = getLongitude(position);
+      if (lon === undefined) return;
+      const point: GeoJsonPoint = {
+        id: "",
+        lon,
         lat: position[1],
         elevation: getElevation(position),
         properties: propertyValues,
         description,
-      });
+      };
+      points.push(point);
+      parts.push(point);
     };
     const addLineString = (positions: any) => {
       if (!Array.isArray(positions)) return;
-      const flat: number[] = [];
+      let flat: number[] = [];
+      const flush = () => {
+        if (flat.length >= 6) {
+          const lineString: GeoJsonLineString = {
+            id: "",
+            positions: flat,
+            properties: propertyValues,
+            description,
+          };
+          lineStrings.push(lineString);
+          parts.push(lineString);
+        }
+        flat = [];
+      };
+      const pushUnique = (lon: number, lat: number, elevation: number) => {
+        const n = flat.length;
+        if (
+          n >= 3 &&
+          flat[n - 3] === lon &&
+          flat[n - 2] === lat &&
+          Object.is(flat[n - 1], elevation)
+        ) {
+          return;
+        }
+        flat.push(lon, lat, elevation);
+      };
       for (const position of positions) {
-        if (!checkPosition(position)) continue;
-        flat.push(
-          position[0],
-          position[1],
-          getElevation(position) ?? Number.NaN,
-        );
+        const lon = getLongitude(position);
+        if (lon === undefined) continue;
+        const lat = position[1];
+        const elevation = getElevation(position) ?? Number.NaN;
+        const n = flat.length;
+        if (n >= 3 && Math.abs(lon - flat[n - 3]) > 180) {
+          // The segment crosses the antimeridian: take the short way, and split the line string
+          // at the antimeridian.
+          const lon0 = flat[n - 3];
+          const lat0 = flat[n - 2];
+          const elevation0 = flat[n - 1];
+          const side = lon0 > lon ? 180 : -180;
+          // Unwrapped longitude of the end of the segment is `lon + 2 * side`.
+          const span = lon + 2 * side - lon0;
+          const t = span === 0 ? 0 : (side - lon0) / span;
+          const crossingLat = lat0 + t * (lat - lat0);
+          const crossingElevation = elevation0 + t * (elevation - elevation0);
+          updateBounds(side, crossingLat);
+          updateBounds(-side, crossingLat);
+          pushUnique(side, crossingLat, crossingElevation);
+          flush();
+          pushUnique(-side, crossingLat, crossingElevation);
+          pushUnique(lon, lat, elevation);
+          continue;
+        }
+        flat.push(lon, lat, elevation);
       }
-      if (flat.length >= 6) {
-        lineStrings.push({
-          positions: flat,
-          properties: propertyValues,
-          description,
-        });
-      }
+      flush();
     };
     const addGeometry = (geometry: any) => {
       if (geometry == null || typeof geometry !== "object") return;
@@ -299,6 +377,13 @@ export function parseGeoJson(
       }
     };
     addGeometry(feature.geometry);
+    if (parts.length === 1) {
+      parts[0].id = `${featureIndex}`;
+    } else {
+      parts.forEach((part, i) => {
+        part.id = `${featureIndex}.${i}`;
+      });
+    }
   }
   if (points.length === 0 && lineStrings.length === 0) {
     throw new Error("GeoJSON contains no point or line geometries");

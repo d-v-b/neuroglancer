@@ -229,17 +229,27 @@ export function mergeJpegTables(tables: Uint8Array, data: Uint8Array) {
 
 export interface ImageDecoders {
   /**
-   * Decodes a JPEG image to planar 8-bit samples.
+   * Decodes a JPEG image of the specified dimensions to planar 8-bit samples.
    */
-  jpeg?: (data: Uint8Array, numComponents: number) => Promise<Uint8Array>;
+  jpeg?: (
+    data: Uint8Array,
+    numComponents: number,
+    width: number,
+    height: number,
+  ) => Promise<Uint8Array>;
   /**
    * Decodes Zstandard-compressed data.
    */
   zstd?: (data: Uint8Array) => Promise<Uint8Array>;
   /**
-   * Decodes a WebP image to planar 8-bit samples.
+   * Decodes a WebP image of the specified dimensions to planar 8-bit samples.
    */
-  webp?: (data: Uint8Array, numComponents: number) => Promise<Uint8Array>;
+  webp?: (
+    data: Uint8Array,
+    numComponents: number,
+    width: number,
+    height: number,
+  ) => Promise<Uint8Array>;
 }
 
 export interface DecompressedTile {
@@ -284,19 +294,22 @@ export async function decompressTile(
         format.jpegTables === undefined
           ? input
           : mergeJpegTables(format.jpegTables, input);
-      return { data: await decoders.jpeg(data, samplesPerTile), planar: true };
+      return {
+        data: await decoders.jpeg(data, samplesPerTile, tileWidth, tileHeight),
+        planar: true,
+      };
     }
     case TiffCompression.WEBP:
       if (decoders.webp === undefined) break;
       return {
-        data: await decoders.webp(input, samplesPerTile),
+        data: await decoders.webp(input, samplesPerTile, tileWidth, tileHeight),
         planar: true,
       };
   }
   throw new Error(`Unsupported TIFF compression: ${format.compression}`);
 }
 
-type SampleArray =
+export type SampleArray =
   | Uint8Array
   | Int8Array
   | Uint16Array
@@ -453,6 +466,8 @@ export function decodeSamples(
  *     interleaved.
  * @param samplesPerTile Number of channels in `samples`.
  * @param channelOffset Index of the first chunk channel corresponding to `samples`.
+ * @param xOffset Position of the tile origin relative to the chunk origin (may be negative).
+ * @param yOffset Position of the tile origin relative to the chunk origin (may be negative).
  */
 export function copyTileToChunk(
   output: SampleArray,
@@ -464,31 +479,188 @@ export function copyTileToChunk(
   tileHeight: number,
   samplesPerTile: number,
   channelOffset: number,
+  xOffset = 0,
+  yOffset = 0,
 ) {
   const outputPlaneSize = width * height;
-  const rows = Math.min(
-    height,
+  const tileRows = Math.min(
+    tileHeight,
     Math.floor(samples.length / (tileWidth * samplesPerTile)),
   );
-  const cols = Math.min(width, tileWidth);
+  const yStart = Math.max(0, yOffset);
+  const yEnd = Math.min(height, yOffset + tileRows);
+  const xStart = Math.max(0, xOffset);
+  const xEnd = Math.min(width, xOffset + tileWidth);
   const tilePlaneSize = tileWidth * tileHeight;
   for (let c = 0; c < samplesPerTile; ++c) {
     const outBase = (channelOffset + c) * outputPlaneSize;
-    for (let y = 0; y < rows; ++y) {
+    for (let y = yStart; y < yEnd; ++y) {
       const outRow = outBase + y * width;
+      const tileY = y - yOffset;
       if (planar) {
-        const inRow = c * tilePlaneSize + y * tileWidth;
-        for (let x = 0; x < cols; ++x) {
+        const inRow = c * tilePlaneSize + tileY * tileWidth - xOffset;
+        for (let x = xStart; x < xEnd; ++x) {
           (output as any)[outRow + x] = samples[inRow + x];
         }
       } else {
-        const inRow = y * tileWidth * samplesPerTile + c;
-        for (let x = 0; x < cols; ++x) {
+        const inRow = (tileY * tileWidth - xOffset) * samplesPerTile + c;
+        for (let x = xStart; x < xEnd; ++x) {
           (output as any)[outRow + x] = samples[inRow + x * samplesPerTile];
         }
       }
     }
   }
+}
+
+/**
+ * Layout of the tiles (or strips) of a TIFF image.
+ */
+export interface TiffTileLayout {
+  width: number;
+  height: number;
+  /**
+   * For stripped images, the tile width equals the image width and the tile height equals the
+   * number of rows per strip.
+   */
+  tileWidth: number;
+  tileHeight: number;
+  isTiled: boolean;
+  samplesPerPixel: number;
+  planarConfiguration: number;
+}
+
+/**
+ * Maximum chunk width and height for stripped images.  Strips span the full image width and may
+ * be arbitrarily tall, which would exceed texture size limits if used directly as chunks.
+ */
+const MAX_STRIP_CHUNK_WIDTH = 1024;
+const STRIP_CHUNK_WIDTH = 512;
+const TARGET_STRIP_CHUNK_ROWS = 256;
+const MAX_STRIP_CHUNK_ROWS = 1024;
+const SPLIT_STRIP_CHUNK_ROWS = 512;
+
+/**
+ * Returns the chunk size `[width, height]` used for an image.  Tiles are used directly as chunks.
+ * Stripped images are divided into chunks consisting of whole strips (grouping short strips to
+ * about `TARGET_STRIP_CHUNK_ROWS` rows), unless the strips are taller than
+ * `MAX_STRIP_CHUNK_ROWS`, in which case each strip is divided vertically.  Images wider than
+ * `MAX_STRIP_CHUNK_WIDTH` are additionally divided horizontally.
+ */
+export function getTiffChunkSize(layout: TiffTileLayout): [number, number] {
+  const { width, height, tileWidth, tileHeight } = layout;
+  if (layout.isTiled) return [tileWidth, tileHeight];
+  const chunkWidth = width <= MAX_STRIP_CHUNK_WIDTH ? width : STRIP_CHUNK_WIDTH;
+  const chunkHeight =
+    tileHeight <= MAX_STRIP_CHUNK_ROWS
+      ? tileHeight *
+        Math.max(1, Math.floor(TARGET_STRIP_CHUNK_ROWS / tileHeight))
+      : SPLIT_STRIP_CHUNK_ROWS;
+  return [chunkWidth, Math.min(height, chunkHeight)];
+}
+
+/**
+ * Returns the number of rows stored in a tile (or strip).  Tiles always contain `tileHeight`
+ * rows (padded at the image edge), while the last strip only contains the remaining rows.
+ */
+export function getTiffTileRows(layout: TiffTileLayout, tileRow: number) {
+  const { tileHeight } = layout;
+  if (layout.isTiled) return tileHeight;
+  return Math.max(
+    0,
+    Math.min(tileHeight, layout.height - tileRow * tileHeight),
+  );
+}
+
+/**
+ * Decoded samples of a tile (or strip), with `format.tileWidth` columns and `rows` rows.
+ */
+export interface DecodedTiffTile {
+  data: SampleArray;
+  planar: boolean;
+  rows: number;
+}
+
+/**
+ * Decompresses and decodes a tile (or strip) containing `rows` rows.
+ */
+export async function decodeTiffTile(
+  compressed: Uint8Array<ArrayBuffer>,
+  format: TiffTileFormat,
+  rows: number,
+  decoders: ImageDecoders,
+): Promise<DecodedTiffTile> {
+  const tileFormat =
+    rows === format.tileHeight ? format : { ...format, tileHeight: rows };
+  const decompressed = await decompressTile(compressed, tileFormat, decoders);
+  return {
+    data: decompressed.planar
+      ? decompressed.data
+      : decodeSamples(decompressed.data, tileFormat),
+    planar: decompressed.planar,
+    rows,
+  };
+}
+
+/**
+ * Fills chunk data of shape `[width, height, samplesPerPixel]` (Fortran order), with origin
+ * `(x0, y0)` in the image, from the tiles (or strips) that intersect it.
+ *
+ * @param getTile Returns the decoded tile with the specified index (ordered by sample plane, then
+ *     row, then column) and number of rows, or `undefined` if the tile is sparse.
+ * @returns `false` if all intersecting tiles are sparse.
+ */
+export async function readTiffChunk(
+  output: SampleArray,
+  x0: number,
+  y0: number,
+  width: number,
+  height: number,
+  layout: TiffTileLayout,
+  getTile: (
+    index: number,
+    rows: number,
+  ) => Promise<DecodedTiffTile | undefined>,
+): Promise<boolean> {
+  const { tileWidth, tileHeight, samplesPerPixel } = layout;
+  const tilesAcross = Math.ceil(layout.width / tileWidth);
+  const tilesPerPlane = tilesAcross * Math.ceil(layout.height / tileHeight);
+  const planes = layout.planarConfiguration === 2 ? samplesPerPixel : 1;
+  const samplesPerTile = planes === 1 ? samplesPerPixel : 1;
+  const tx0 = Math.floor(x0 / tileWidth);
+  const tx1 = Math.floor((x0 + width - 1) / tileWidth);
+  const ty0 = Math.floor(y0 / tileHeight);
+  const ty1 = Math.floor((y0 + height - 1) / tileHeight);
+  let empty = true;
+  const promises: Promise<void>[] = [];
+  for (let plane = 0; plane < planes; ++plane) {
+    for (let ty = ty0; ty <= ty1; ++ty) {
+      const rows = getTiffTileRows(layout, ty);
+      for (let tx = tx0; tx <= tx1; ++tx) {
+        const index = plane * tilesPerPlane + ty * tilesAcross + tx;
+        promises.push(
+          getTile(index, rows).then((tile) => {
+            if (tile === undefined) return;
+            copyTileToChunk(
+              output,
+              width,
+              height,
+              tile.data,
+              tile.planar,
+              tileWidth,
+              tile.rows,
+              samplesPerTile,
+              plane,
+              tx * tileWidth - x0,
+              ty * tileHeight - y0,
+            );
+            empty = false;
+          }),
+        );
+      }
+    }
+  }
+  await Promise.all(promises);
+  return !empty;
 }
 
 /**

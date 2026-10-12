@@ -44,6 +44,7 @@ export enum GeoKey {
   Projection = 3074,
   ProjCoordTrans = 3075,
   ProjLinearUnits = 3076,
+  ProjLinearUnitSize = 3077,
   ProjStdParallel1 = 3078,
   ProjStdParallel2 = 3079,
   ProjNatOriginLong = 3080,
@@ -56,6 +57,8 @@ export enum GeoKey {
   ProjFalseOriginNorthing = 3087,
   ProjCenterLong = 3088,
   ProjCenterLat = 3089,
+  ProjCenterEasting = 3090,
+  ProjCenterNorthing = 3091,
   ProjScaleAtNatOrigin = 3092,
   ProjScaleAtCenter = 3093,
   ProjAzimuthAngle = 3094,
@@ -145,35 +148,69 @@ function getDatumParameters(keys: Map<number, GeoKeyValue>): string {
   return "+datum=WGS84";
 }
 
-const LINEAR_UNITS: Record<number, string> = {
-  9001: "+units=m",
-  9002: "+units=ft",
-  9003: "+units=us-ft",
+/**
+ * Supported EPSG linear units: proj4 parameter and size in metres.
+ */
+const LINEAR_UNITS: Record<number, { param: string; toMeter: number }> = {
+  9001: { param: "+units=m", toMeter: 1 },
+  9002: { param: "+units=ft", toMeter: 0.3048 },
+  9003: { param: "+units=us-ft", toMeter: 1200 / 3937 },
+  9036: { param: "+units=km", toMeter: 1000 },
 };
 
 /**
- * Constructs a proj4 definition for a user-defined projected CRS.  Returns `undefined` if the
- * projection is not supported.
+ * Constructs a proj4 definition for a user-defined projected CRS.  Returns an error message if
+ * the projection is not supported.
  */
 function getUserDefinedProjection(
   keys: Map<number, GeoKeyValue>,
-): string | undefined {
+): { crs: string } | { error: string } {
   const method = getNumberKey(keys, GeoKey.ProjCoordTrans);
-  if (method === undefined) return undefined;
+  if (method === undefined) {
+    return { error: "user-defined projection without ProjCoordTransGeoKey" };
+  }
   const get = (key: GeoKey, defaultValue = 0) =>
     getNumberKey(keys, key) ?? defaultValue;
   const datum = getDatumParameters(keys);
-  const units =
-    LINEAR_UNITS[get(GeoKey.ProjLinearUnits, 9001)] ?? LINEAR_UNITS[9001];
-  const falseEasting = get(
-    GeoKey.ProjFalseEasting,
-    get(GeoKey.ProjFalseOriginEasting),
-  );
-  const falseNorthing = get(
-    GeoKey.ProjFalseNorthing,
-    get(GeoKey.ProjFalseOriginNorthing),
-  );
+  const unitCode = get(GeoKey.ProjLinearUnits, 9001);
+  let unit = LINEAR_UNITS[unitCode];
+  if (unit === undefined && unitCode === USER_DEFINED) {
+    const size = getNumberKey(keys, GeoKey.ProjLinearUnitSize);
+    if (size !== undefined && size > 0) {
+      unit = { param: `+to_meter=${size}`, toMeter: size };
+    }
+  }
+  if (unit === undefined) {
+    return { error: `unsupported linear unit ${unitCode}` };
+  }
+  const units = unit.param;
+  // The false easting and northing are specified in the linear unit, but proj4 always interprets
+  // `+x_0` and `+y_0` in metres.
+  const falseEasting =
+    get(
+      GeoKey.ProjFalseEasting,
+      get(GeoKey.ProjFalseOriginEasting, get(GeoKey.ProjCenterEasting)),
+    ) * unit.toMeter;
+  const falseNorthing =
+    get(
+      GeoKey.ProjFalseNorthing,
+      get(GeoKey.ProjFalseOriginNorthing, get(GeoKey.ProjCenterNorthing)),
+    ) * unit.toMeter;
   const common = `+x_0=${falseEasting} +y_0=${falseNorthing} ${datum} ${units} +no_defs`;
+  const crs = getProjectionDefinition(keys, method, common);
+  if (crs === undefined) {
+    return { error: `unsupported coordinate transformation ${method}` };
+  }
+  return { crs };
+}
+
+function getProjectionDefinition(
+  keys: Map<number, GeoKeyValue>,
+  method: number,
+  common: string,
+): string | undefined {
+  const get = (key: GeoKey, defaultValue = 0) =>
+    getNumberKey(keys, key) ?? defaultValue;
   const lon0 = get(
     GeoKey.ProjNatOriginLong,
     get(GeoKey.ProjCenterLong, get(GeoKey.ProjFalseOriginLong)),
@@ -189,6 +226,10 @@ function getUserDefinedProjection(
     case 1: // TransverseMercator
       return `+proj=tmerc +lat_0=${lat0} +lon_0=${lon0} +k=${k0} ${common}`;
     case 7: // Mercator
+      if (getNumberKey(keys, GeoKey.ProjStdParallel1) !== undefined) {
+        // Mercator (variant B, 2SP): scale defined by the standard parallel.
+        return `+proj=merc +lat_ts=${lat1} +lon_0=${lon0} ${common}`;
+      }
       return `+proj=merc +lon_0=${lon0} +k=${k0} ${common}`;
     case 8: // LambertConfConic_2SP
       return `+proj=lcc +lat_0=${lat0} +lon_0=${lon0} +lat_1=${lat1} +lat_2=${lat2} ${common}`;
@@ -208,8 +249,8 @@ function getUserDefinedProjection(
       return `+proj=sterea +lat_0=${lat0} +lon_0=${lon0} +k=${k0} ${common}`;
     case 17: // Equirectangular
       return `+proj=eqc +lat_ts=${lat1} +lat_0=${lat0} +lon_0=${lon0} ${common}`;
-    case 28: // Equidistant cylindrical (alternate code)
-      return `+proj=eqc +lat_ts=${lat1} +lat_0=${lat0} +lon_0=${lon0} ${common}`;
+    case 28: // CylindricalEqualArea
+      return `+proj=cea +lat_ts=${lat1} +lon_0=${lon0} ${common}`;
     default:
       return undefined;
   }
@@ -225,6 +266,11 @@ export interface GeoTiffGeoreference {
    * Description of the CRS from the GeoTIFF citation keys, for error messages.
    */
   citation: string | undefined;
+
+  /**
+   * Reason the CRS could not be determined, if `crs` is `undefined` despite GeoTIFF keys.
+   */
+  crsError?: string;
 
   /**
    * Transform from pixel coordinates (column, row), with pixel `(i, j)` covering
@@ -271,6 +317,7 @@ export function getGeoTiffGeoreference(
     (keys.get(GeoKey.GTCitation) as string | undefined) ??
     (keys.get(GeoKey.GeogCitation) as string | undefined);
   let crs: string | undefined;
+  let crsError: string | undefined;
   const modelType = getNumberKey(keys, GeoKey.GTModelType);
   const projected = getNumberKey(keys, GeoKey.ProjectedCSType);
   const geographic = getNumberKey(keys, GeoKey.GeographicType);
@@ -290,7 +337,12 @@ export function getGeoTiffGeoreference(
       crs = `+proj=longlat ${getDatumParameters(keys)} +no_defs`;
     }
   } else if (modelType === 1) {
-    crs = getUserDefinedProjection(keys);
+    const result = getUserDefinedProjection(keys);
+    if ("crs" in result) {
+      crs = result.crs;
+    } else {
+      crsError = result.error;
+    }
   }
-  return { crs, citation, pixelToCrs };
+  return { crs, citation, crsError, pixelToCrs };
 }

@@ -24,9 +24,12 @@ import type { TransformedSource } from "#src/sliceview/base.js";
 import { ChunkLayout } from "#src/sliceview/chunk_layout.js";
 import type { GeoTransformedSourceInfo } from "#src/sliceview/geo.js";
 import {
+  beginGeoMeshFrame,
   computeGeoChunkMesh,
+  correctGeoChunkPosition,
   forEachGeoVisibleChunk,
   GeoRenderingMode,
+  getGeoChunkMesh,
   getGeoRenderingMode,
   makeGeoTransformedSourceInfo,
 } from "#src/sliceview/geo.js";
@@ -119,6 +122,7 @@ function makeProjection(
   centerY: number,
   unitsPerPixel: number,
   size = 512,
+  rotation = 0,
 ) {
   const p = new ProjectionParameters();
   p.width = size;
@@ -128,8 +132,12 @@ function makeProjection(
   p.globalPosition = Float32Array.of(cx, cy);
   const voxelsPerPixel = unitsPerPixel / globalScale;
   mat4.identity(p.invViewMatrix);
-  p.invViewMatrix[0] = voxelsPerPixel;
-  p.invViewMatrix[5] = voxelsPerPixel;
+  const cos = Math.cos(rotation) * voxelsPerPixel;
+  const sin = Math.sin(rotation) * voxelsPerPixel;
+  p.invViewMatrix[0] = cos;
+  p.invViewMatrix[1] = sin;
+  p.invViewMatrix[4] = -sin;
+  p.invViewMatrix[5] = cos;
   p.invViewMatrix[12] = cx;
   p.invViewMatrix[13] = cy;
   mat4.invert(p.viewMatrix, p.invViewMatrix);
@@ -155,7 +163,9 @@ function bruteForceVisibleChunks(source: TestSource, p: ProjectionParameters) {
   const { transform } = tsource.chunkLayout;
   const n = Math.ceil(tsource.upperClipDisplayBound[0] / CHUNK_SIZE);
   const size = tsource.upperClipDisplayBound[0];
-  const visible = new Set<string>();
+  // Map from visible chunk to the minimum screen distance of the centers of the clip-space bounds
+  // of its visible copies.
+  const visible = new Map<string, number>();
   const out = new Float64Array(2);
   const period = geo.warp.worldPeriod;
   for (let gx = 0; gx < n; ++gx) {
@@ -199,7 +209,12 @@ function bruteForceVisibleChunks(source: TestSource, p: ProjectionParameters) {
           }
         }
         if (xMin <= 1 && xMax >= -1 && yMin <= 1 && yMax >= -1) {
-          visible.add(`${gx},${gy}`);
+          const key = `${gx},${gy}`;
+          const distance = Math.hypot(
+            ((xMin + xMax) / 2) * (p.width / 2),
+            ((yMin + yMax) / 2) * (p.height / 2),
+          );
+          visible.set(key, Math.min(distance, visible.get(key) ?? Infinity));
         }
       }
     }
@@ -208,19 +223,33 @@ function bruteForceVisibleChunks(source: TestSource, p: ProjectionParameters) {
 }
 
 function getVisibleChunks(source: TestSource, p: ProjectionParameters) {
-  const visible = new Set<string>();
+  const visible = new Map<string, number>();
   forEachGeoVisibleChunk(
     p,
     new Float32Array(0),
     source.tsource,
     source.tsource.chunkLayout,
-    (position) => {
+    (position, screenDistance) => {
       const key = `${position[0]},${position[1]}`;
       expect(visible.has(key), `duplicate chunk ${key}`).toBe(false);
-      visible.add(key);
+      visible.set(key, screenDistance);
     },
   );
   return visible;
+}
+
+/**
+ * Wraps `geo.warp.forward` to count the number of calls.
+ */
+function countForwardCalls(geo: GeoTransformedSourceInfo) {
+  const { warp } = geo;
+  const forward = warp.forward.bind(warp);
+  const counter = { count: 0 };
+  warp.forward = (x, y, out) => {
+    ++counter.count;
+    return forward(x, y, out);
+  };
+  return counter;
 }
 
 // Sentinel-2 tile 33UUU: 10980 x 10980 pixels of 10 m, in UTM zone 33N.
@@ -254,6 +283,12 @@ describe("forEachGeoVisibleChunk", () => {
           source,
           projection: makeProjection(1e-4, 13.5, 52.6, 2e-2),
           minVisible: 100,
+        },
+        {
+          description: "UTM tile in geographic display, rotated view",
+          source,
+          projection: makeProjection(1e-4, 13.5, 52.6, 2e-3, 512, Math.PI / 5),
+          minVisible: 4,
         },
         {
           description: "UTM tile in geographic display, outside of view",
@@ -297,10 +332,16 @@ describe("forEachGeoVisibleChunk", () => {
     for (const { description, source, projection, minVisible } of cases) {
       const expected = bruteForceVisibleChunks(source, projection);
       const actual = getVisibleChunks(source, projection);
-      for (const key of expected) {
+      for (const [key, expectedDistance] of expected) {
         expect(actual.has(key), `${description}: missing chunk ${key}`).toBe(
           true,
         );
+        // The reported distance is that of the nearest visible copy (up to differences due to the
+        // coarser sampling of chunk boundaries).
+        expect(
+          Math.abs(actual.get(key)! - expectedDistance),
+          `${description}: distance of chunk ${key}`,
+        ).toBeLessThan(0.05 * projection.width);
       }
       expect(actual.size, description).toBeGreaterThanOrEqual(minVisible);
       // Chunk footprints are tested with a margin, so a few additional chunks may be reported.
@@ -308,6 +349,161 @@ describe("forEachGeoVisibleChunk", () => {
         Math.max(expected.size * 1.5, expected.size + 4),
       );
     }
+  });
+
+  it("reuses block footprints across traversals", () => {
+    const source = makeTestSource(
+      "EPSG:32633",
+      "EPSG:4326",
+      SENTINEL_TILE,
+      10980,
+      1e-4,
+    );
+    const counter = countForwardCalls(source.geo);
+    const view = makeProjection(1e-4, 13.5, 52.6, 2e-3);
+    const first = getVisibleChunks(source, view);
+    const firstCount = counter.count;
+    expect(firstCount).toBeGreaterThan(0);
+    // Same view: no evaluations of the warp.
+    expect(getVisibleChunks(source, view)).toEqual(first);
+    expect(counter.count).toBe(firstCount);
+    // Panned view: only blocks not visited previously are evaluated.
+    const panned = makeProjection(1e-4, 13.55, 52.6, 2e-3);
+    const expected = bruteForceVisibleChunks(source, panned);
+    counter.count = 0;
+    const actual = getVisibleChunks(source, panned);
+    for (const key of expected.keys()) {
+      expect(actual.has(key), `missing chunk ${key}`).toBe(true);
+    }
+    expect(counter.count).toBeLessThan(firstCount / 2);
+  });
+
+  it("skips sources with too many visible chunks", () => {
+    // A fine-resolution source in geographic coordinates (western hemisphere), shown in a north
+    // polar stereographic projection.  Near the pole, a small region covers all longitudes, and
+    // therefore the entire top row of chunks.
+    const source = makeTestSource(
+      "EPSG:4326",
+      "EPSG:3413",
+      [1e-5, 0, 0, -1e-5, -180, 90],
+      18000000,
+      1,
+    );
+    const atPole = makeProjection(1, 0, 0, 2);
+    expect(getVisibleChunks(source, atPole).size).toBe(0);
+    // Away from the pole, the visible chunks are reported.
+    const away = makeProjection(1, -1500000, 0, 2);
+    expect(getVisibleChunks(source, away).size).toBeGreaterThan(0);
+  });
+
+  it("retains the chunk meshes of the current frame", () => {
+    // Identity warp, such that meshes are cheap to compute.
+    const source = makeTestSource(
+      "EPSG:4326",
+      "EPSG:4326",
+      [1e-4, 0, 0, -1e-4, 13, 52],
+      64 * CHUNK_SIZE,
+      1e-4,
+    );
+    const { tsource, geo } = source;
+    const { chunkLayout } = tsource;
+    const drawFrame = (chunks: number[]) => {
+      beginGeoMeshFrame(tsource);
+      return chunks.map((i) => {
+        const x = i % 64;
+        const y = Math.floor(i / 64);
+        return getGeoChunkMesh(tsource, chunkLayout, `${x},${y}`, x, y, 0, 1);
+      });
+    };
+    const range = (start: number, end: number) =>
+      Array.from({ length: end - start }, (_, i) => start + i);
+    // More visible chunks than the minimum cache size: meshes are reused in the next frame.
+    const visible = range(0, 3000);
+    const first = drawFrame(visible);
+    const second = drawFrame(visible);
+    for (let i = 0; i < visible.length; ++i) {
+      expect(second[i]).toBe(first[i]);
+    }
+    drawFrame(range(3000, 4096));
+    expect(geo.meshCache!.meshes.size).toBe(4096);
+    // Once fewer chunks are visible, the cache shrinks to the minimum size, retaining the meshes
+    // of the current and previous frame.
+    const small = range(0, 1000);
+    const third = drawFrame(small);
+    drawFrame(small);
+    expect(geo.meshCache!.meshes.size).toBe(2048);
+    const fourth = drawFrame(small);
+    for (let i = 0; i < small.length; ++i) {
+      expect(fourth[i]).toBe(third[i]);
+    }
+    let totalVertices = 0;
+    for (const mesh of geo.meshCache!.meshes.values()) {
+      totalVertices += mesh.numVertices;
+    }
+    expect(geo.meshCache!.totalVertices).toBe(totalVertices);
+  });
+
+  it("corrects hover positions in world copies", () => {
+    const identity = makeTestSource(
+      "EPSG:4326",
+      "EPSG:4326",
+      [1e-3, 0, 0, -1e-3, 178, 66],
+      4096,
+      1e-3,
+    );
+    // A source spanning the antimeridian, in UTM zone 1 (central meridian -177).
+    const utm = makeTestSource(
+      "EPSG:32601",
+      "EPSG:4326",
+      [100, 0, 0, -100, 100000, 7000000],
+      8192,
+      1e-3,
+    );
+    const out = new Float64Array(2);
+    for (const [{ geo }, size] of [
+      [identity, 4096],
+      [utm, 8192],
+    ] as const) {
+      const { warp } = geo;
+      const period = warp.worldPeriod!;
+      const lower = [0, 0];
+      const upper = [size, size];
+      for (const [px, py] of [
+        [100.5, 200.5],
+        [size - 100.5, 300.5],
+      ]) {
+        expect(warp.forward(px, py, out)).not.toBe(TransformStatus.INVALID);
+        for (const k of [0, -1, 1]) {
+          const position = Float32Array.of(
+            out[0] + k * period[0],
+            out[1] + k * period[1],
+          );
+          expect(
+            correctGeoChunkPosition(warp, position, lower, upper),
+            `copy ${k}`,
+          ).toBe(true);
+          expect(position[0]).toBeCloseTo(px, 1);
+          expect(position[1]).toBeCloseTo(py, 1);
+        }
+      }
+    }
+  });
+
+  it("rejects hover positions outside of all world copies", () => {
+    const source = makeTestSource(
+      "EPSG:32601",
+      "EPSG:4326",
+      [100, 0, 0, -100, 100000, 7000000],
+      8192,
+      1e-3,
+    );
+    const { warp } = source.geo;
+    const out = new Float64Array(2);
+    warp.forward(4096, -2000, out);
+    const position = Float32Array.of(out[0], out[1]);
+    expect(correctGeoChunkPosition(warp, position, [0, 0], [8192, 8192])).toBe(
+      false,
+    );
   });
 
   it("computes chunk meshes covering the clipped chunk", () => {

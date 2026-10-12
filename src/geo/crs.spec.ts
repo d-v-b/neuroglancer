@@ -15,7 +15,11 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { getCrs, WEB_MERCATOR_MAX_LATITUDE } from "#src/geo/crs.js";
+import {
+  getCrs,
+  isDisplayCrsUnitSupported,
+  WEB_MERCATOR_MAX_LATITUDE,
+} from "#src/geo/crs.js";
 import {
   CrsTransform,
   haversineDistance,
@@ -122,6 +126,24 @@ describe("getCrs", () => {
     }
   });
 
+  it("determines whether the units are supported for display", () => {
+    for (const [spec, expected] of [
+      ["EPSG:4326", true],
+      ["EPSG:3857", true],
+      ["EPSG:32633", true],
+      [
+        "+proj=tmerc +lat_0=0 +lon_0=-120 +k=1 +x_0=0 +y_0=0 +datum=NAD83 +units=ft",
+        false,
+      ],
+      [
+        "+proj=tmerc +lat_0=0 +lon_0=-120 +k=1 +x_0=0 +y_0=0 +datum=NAD83 +units=us-ft",
+        false,
+      ],
+    ] as const) {
+      expect(isDisplayCrsUnitSupported(getCrs(spec)), spec).toBe(expected);
+    }
+  });
+
   it("rejects unknown EPSG codes", () => {
     expect(() => getCrs("EPSG:999999")).toThrow(/Unsupported CRS EPSG:999999/);
   });
@@ -188,20 +210,101 @@ describe("CrsTransform", () => {
     const m = new CrsTransform(getCrs("EPSG:4326"), getCrs("EPSG:3857"));
     expect(m.forward(0, 90.125, out)).toBe(TransformStatus.CLAMPED);
     expect(m.forward(0, 96, out)).toBe(TransformStatus.INVALID);
+    // Equirectangular coordinates beyond the poles are not folded to the opposite pole.
+    const e = new CrsTransform(getCrs("EPSG:4087"), getCrs("EPSG:4326"));
+    const poleY = 10018754.1714;
+    expect(e.forward(1000000, poleY + 10000, out)).toBe(TransformStatus.VALID);
+    expect(out[1]).toBe(90);
+    expect(e.forward(1000000, -poleY - 10000, out)).toBe(TransformStatus.VALID);
+    expect(out[1]).toBe(-90);
+    expect(e.forward(1000000, 2 * poleY, out)).toBe(TransformStatus.INVALID);
+    expect(e.inverse(0, 90, out)).toBe(TransformStatus.VALID);
+    expect(out[1]).toBeCloseTo(poleY, 2);
+    expect(e.inverse(0, -90, out)).toBe(TransformStatus.VALID);
+    expect(out[1]).toBeCloseTo(-poleY, 2);
   });
 
   it("unwraps longitudes across the antimeridian", () => {
-    // UTM zone 1 is centered at -177 degrees; points west of the zone boundary should map to
-    // longitudes < -180 rather than wrapping to +180.
-    const t = new CrsTransform(
-      getCrs("EPSG:32601"),
-      getCrs("EPSG:4326"),
-      /*referenceLongitude=*/ -177,
-    );
+    const halfWorld = 20037508.3428;
+    const cases: {
+      description: string;
+      source: string;
+      referenceLongitude: number;
+      point: [number, number];
+      expectedLongitude: number;
+      precision: number;
+    }[] = [
+      {
+        // UTM zone 1 is centered at -177 degrees; points west of the zone boundary should map to
+        // longitudes < -180 rather than wrapping to +180.
+        description: "UTM west of the antimeridian",
+        source: "EPSG:32601",
+        referenceLongitude: -177,
+        point: [100000, 1000000],
+        expectedLongitude: -180.637,
+        precision: 2,
+      },
+      // Cylindrical sources are unwrapped continuously in x, regardless of the reference
+      // longitude, such that the edge cells of global grids whose cell centers lie on the
+      // antimeridian are not folded to the other side.
+      {
+        description: "Web Mercator beyond +180",
+        source: "EPSG:3857",
+        referenceLongitude: 0,
+        point: [halfWorld + halfWorld / 1024, 0],
+        expectedLongitude: 180 + 180 / 1024,
+        precision: 6,
+      },
+      {
+        description: "Web Mercator beyond -180",
+        source: "EPSG:3857",
+        referenceLongitude: 0,
+        point: [-halfWorld - halfWorld / 1024, 0],
+        expectedLongitude: -180 - 180 / 1024,
+        precision: 6,
+      },
+      {
+        description: "equirectangular beyond +180",
+        source: "EPSG:4087",
+        referenceLongitude: 0,
+        point: [halfWorld + halfWorld / 1024, 1000000],
+        expectedLongitude: 180 + 180 / 1024,
+        precision: 6,
+      },
+      {
+        description: "Web Mercator far from the reference longitude",
+        source: "EPSG:3857",
+        referenceLongitude: 0,
+        point: [2 * halfWorld, 0],
+        expectedLongitude: 360,
+        precision: 6,
+      },
+    ];
     const out = new Float64Array(2);
-    expect(t.forward(100000, 1000000, out)).toBe(TransformStatus.VALID);
-    expect(out[0]).toBeLessThan(-180);
-    expect(out[0]).toBeGreaterThan(-185);
+    const back = new Float64Array(2);
+    for (const {
+      description,
+      source,
+      referenceLongitude,
+      point,
+      expectedLongitude,
+      precision,
+    } of cases) {
+      const t = new CrsTransform(
+        getCrs(source),
+        getCrs("EPSG:4326"),
+        referenceLongitude,
+      );
+      expect(t.forward(point[0], point[1], out), description).toBe(
+        TransformStatus.VALID,
+      );
+      expect(out[0], description).toBeCloseTo(expectedLongitude, precision);
+      expect(t.inverse(out[0], out[1], back), description).toBe(
+        TransformStatus.VALID,
+      );
+      expect(back[0], description).toBeCloseTo(point[0], 2);
+      expect(back[1], description).toBeCloseTo(point[1], 2);
+    }
   });
 
   it("reports points that cannot be transformed", () => {
