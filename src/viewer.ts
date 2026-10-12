@@ -86,6 +86,7 @@ import {
 } from "#src/trackable_value.js";
 import { CommandCatalog } from "#src/ui/command_catalog.js";
 import { CommandRegistry } from "#src/ui/command_registry.js";
+import { GeoStatusWidget } from "#src/ui/geo_status_widget.js";
 import {
   LayerArchiveCountWidget,
   LayerListPanel,
@@ -835,6 +836,17 @@ export class Viewer extends RefCounted implements ViewerState {
       ),
     );
     topRow.appendChild(positionWidget.element);
+
+    const geoStatusWidget = this.registerDisposer(
+      new GeoStatusWidget(this.geoView, this.mouseState),
+    );
+    this.registerDisposer(
+      new ElementVisibilityFromTrackableBoolean(
+        this.uiControlVisibility.showLocation,
+        geoStatusWidget.element,
+      ),
+    );
+    topRow.appendChild(geoStatusWidget.element);
 
     const mousePositionWidget = this.registerDisposer(
       new MousePositionWidget(

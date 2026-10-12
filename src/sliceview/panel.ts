@@ -18,6 +18,7 @@ import { AxesLineHelper, computeAxisLineMatrix } from "#src/axes_lines.js";
 import type { DisplayContext } from "#src/display_context.js";
 import type { GeoViewState } from "#src/geo/geo_view.js";
 import { getGroundMetersPerPixel } from "#src/geo/geo_view.js";
+import { drawGraticule } from "#src/geo/graticule.js";
 import type { VisibleRenderLayerTracker } from "#src/layer/index.js";
 import { makeRenderedPanelVisibleLayerTracker } from "#src/layer/index.js";
 import { PickIDManager } from "#src/object_picking.js";
@@ -60,6 +61,7 @@ import {
   TextureBuffer,
 } from "#src/webgl/offscreen.js";
 import type { ShaderBuilder } from "#src/webgl/shader.js";
+import { setTextureFromCanvas } from "#src/webgl/texture.js";
 import type { TrackableScaleBarOptions } from "#src/widget/scale_bar.js";
 import { MultipleScaleBarTextures } from "#src/widget/scale_bar.js";
 
@@ -274,6 +276,13 @@ export class SliceViewPanel extends RenderedDataPanel {
       }),
     );
     this.registerDisposer(
+      viewer.geoView?.changed.add(() => {
+        if (this.visible) {
+          this.context.scheduleRedraw();
+        }
+      }) ?? (() => {}),
+    );
+    this.registerDisposer(
       viewer.scaleBarOptions.changed.add(() => {
         if (this.visible) {
           this.context.scheduleRedraw();
@@ -438,6 +447,8 @@ export class SliceViewPanel extends RenderedDataPanel {
       }
     }
 
+    this.drawGeoOverlay(projectionParameters);
+
     this.offscreenFramebuffer.unbind();
 
     // Draw the texture over the whole viewport.
@@ -446,6 +457,74 @@ export class SliceViewPanel extends RenderedDataPanel {
       this.offscreenFramebuffer.colorBuffers[OffscreenTextures.COLOR].texture,
     );
     return true;
+  }
+
+  private geoOverlayCanvas: HTMLCanvasElement | undefined;
+  private geoOverlayTexture: WebGLTexture | null = null;
+
+  /**
+   * Draws the graticule and north arrow if the view shows the display CRS dimensions of a
+   * geospatial display.
+   */
+  private drawGeoOverlay(projectionParameters: ProjectionParameters) {
+    const { geoView } = this.viewer;
+    const info = geoView?.info;
+    if (geoView === undefined || info === undefined) return;
+    const drawGraticuleLines = geoView.showGraticule.value;
+    const drawNorthArrow = this.viewer.showScaleBar.value;
+    if (!drawGraticuleLines && !drawNorthArrow) return;
+    const { displayDimensionIndices } =
+      projectionParameters.displayDimensionRenderInfo;
+    if (
+      !displayDimensionIndices.includes(info.xDim) ||
+      !displayDimensionIndices.includes(info.yDim)
+    ) {
+      return;
+    }
+    const { width, height } = projectionParameters;
+    let canvas = this.geoOverlayCanvas;
+    if (canvas === undefined) {
+      canvas = this.geoOverlayCanvas = document.createElement("canvas");
+    }
+    if (canvas.width !== width || canvas.height !== height) {
+      canvas.width = width;
+      canvas.height = height;
+    }
+    const ctx = canvas.getContext("2d")!;
+    const scaleBarOptions = this.viewer.scaleBarOptions.value;
+    drawGraticule(
+      ctx,
+      info,
+      {
+        width,
+        height,
+        viewProjectionMat: projectionParameters.viewProjectionMat,
+        invViewProjectionMat: projectionParameters.invViewProjectionMat,
+        displayDimensionIndices,
+        globalPosition: projectionParameters.globalPosition,
+      },
+      {
+        scaleFactor: scaleBarOptions.scaleFactor,
+        fontName: scaleBarOptions.fontName,
+        drawGraticule: drawGraticuleLines,
+        drawNorthArrow,
+      },
+    );
+    const { gl } = this;
+    if (this.geoOverlayTexture === null) {
+      const texture = (this.geoOverlayTexture = gl.createTexture());
+      this.registerDisposer(() => gl.deleteTexture(texture));
+    }
+    setTextureFromCanvas(gl, this.geoOverlayTexture, canvas);
+    this.offscreenFramebuffer.bindSingle(OffscreenTextures.COLOR);
+    gl.viewport(0, 0, width, height);
+    gl.enable(WebGL2RenderingContext.BLEND);
+    gl.blendFunc(
+      WebGL2RenderingContext.SRC_ALPHA,
+      WebGL2RenderingContext.ONE_MINUS_SRC_ALPHA,
+    );
+    this.offscreenCopyHelper.draw(this.geoOverlayTexture);
+    gl.disable(WebGL2RenderingContext.BLEND);
   }
 
   /**

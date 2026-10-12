@@ -126,6 +126,12 @@ export class ScaleBarDimensions {
   physicalLength: number;
   physicalUnit: string;
 
+  /**
+   * If specified, SI prefixes are limited to "k" (e.g. for ground distances, which are
+   * conventionally expressed in km rather than Mm).
+   */
+  maxPrefixExponent: number | undefined;
+
   prevPhysicalSizePerPixel = 0;
   prevTargetLengthInPixels = 0;
   prevPhysicalUnit = "\0";
@@ -169,7 +175,12 @@ export class ScaleBarDimensions {
     }
 
     const physicalSize = bestSignificand * tenToThePowerExponent;
-    const siPrefix = pickSiPrefix(physicalSize);
+    let siPrefix = pickSiPrefix(physicalSize);
+    if (this.maxPrefixExponent !== undefined) {
+      if (siPrefix.exponent > this.maxPrefixExponent) {
+        siPrefix = { prefix: "k", exponent: 3 };
+      }
+    }
     this.lengthInPixels = Math.round(physicalSize / physicalSizePerPixel);
     this.physicalUnit = `${siPrefix.prefix}${this.physicalBaseUnit}`;
     this.physicalLength =
@@ -340,6 +351,7 @@ export class MultipleScaleBarTextures extends RefCounted {
         scaleBar.factor = Number.NaN;
         const scaleBarDimensions = scaleBar.dimensions;
         scaleBarDimensions.physicalBaseUnit = "m";
+        scaleBarDimensions.maxPrefixExponent = 3;
         scaleBarDimensions.targetLengthInPixels = targetLengthInPixels;
         scaleBarDimensions.physicalSizePerPixel = metersPerPixel;
       }
@@ -370,6 +382,7 @@ export class MultipleScaleBarTextures extends RefCounted {
         scaleBarDimensions = scaleBar.dimensions;
         scaleBar.factor = factor;
         scaleBarDimensions.physicalBaseUnit = unit;
+        scaleBarDimensions.maxPrefixExponent = undefined;
         scaleBarDimensions.targetLengthInPixels = targetLengthInPixels;
         scaleBarDimensions.physicalSizePerPixel =
           (displayDimensionScales[i] * effectiveZoom) /
