@@ -73,7 +73,9 @@ def user_defined_tm_geokeys():
     ]  # fmt: skip
 
 
-def georef_tags(geokeys, pixel_scale=None, tiepoint=None, transformation=None, doubles=None):
+def georef_tags(
+    geokeys, pixel_scale=None, tiepoint=None, transformation=None, doubles=None
+):
     tags = [(34735, "H", len(geokeys), geokeys, True)]
     if pixel_scale is not None:
         tags.append((33550, "d", 3, pixel_scale, True))
@@ -139,10 +141,22 @@ def main():
         extratags=georef_tags(
             utm_geokeys(32633),
             transformation=[
-                10.0, 0.0, 0.0, 399960.0,
-                0.0, -10.0, 0.0, 4200000.0,
-                0.0, 0.0, 0.0, 0.0,
-                0.0, 0.0, 0.0, 1.0,
+                10.0,
+                0.0,
+                0.0,
+                399960.0,
+                0.0,
+                -10.0,
+                0.0,
+                4200000.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0,
             ],  # fmt: skip
         ),
     )
