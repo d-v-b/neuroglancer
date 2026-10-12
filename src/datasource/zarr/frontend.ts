@@ -32,6 +32,11 @@ import type {
 } from "#src/datasource/index.js";
 import { getKvStorePathCompletions } from "#src/datasource/kvstore_completions.js";
 import { VolumeChunkSourceParameters } from "#src/datasource/zarr/base.js";
+import type { XarrayGeoreference } from "#src/datasource/zarr/geo.js";
+import {
+  getXarrayDefaultShader,
+  getXarrayGeoreference,
+} from "#src/datasource/zarr/geo.js";
 import "#src/datasource/zarr/codec/bytes/resolve.js";
 import "#src/datasource/zarr/codec/crc32c/resolve.js";
 import "#src/datasource/zarr/codec/gzip/resolve.js";
@@ -110,9 +115,14 @@ export class MultiscaleVolumeChunkSource extends GenericMultiscaleVolumeChunkSou
   constructor(
     public sharedKvStoreContext: SharedKvStoreContext,
     public multiscale: ZarrMultiscaleInfo,
+    private defaultShader_?: string,
   ) {
     super(sharedKvStoreContext.chunkManager);
     this.volumeType = VolumeType.IMAGE;
+  }
+
+  get defaultShader() {
+    return this.defaultShader_;
   }
 
   getSources(volumeSourceOptions: VolumeSourceOptions) {
@@ -263,12 +273,28 @@ function getNormalizedDimensionNames(
 function getMultiscaleInfoForSingleArray(
   url: string,
   metadata: ArrayMetadata,
+  geo?: XarrayGeoreference,
 ): ZarrMultiscaleInfo {
   const names = getNormalizedDimensionNames(
     metadata.dimensionNames,
     metadata.zarrVersion,
   );
   const unitsAndScales = metadata.dimensionUnits.map(parseDimensionUnit);
+  if (geo !== undefined) {
+    unitsAndScales[geo.lonDim] = {
+      unit: "deg",
+      scale: Math.abs(geo.lon.step),
+    };
+    unitsAndScales[geo.latDim] = {
+      unit: "deg",
+      scale: Math.abs(geo.lat.step),
+    };
+    for (const [dim, scale] of geo.verticalScales) {
+      if (unitsAndScales[dim].unit === "") {
+        unitsAndScales[dim] = { unit: "", scale };
+      }
+    }
+  }
   const modelSpace = makeCoordinateSpace({
     names,
     scales: Float64Array.from(Array.from(unitsAndScales, (x) => x.scale)),
@@ -515,6 +541,8 @@ export class ZarrDataSource implements KvStoreBasedDataSourceProvider {
           explicitDimensionSeparator: dimensionSeparator,
         });
         let channelMetadata: ChannelMetadata | undefined;
+        let geo: XarrayGeoreference | undefined;
+        let defaultShader: string | undefined;
         if (metadata === undefined) {
           throw new Error("No zarr metadata found");
         }
@@ -540,14 +568,25 @@ export class ZarrDataSource implements KvStoreBasedDataSourceProvider {
             },
           );
         } else {
+          geo = await getXarrayGeoreference(
+            sharedKvStoreContext,
+            kvStoreUrl,
+            metadata,
+            progressOptions,
+          );
           multiscaleInfo = getMultiscaleInfoForSingleArray(
             kvStoreUrl,
             metadata,
+            geo,
           );
+          if (geo !== undefined) {
+            defaultShader = getXarrayDefaultShader(metadata);
+          }
         }
         const volume = new MultiscaleVolumeChunkSource(
           sharedKvStoreContext,
           multiscaleInfo,
+          defaultShader,
         );
         const modelTransform = {
           rank: volume.modelSpace.rank,
@@ -556,9 +595,32 @@ export class ZarrDataSource implements KvStoreBasedDataSourceProvider {
           outputSpace: volume.modelSpace,
           transform: multiscaleInfo.baseTransform,
         };
+        if (geo !== undefined) {
+          // Map voxel index i to the coordinate of the corner of the cell centered at
+          // `start + i * step`, in units of the dimension scale.
+          const { rank } = volume;
+          const transform = new Float64Array(modelTransform.transform);
+          for (const [dim, axis] of [
+            [geo.lonDim, geo.lon],
+            [geo.latDim, geo.lat],
+          ] as const) {
+            const scale = Math.abs(axis.step);
+            transform[dim * (rank + 1) + dim] = Math.sign(axis.step);
+            transform[rank * (rank + 1) + dim] =
+              (axis.start - axis.step / 2) / scale;
+          }
+          modelTransform.transform = transform;
+        }
         return {
           canonicalUrl: `${kvStoreUrl}|zarr${metadata.zarrVersion}:`,
           modelTransform,
+          geoReference:
+            geo === undefined
+              ? undefined
+              : {
+                  crs: geo.crs,
+                  modelDimensions: [geo.lonDim, geo.latDim],
+                },
           channelMetadata,
           subsources: [
             {

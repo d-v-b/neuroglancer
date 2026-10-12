@@ -24,6 +24,8 @@ import { ChunkLayout } from "#src/sliceview/chunk_layout.js";
 import type { GeoTransformedSourceInfo } from "#src/sliceview/geo.js";
 import {
   forEachGeoVisibleChunk,
+  GeoRenderingMode,
+  getGeoRenderingMode,
   updateGeoEffectiveVoxelSize,
 } from "#src/sliceview/geo.js";
 import type {
@@ -923,8 +925,11 @@ export function forEachVisibleVolumetricChunk<
   transformedSource: TransformedSource<RLayer>,
   callback: (positionInChunks: vec3, clippingPlanes: Float32Array) => void,
 ) {
-  if (transformedSource.geo !== undefined) {
-    // Georeferenced sources are not supported for volume rendering.
+  if (
+    transformedSource.geo !== undefined &&
+    !transformedSource.geo.warp.isIdentity
+  ) {
+    // Warped sources are not supported for volume rendering.
     return;
   }
   if (
@@ -972,7 +977,13 @@ export function forEachPlaneIntersectingVolumetricChunk<
   chunkLayout: ChunkLayout,
   callback: (positionInChunks: vec3) => void,
 ) {
-  if (transformedSource.geo !== undefined) {
+  const geoMode = getGeoRenderingMode(
+    transformedSource,
+    projectionParameters,
+    chunkLayout,
+  );
+  if (geoMode === GeoRenderingMode.HIDDEN) return;
+  if (geoMode === GeoRenderingMode.WARPED) {
     forEachGeoVisibleChunk(
       projectionParameters,
       localPosition,

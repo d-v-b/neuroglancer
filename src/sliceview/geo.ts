@@ -296,6 +296,43 @@ export function getGeoViewParameters(
   return { si, sj, sk, subspaceToClip, thirdCoordinate, worldPeriodSubspace };
 }
 
+export enum GeoRenderingMode {
+  /** The source is not shown in the current view. */
+  HIDDEN = 0,
+  /** The source is rendered using the regular (affine) path. */
+  AFFINE = 1,
+  /** The source is rendered using warped meshes. */
+  WARPED = 2,
+}
+
+/**
+ * Determines how a georeferenced source is rendered in the current view.
+ *
+ * In cross sections parallel to the map plane, all georeferenced sources are rendered using the
+ * warped path, which supports world copies.  In other cross sections (e.g. vertical sections
+ * through a georeferenced volume), sources whose warp is the identity (i.e. sources in the display
+ * CRS) are rendered using the regular (affine) path, provided that they extend along all displayed
+ * dimensions; 2-d sources such as map tiles are hidden rather than being extruded.  Other warped
+ * sources cannot be shown in such cross sections.
+ */
+export function getGeoRenderingMode(
+  tsource: TransformedSource<any>,
+  projectionParameters: ProjectionParameters,
+  chunkLayout: ChunkLayout,
+): GeoRenderingMode {
+  const { geo } = tsource;
+  if (geo === undefined) return GeoRenderingMode.AFFINE;
+  if (
+    getGeoViewParameters(geo, projectionParameters, chunkLayout) !== undefined
+  ) {
+    return GeoRenderingMode.WARPED;
+  }
+  if (!geo.warp.isIdentity) return GeoRenderingMode.HIDDEN;
+  const { displayRank } = projectionParameters.displayDimensionRenderInfo;
+  if (chunkLayout.finiteRank < displayRank) return GeoRenderingMode.HIDDEN;
+  return GeoRenderingMode.AFFINE;
+}
+
 /**
  * Bounding box in clip coordinates (x, y only).
  */

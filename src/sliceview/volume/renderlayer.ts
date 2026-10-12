@@ -35,6 +35,8 @@ import {
   correctGeoChunkPosition,
   getGeoChunkMesh,
   getGeoChunkMeshCopies,
+  GeoRenderingMode,
+  getGeoRenderingMode,
   getGeoViewParameters,
 } from "#src/sliceview/geo.js";
 import type {
@@ -989,7 +991,13 @@ void main() {
         fixedPositionWithinChunk[chunkDim] = 0;
       }
       const chunkFormat = wireFrame ? null : source.chunkFormat;
-      const geo = transformedSource.geo !== undefined;
+      const geoMode = getGeoRenderingMode(
+        transformedSource,
+        projectionParameters,
+        chunkLayout,
+      );
+      if (geoMode === GeoRenderingMode.HIDDEN) continue;
+      const geo = geoMode === GeoRenderingMode.WARPED;
       if (chunkFormat !== prevChunkFormat || geo !== prevGeo) {
         prevChunkFormat = chunkFormat;
         prevGeo = geo;

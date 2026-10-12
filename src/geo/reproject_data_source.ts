@@ -26,6 +26,7 @@ import {
 import type { DataSource, DataSubsourceEntry } from "#src/datasource/index.js";
 import type { Crs } from "#src/geo/crs.js";
 import { getCrs } from "#src/geo/crs.js";
+import { GEO_DIMENSION_NAMES } from "#src/geo/display_crs.js";
 import type { Affine2d, GeoWarpSpec } from "#src/geo/source_warp.js";
 import {
   computeGeoWarpSpec,
@@ -183,9 +184,21 @@ export function reprojectDataSource(
   const newOutputScales = new Float64Array(outputScales);
   newOutputUnits[o0] = newOutputUnits[o1] = displayUnit;
   newOutputScales[o0] = newOutputScales[o1] = displayScale;
+  // Georeferenced dimensions of all sources are named consistently, such that they map to the
+  // same global dimensions.
+  const newOutputNames = Array.from(outputSpace.names);
+  for (let i = 0; i < rank; ++i) {
+    if (i === o0 || i === o1) continue;
+    const name = newOutputNames[i];
+    if (name === GEO_DIMENSION_NAMES[0] || name === GEO_DIMENSION_NAMES[1]) {
+      newOutputNames[i] = `${name}_source`;
+    }
+  }
+  newOutputNames[o0] = GEO_DIMENSION_NAMES[0];
+  newOutputNames[o1] = GEO_DIMENSION_NAMES[1];
   const newOutputSpace = makeCoordinateSpace({
     valid: outputSpace.valid,
-    names: outputSpace.names,
+    names: newOutputNames,
     units: newOutputUnits,
     scales: newOutputScales,
     coordinateArrays: outputSpace.coordinateArrays,

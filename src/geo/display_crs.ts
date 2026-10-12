@@ -23,6 +23,13 @@ import { getCrs } from "#src/geo/crs.js";
 import { TrackableValue } from "#src/trackable_value.js";
 import { verifyString } from "#src/util/json.js";
 
+/**
+ * Names of the model dimensions holding display CRS x (easting/longitude) and y
+ * (northing/latitude) coordinates of reprojected data sources, and of the corresponding global
+ * dimensions.
+ */
+export const GEO_DIMENSION_NAMES: readonly [string, string] = ["x", "y"];
+
 function validateCrsSpecification(x: unknown): string | undefined {
   if (x === undefined) return undefined;
   const s = verifyString(x);
@@ -37,10 +44,11 @@ function validateCrsSpecification(x: unknown): string | undefined {
  */
 export class TrackableDisplayCrs extends TrackableValue<string | undefined> {
   /**
-   * Names of the global dimensions holding display CRS x and y coordinates.  Set from the model
-   * dimension names of georeferenced data sources.
+   * Names of the global dimensions holding display CRS x and y coordinates.
    */
-  dimensionNames: readonly [string, string] = ["x", "y"];
+  get dimensionNames(): readonly [string, string] {
+    return GEO_DIMENSION_NAMES;
+  }
 
   constructor() {
     super(undefined, validateCrsSpecification);
