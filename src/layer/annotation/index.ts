@@ -445,7 +445,9 @@ export class AnnotationUserLayer extends Base {
   hideInactiveShaderControls = new TrackableBoolean(false);
   readonly localAnnotationProperties: WatchableValue<AnnotationPropertySpec[]> =
     new WatchableValue([]);
-  private localAnnotationRelationships: string[];
+  // Initialized to the default such that the layer can be serialized (e.g. to update the URL)
+  // before its state has been restored.
+  private localAnnotationRelationships: string[] = ["segments"];
   private localAnnotationsJson: any = undefined;
   private pointAnnotationsJson: any = undefined;
   // Default shader suggested by a data source that was applied to `annotationDisplayState.shader`,
