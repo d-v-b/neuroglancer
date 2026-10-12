@@ -12,7 +12,7 @@ properties:
     description: |
       Specified as an EPSG code (e.g. ``"EPSG:4326"`` or ``"EPSG:3857"``) or a
       proj4 definition. Georeferenced data sources are reprojected into this
-      CRS, and the two global dimensions named ``x`` and ``y`` hold display CRS
+      CRS, and the two global dimensions named ``"x"`` and ``"y"`` hold display CRS
       coordinates. If not specified, the CRS of the first georeferenced data
       source that is loaded is used.
 
