@@ -23,6 +23,7 @@ import { debounce } from "lodash-es";
 import type { InputEventBindings as DataPanelInputEventBindings } from "#src/data_panel_layout.js";
 import { DataPanelLayoutContainer } from "#src/data_panel_layout.js";
 import type { DisplayContext } from "#src/display_context.js";
+import type { GeoViewState } from "#src/geo/geo_view.js";
 import type {
   LayerListSpecification,
   MouseSelectionState,
@@ -105,6 +106,7 @@ export interface LayerGroupViewerState {
   perspectiveViewBackgroundColor: TrackableRGB;
   hideCrossSectionBackground3D: TrackableBoolean;
   pickRadius: TrackableValue<number>;
+  geoView?: GeoViewState;
 }
 
 export interface LayerGroupViewerOptions {
@@ -390,6 +392,9 @@ export class LayerGroupViewer extends RefCounted {
   }
   get scaleBarOptions() {
     return this.viewerState.scaleBarOptions;
+  }
+  get geoView() {
+    return this.viewerState.geoView;
   }
   layerPanel: LayerBar | undefined;
   layout: DataPanelLayoutContainer;

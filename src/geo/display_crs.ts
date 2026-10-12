@@ -36,6 +36,12 @@ function validateCrsSpecification(x: unknown): string | undefined {
  * of the first georeferenced data source that is loaded.
  */
 export class TrackableDisplayCrs extends TrackableValue<string | undefined> {
+  /**
+   * Names of the global dimensions holding display CRS x and y coordinates.  Set from the model
+   * dimension names of georeferenced data sources.
+   */
+  dimensionNames: readonly [string, string] = ["x", "y"];
+
   constructor() {
     super(undefined, validateCrsSpecification);
   }

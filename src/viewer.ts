@@ -38,6 +38,7 @@ import type { DataSourceRegistry } from "#src/datasource/index.js";
 import { StateShare, stateShareEnabled } from "#src/datasource/state_share.js";
 import type { DisplayContext } from "#src/display_context.js";
 import { TrackableWindowedViewport } from "#src/display_context.js";
+import { GeoViewState } from "#src/geo/geo_view.js";
 import {
   HelpPanelState,
   InputEventBindingHelpDialog,
@@ -318,6 +319,7 @@ export class TrackableViewerState extends CompoundTrackable {
     this.add("wireFrame", viewer.wireFrame);
     this.add("enableAdaptiveDownsampling", viewer.enableAdaptiveDownsampling);
     this.add("showScaleBar", viewer.showScaleBar);
+    this.add("showGraticule", viewer.geoView.showGraticule);
     this.add("showDefaultAnnotations", viewer.showDefaultAnnotations);
 
     this.add("showSlices", viewer.showPerspectiveSliceViews);
@@ -493,6 +495,7 @@ export class Viewer extends RefCounted implements ViewerState {
   wireFrame = new TrackableBoolean(false, false);
   enableAdaptiveDownsampling = new TrackableBoolean(true, true);
   showScaleBar = new TrackableBoolean(true, true);
+  geoView: GeoViewState;
   showPerspectiveSliceViews = new TrackableBoolean(true, true);
   hideCrossSectionBackground3D = new TrackableBoolean(false, false);
   visibleLayerRoles = allRenderLayerRoles();
@@ -697,6 +700,14 @@ export class Viewer extends RefCounted implements ViewerState {
       this.navigationState.coordinateSpace,
       this.navigationState.pose.position,
       this.globalToolBinder,
+    );
+
+    this.geoView = this.registerDisposer(
+      new GeoViewState(
+        this.layerSpecification.displayCrs,
+        this.navigationState.coordinateSpace,
+        this.navigationState,
+      ),
     );
 
     this.registerDisposer(

@@ -422,6 +422,7 @@ function getCommonViewerState(viewer: Viewer) {
     perspectiveViewBackgroundColor: viewer.perspectiveViewBackgroundColor,
     hideCrossSectionBackground3D: viewer.hideCrossSectionBackground3D,
     pickRadius: viewer.uiConfiguration.pickRadius,
+    geoView: viewer.geoView,
   };
 }
 

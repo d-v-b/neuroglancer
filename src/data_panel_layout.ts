@@ -19,6 +19,7 @@ import "#src/data_panel_layout.css";
 import { debounce } from "lodash-es";
 import type { ChunkManager } from "#src/chunk_manager/frontend.js";
 import type { DisplayContext } from "#src/display_context.js";
+import type { GeoViewState } from "#src/geo/geo_view.js";
 import type {
   LayerManager,
   MouseSelectionState,
@@ -102,6 +103,7 @@ export interface ViewerUIState
   perspectiveViewBackgroundColor: TrackableRGB;
   hideCrossSectionBackground3D: TrackableBoolean;
   pickRadius: TrackableValue<number>;
+  geoView?: GeoViewState;
 }
 
 export interface DataDisplayLayout extends RefCounted {
@@ -185,6 +187,7 @@ export function getCommonViewerState(viewer: ViewerUIState) {
     scaleBarOptions: viewer.scaleBarOptions,
     hideCrossSectionBackground3D: viewer.hideCrossSectionBackground3D,
     pickRadius: viewer.pickRadius,
+    geoView: viewer.geoView,
   };
 }
 

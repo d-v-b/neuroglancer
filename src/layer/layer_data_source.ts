@@ -423,6 +423,9 @@ export class LayerDataSource extends RefCounted {
             source,
             displayCrs.getOrAdopt(geoReference.crs),
           );
+          const { names } = effectiveSource.modelTransform.outputSpace;
+          const [xDim, yDim] = geoReference.modelDimensions;
+          displayCrs.dimensionNames = [names[xDim], names[yDim]];
           const initialDisplayCrs = displayCrs.value;
           refCounted.registerDisposer(
             displayCrs.changed.add(() => {

@@ -16,9 +16,12 @@
 
 import { AxesLineHelper, computeAxisLineMatrix } from "#src/axes_lines.js";
 import type { DisplayContext } from "#src/display_context.js";
+import type { GeoViewState } from "#src/geo/geo_view.js";
+import { getGroundMetersPerPixel } from "#src/geo/geo_view.js";
 import type { VisibleRenderLayerTracker } from "#src/layer/index.js";
 import { makeRenderedPanelVisibleLayerTracker } from "#src/layer/index.js";
 import { PickIDManager } from "#src/object_picking.js";
+import type { ProjectionParameters } from "#src/projection_parameters.js";
 import type {
   FramePickingData,
   RenderedDataViewerState,
@@ -66,6 +69,7 @@ export interface SliceViewerState extends RenderedDataViewerState {
   scaleBarOptions: TrackableScaleBarOptions;
   crossSectionBackgroundColor: TrackableRGB;
   hideCrossSectionBackground3D: TrackableBoolean;
+  geoView?: GeoViewState;
 }
 
 export enum OffscreenTextures {
@@ -428,6 +432,7 @@ export class SliceViewPanel extends RenderedDataPanel {
           this.navigationState.relativeDisplayScales.value,
           this.navigationState.zoomFactor.value,
           this.viewer.scaleBarOptions.value,
+          this.getGeoScaleBarParameters(projectionParameters),
         );
         gl.disable(WebGL2RenderingContext.BLEND);
       }
@@ -441,6 +446,34 @@ export class SliceViewPanel extends RenderedDataPanel {
       this.offscreenFramebuffer.colorBuffers[OffscreenTextures.COLOR].texture,
     );
     return true;
+  }
+
+  /**
+   * Returns the ground distance scale bar parameters if the view shows the display CRS dimensions
+   * of a geospatial display.
+   */
+  private getGeoScaleBarParameters(projectionParameters: ProjectionParameters) {
+    const info = this.viewer.geoView?.info;
+    if (info === undefined) return undefined;
+    const { displayDimensionIndices } =
+      projectionParameters.displayDimensionRenderInfo;
+    if (
+      !displayDimensionIndices.includes(info.xDim) ||
+      !displayDimensionIndices.includes(info.yDim)
+    ) {
+      return undefined;
+    }
+    const groundMetersPerPixel = getGroundMetersPerPixel(
+      info,
+      projectionParameters.globalPosition,
+      projectionParameters.invViewMatrix,
+      displayDimensionIndices,
+    );
+    if (groundMetersPerPixel === undefined) return undefined;
+    return {
+      globalDimensions: [info.xDim, info.yDim],
+      groundMetersPerPixel,
+    };
   }
 
   ensureBoundsUpdated() {
