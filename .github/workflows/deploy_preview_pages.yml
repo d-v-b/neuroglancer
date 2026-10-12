@@ -1,0 +1,45 @@
+name: Deploy preview to GitHub Pages
+
+# Deploys a preview of the client for each pull request to the `gh-pages` branch of this repository
+# (served by GitHub Pages under `pr-preview/pr-<number>/`), and removes it when the pull request is
+# closed.  This is an alternative to the Firebase previews of `deploy_preview.yml`, for forks
+# without access to the Firebase project.
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, closed]
+
+concurrency: preview-pages-${{ github.event.number }}
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  deploy:
+    # Deploying requires write access to this repository, which is not available to pull requests
+    # from other repositories; the upstream repository uses Firebase previews instead.
+    if: >-
+      github.repository_owner != 'google' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        if: github.event.action != 'closed'
+        with:
+          node-version: "22.x"
+          cache: npm
+      - name: Build client
+        if: github.event.action != 'closed'
+        run: |
+          npm ci
+          build_info="{'tag':'$(git describe --always --tags)', 'url':'${{ github.server_url }}/${{ github.repository }}/commit/$(git rev-parse HEAD)', 'timestamp':'$(date)'}"
+          npm run build -- --no-typecheck --no-lint --define NEUROGLANCER_BUILD_INFO="${build_info}"
+          touch dist/client/.nojekyll
+      - uses: rossjrw/pr-preview-action@v1.8.1
+        with:
+          source-dir: dist/client
+          preview-branch: gh-pages
+          umbrella-dir: pr-preview
+          qr-code: "false"
