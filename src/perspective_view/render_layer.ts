@@ -28,6 +28,26 @@ import type { SharedObject } from "#src/worker_rpc.js";
 export type PerspectiveViewReadyRenderContext =
   ThreeDimensionalReadyRenderContext;
 
+/**
+ * Parameters for drawing in the globe view (see `src/geo/globe.ts`), whose render coordinates are
+ * ECEF coordinates relative to `target`.
+ */
+export interface GlobeRenderContext {
+  /**
+   * ECEF coordinates of the camera target.
+   */
+  target: Float64Array;
+  /**
+   * Converts a global position to ECEF coordinates.  Returns `false` if the position cannot be
+   * converted.
+   */
+  globalToEcef(globalPosition: ArrayLike<number>, out: Float64Array): boolean;
+  /**
+   * Changes whenever `globalToEcef` changes.
+   */
+  generation: number;
+}
+
 export interface PerspectiveViewRenderContext
   extends PerspectiveViewReadyRenderContext,
     ThreeDimensionalRenderContext {
@@ -86,6 +106,12 @@ export interface PerspectiveViewRenderContext
    * Specifies how to assign the max projection emitter
    */
   maxProjectionEmit?: (builder: ShaderBuilder) => void | undefined;
+
+  /**
+   * Specified in globe mode, for layers that support it (see
+   * `PerspectiveViewRenderLayer.supportsGlobe`).
+   */
+  globe?: GlobeRenderContext;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-unsafe-declaration-merging
@@ -127,4 +153,8 @@ export interface PerspectiveViewRenderLayer<AttachmentState = unknown> {
    * of globe mode.
    */
   isGlobeLayer: boolean | undefined;
+  /**
+   * Indicates that the layer is also drawn in globe mode, given `PerspectiveViewRenderContext.globe`.
+   */
+  supportsGlobe: boolean | undefined;
 }

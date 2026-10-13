@@ -34,6 +34,7 @@ import { makeCoordinateSpace } from "#src/coordinate_transform.js";
 import type { Crs } from "#src/geo/crs.js";
 import type { TrackableDisplayCrs } from "#src/geo/display_crs.js";
 import { getDisplayCrs } from "#src/geo/display_crs.js";
+import { geodeticToEcef } from "#src/geo/globe.js";
 import {
   GeographicTransform,
   haversineDistance,
@@ -643,6 +644,39 @@ export class GeoViewState extends RefCounted {
     const value = Float32Array.from(position.value);
     if (!lonLatToGlobal(info, lon, lat, value)) return;
     position.value = value;
+  }
+
+  /**
+   * Returns a function that converts global positions to ECEF coordinates (meters) for the globe
+   * view, with the elevation given by the first vertical dimension (if any), or `undefined` if the
+   * display is not geospatial.  The conversion remains valid until `changed` is signaled.
+   */
+  getGlobalToEcef():
+    | ((globalPosition: ArrayLike<number>, out: Float64Array) => boolean)
+    | undefined {
+    const { info } = this;
+    if (info === undefined) return undefined;
+    const { rank } = this.coordinateSpace.value;
+    let verticalDim = -1;
+    let verticalAxis: VerticalAxis | undefined;
+    for (let dim = 0; dim < rank; ++dim) {
+      if (dim === info.xDim || dim === info.yDim) continue;
+      verticalAxis = this.getVerticalAxis(dim);
+      if (verticalAxis !== undefined) {
+        verticalDim = dim;
+        break;
+      }
+    }
+    const lonLat = new Float64Array(2);
+    return (globalPosition, out) => {
+      if (!globalToLonLat(info, globalPosition, lonLat)) return false;
+      const elevation =
+        verticalAxis === undefined
+          ? 0
+          : verticalAxis.coordinateToElevation(globalPosition[verticalDim]);
+      geodeticToEcef(lonLat[0], lonLat[1], elevation, out);
+      return Number.isFinite(out[0] + out[1] + out[2]);
+    };
   }
 
   /**

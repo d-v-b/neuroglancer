@@ -35,6 +35,7 @@ import { makeRenderedPanelVisibleLayerTracker } from "#src/layer/index.js";
 import { PERSPECTIVE_VIEW_RPC_ID } from "#src/perspective_view/base.js";
 import { GlobeBaseRenderer } from "#src/perspective_view/globe.js";
 import type {
+  GlobeRenderContext,
   PerspectiveViewReadyRenderContext,
   PerspectiveViewRenderContext,
 } from "#src/perspective_view/render_layer.js";
@@ -179,6 +180,67 @@ export function perspectivePanelEmit(builder: ShaderBuilder) {
   builder.addOutputBuffer("highp vec4", "out_z", OffscreenTextures.Z);
   builder.addOutputBuffer("highp vec4", "out_pickId", OffscreenTextures.PICK);
   builder.addFragmentCode(glsl_perspectivePanelEmit);
+}
+
+/**
+ * Opacity of annotations hidden by the surface of the globe (e.g. below the surface), which are
+ * drawn faded such that the Earth appears translucent to them.
+ */
+const GLOBE_XRAY_OPACITY = 0.45;
+
+/**
+ * Emitter for annotations hidden by the surface of the globe.  The depth buffer is left unchanged
+ * by blending, since the depth is computed with a different projection (see `drawGlobeLayers`).
+ */
+export function globeXrayEmit(builder: ShaderBuilder) {
+  builder.addOutputBuffer("vec4", "out_color", OffscreenTextures.COLOR);
+  builder.addOutputBuffer("highp vec4", "out_z", OffscreenTextures.Z);
+  builder.addOutputBuffer("highp vec4", "out_pickId", OffscreenTextures.PICK);
+  builder.addFragmentCode(`
+void emit(vec4 color, highp uint pickId) {
+  out_color = vec4(color.rgb, color.a * ${GLOBE_XRAY_OPACITY.toFixed(3)});
+  out_z = vec4(0.0);
+  float pickIdFloat = float(pickId);
+  out_pickId = vec4(pickIdFloat, pickIdFloat, pickIdFloat, 1.0);
+}
+`);
+}
+
+/**
+ * Returns a copy of the projection parameters of the globe view with the far plane moved to the
+ * center of the Earth, such that the parts of the Earth's interior beyond it (including the far
+ * side) are clipped.
+ */
+function getGlobeXrayProjectionParameters(
+  projectionParameters: ProjectionParameters,
+  target: Float64Array,
+): ProjectionParameters {
+  const { viewMatrix } = projectionParameters;
+  const projectionMat = mat4.clone(projectionParameters.projectionMat);
+  // View-space depth of the center of the Earth, at `-target` in render coordinates.
+  const centerDepth = -(
+    -viewMatrix[2] * target[0] -
+    viewMatrix[6] * target[1] -
+    viewMatrix[10] * target[2] +
+    viewMatrix[14]
+  );
+  const m10 = projectionMat[10];
+  const m14 = projectionMat[14];
+  const near = m14 / (m10 - 1);
+  const far = Math.max(near * 1.5, centerDepth);
+  projectionMat[10] = (far + near) / (near - far);
+  projectionMat[14] = (2 * far * near) / (near - far);
+  const result = Object.assign(
+    Object.create(Object.getPrototypeOf(projectionParameters)),
+    projectionParameters,
+  ) as ProjectionParameters;
+  result.projectionMat = projectionMat;
+  result.viewProjectionMat = mat4.multiply(
+    mat4.create(),
+    projectionMat,
+    viewMatrix,
+  );
+  return result;
 }
 
 export function perspectivePanelEmitOIT(builder: ShaderBuilder) {
@@ -356,6 +418,13 @@ export class PerspectivePanel extends RenderedDataPanel {
    * Camera of the globe view, if the panel is in globe mode (see `src/geo/globe.ts`).
    */
   globeCamera: GlobeCamera | undefined;
+
+  /**
+   * Conversion from global positions to ECEF coordinates for layers drawn on the globe, computed
+   * on demand, and its generation (see `GlobeRenderContext`).
+   */
+  private globalToEcef: GlobeRenderContext["globalToEcef"] | undefined;
+  private globalToEcefGeneration = 0;
   protected offscreenFramebuffer = this.registerDisposer(
     new FramebufferConfiguration(this.gl, {
       colorBuffers: [
@@ -537,6 +606,8 @@ export class PerspectivePanel extends RenderedDataPanel {
       };
       this.registerDisposer(
         geoView.changed.add(() => {
+          this.globalToEcef = undefined;
+          ++this.globalToEcefGeneration;
           ensureGlobeOrientation();
           this.projectionParameters.update();
           this.scheduleRedraw();
@@ -676,6 +747,60 @@ export class PerspectivePanel extends RenderedDataPanel {
       ),
     );
     this.sliceViews.changed.add(() => this.scheduleRedraw());
+  }
+
+  /**
+   * Draws the layers that support the globe view (e.g. annotations) other than globe layers.  The
+   * layers are first drawn faded without depth testing, such that parts hidden by the surface
+   * (e.g. below it) show through, but clipped at the center of the Earth to exclude the far side;
+   * then the visible parts are drawn on top.
+   */
+  private drawGlobeLayers(
+    renderContext: PerspectiveViewRenderContext,
+    target: Float64Array,
+  ) {
+    const { visibleLayers } = this.visibleLayerTracker;
+    const layers = Array.from(visibleLayers).filter(
+      ([renderLayer]) => renderLayer.supportsGlobe && !renderLayer.isGlobeLayer,
+    );
+    if (layers.length === 0) return;
+    let { globalToEcef } = this;
+    if (globalToEcef === undefined) {
+      globalToEcef = this.globalToEcef = this.viewer.geoView?.getGlobalToEcef();
+      if (globalToEcef === undefined) return;
+    }
+    const globe: GlobeRenderContext = {
+      target,
+      globalToEcef,
+      generation: this.globalToEcefGeneration,
+    };
+    const { gl } = this;
+    gl.enable(WebGL2RenderingContext.BLEND);
+    gl.blendFunc(
+      WebGL2RenderingContext.SRC_ALPHA,
+      WebGL2RenderingContext.ONE_MINUS_SRC_ALPHA,
+    );
+    gl.disable(WebGL2RenderingContext.DEPTH_TEST);
+    const xrayContext = {
+      ...renderContext,
+      projectionParameters: getGlobeXrayProjectionParameters(
+        renderContext.projectionParameters,
+        target,
+      ),
+      emitter: globeXrayEmit,
+      globe,
+    };
+    for (const [renderLayer, attachment] of layers) {
+      renderLayer.draw(xrayContext, attachment);
+    }
+    gl.enable(WebGL2RenderingContext.DEPTH_TEST);
+    gl.depthFunc(WebGL2RenderingContext.LEQUAL);
+    const visibleContext = { ...renderContext, globe };
+    for (const [renderLayer, attachment] of layers) {
+      renderLayer.draw(visibleContext, attachment);
+    }
+    gl.depthFunc(WebGL2RenderingContext.LESS);
+    gl.disable(WebGL2RenderingContext.BLEND);
   }
 
   /**
@@ -1239,6 +1364,7 @@ export class PerspectivePanel extends RenderedDataPanel {
           renderLayer.draw(renderContext, attachment);
         }
       }
+      this.drawGlobeLayers(renderContext, globeCamera.target);
       gl.disable(WebGL2RenderingContext.STENCIL_TEST);
       gl.disable(WebGL2RenderingContext.DEPTH_TEST);
       this.offscreenFramebuffer.unbind();
