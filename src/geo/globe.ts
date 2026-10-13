@@ -181,41 +181,66 @@ export interface GlobeCamera {
 }
 
 /**
+ * Rotates a vector by a quaternion `[x, y, z, w]`, in double precision.
+ */
+function rotateByQuat(q: ArrayLike<number>, v: ArrayLike<number>): number[] {
+  const [qx, qy, qz, qw] = [q[0], q[1], q[2], q[3]];
+  // t = 2 * cross(q.xyz, v)
+  const tx = 2 * (qy * v[2] - qz * v[1]);
+  const ty = 2 * (qz * v[0] - qx * v[2]);
+  const tz = 2 * (qx * v[1] - qy * v[0]);
+  return [
+    v[0] + qw * tx + (qy * tz - qz * ty),
+    v[1] + qw * ty + (qz * tx - qx * tz),
+    v[2] + qw * tz + (qx * ty - qy * tx),
+  ];
+}
+
+/**
+ * Returns the axes `[right, up, back]` of the globe camera in ECEF coordinates (in double
+ * precision), given its orientation relative to the east-north-up frame of the target.
+ */
+export function getGlobeCameraAxes(
+  lon: number,
+  lat: number,
+  orientation: ArrayLike<number>,
+): number[][] {
+  const enu = getEnuBasis(lon, lat);
+  return [
+    [1, 0, 0],
+    [0, 1, 0],
+    [0, 0, 1],
+  ].map((axis) => {
+    const v = rotateByQuat(orientation, axis);
+    return [0, 1, 2].map(
+      (i) => enu[i] * v[0] + enu[3 + i] * v[1] + enu[6 + i] * v[2],
+    );
+  });
+}
+
+/**
+ * Clamps the distance between the globe camera and its target.
+ */
+export function clampGlobeCameraDistance(distance: number) {
+  return Math.min(
+    GLOBE_MAX_CAMERA_DISTANCE,
+    Math.max(GLOBE_MIN_CAMERA_DISTANCE, distance),
+  );
+}
+
+/**
  * Computes the orbit camera of the globe view.
  */
 export function computeGlobeCamera(params: GlobeCameraParameters): GlobeCamera {
   const { lon, lat, orientation, width, height } = params;
-  const distance = Math.min(
-    GLOBE_MAX_CAMERA_DISTANCE,
-    Math.max(GLOBE_MIN_CAMERA_DISTANCE, params.distance),
-  );
+  const distance = clampGlobeCameraDistance(params.distance);
   const target = geodeticToEcef(
     lon,
     lat,
     0,
     new Float64Array(3),
   ) as Float64Array;
-  const enu = getEnuBasis(lon, lat);
-  // Camera axes in the east-north-up frame.
-  const axes: number[][] = [];
-  for (const axis of [
-    [1, 0, 0],
-    [0, 1, 0],
-    [0, 0, 1],
-  ]) {
-    const v = vec3.transformQuat(
-      vec3.create(),
-      vec3.fromValues(axis[0], axis[1], axis[2]),
-      orientation,
-    );
-    // Convert to ECEF.
-    axes.push(
-      [0, 1, 2].map(
-        (i) => enu[i] * v[0] + enu[3 + i] * v[1] + enu[6 + i] * v[2],
-      ),
-    );
-  }
-  const [right, up, back] = axes;
+  const [right, up, back] = getGlobeCameraAxes(lon, lat, orientation);
   // The camera looks along -back from distance `distance`.
   const eyeRender = back.map((x) => x * distance);
   const invViewMatrix = mat4.create();
@@ -475,4 +500,200 @@ export function getNorthUpGlobeOrientation(orientation: quat): quat {
   );
   const tilt = Math.acos(Math.max(-1, Math.min(1, back[2])));
   return quat.setAxisAngle(quat.create(), vec3.fromValues(1, 0, 0), tilt);
+}
+
+/**
+ * Returns the heading of the globe camera: the angle (radians, clockwise from north) of its
+ * horizontal viewing direction, given its orientation relative to the east-north-up frame.
+ */
+export function getGlobeCameraHeading(orientation: ArrayLike<number>) {
+  const up = rotateByQuat(orientation, [0, 1, 0]);
+  const back = rotateByQuat(orientation, [0, 0, 1]);
+  // The horizontal component of `up - back` is nonzero for all tilts from looking straight down
+  // to looking horizontally.
+  return Math.atan2(up[0] - back[0], up[1] - back[1]);
+}
+
+/**
+ * Returns the ray from the globe camera through a point of the view, in double precision (see
+ * `getGlobeCameraRay`).
+ */
+function getGlobeCameraRayAt(
+  lon: number,
+  lat: number,
+  orientation: ArrayLike<number>,
+  distance: number,
+  ndcX: number,
+  ndcY: number,
+  aspect: number,
+) {
+  const [right, up, back] = getGlobeCameraAxes(lon, lat, orientation);
+  const target = geodeticToEcef(lon, lat, 0, new Float64Array(3));
+  const t = Math.tan(GLOBE_FIELD_OF_VIEW / 2);
+  const x = ndcX * t * aspect;
+  const y = ndcY * t;
+  const origin = new Float64Array(3);
+  const direction = new Float64Array(3);
+  for (let i = 0; i < 3; ++i) {
+    origin[i] = target[i] + back[i] * distance;
+    direction[i] = right[i] * x + up[i] * y - back[i];
+  }
+  return { origin, direction };
+}
+
+/**
+ * Returns the orientation of the globe camera after a step of panning with the heading kept fixed:
+ * `previous`, flipped by a half turn if the target passed over a pole, as indicated by the heading
+ * of the orientation `rigid` obtained by the rigid rotation (see `rotateGlobeCamera`) changing by
+ * more than a quarter turn.
+ */
+export function getLockedGlobeOrientation(
+  previous: quat,
+  rigid: ArrayLike<number>,
+): quat {
+  const twist = getGlobeCameraHeading(rigid) - getGlobeCameraHeading(previous);
+  if (Math.abs(Math.atan2(Math.sin(twist), Math.cos(twist))) <= Math.PI / 2) {
+    return quat.clone(previous);
+  }
+  const flip = quat.setAxisAngle(quat.create(), [0, 0, 1], Math.PI);
+  return quat.multiply(quat.create(), flip, previous);
+}
+
+/**
+ * Parameters of a step of panning the globe with the heading of the camera kept fixed.
+ */
+export interface LockedGlobePanParameters {
+  lon: number;
+  lat: number;
+  orientation: quat;
+  /**
+   * Distance between the camera and the target.
+   */
+  distance: number;
+  /**
+   * Aspect ratio (width / height) of the view.
+   */
+  aspect: number;
+  /**
+   * Normalized device coordinates of the mouse.
+   */
+  ndcX: number;
+  ndcY: number;
+  /**
+   * ECEF coordinates of the grabbed point, which is to be moved under the mouse.
+   */
+  grabbed: ArrayLike<number>;
+}
+
+const LOCKED_PAN_MAX_ITERATIONS = 6;
+
+/**
+ * Pans the globe camera such that the grabbed point is under the mouse, keeping the orientation of
+ * the camera relative to the east-north-up frame of the target (i.e. north stays up), unlike the
+ * rigid rotation of `rotateGlobeCamera`.  When the target passes over a pole, the heading is
+ * flipped by a half turn, such that the view remains continuous.
+ *
+ * The target is found by Newton's method, starting from the target of the rigid rotation, over
+ * displacements in the tangent plane at that target (which, unlike latitude and longitude, have no
+ * singularity at the poles).
+ */
+export function panGlobeCameraLocked(params: LockedGlobePanParameters): {
+  lon: number;
+  lat: number;
+  orientation: quat;
+} {
+  const { lon, lat, distance, aspect, ndcX, ndcY, grabbed } = params;
+  const hitAt = (
+    targetLon: number,
+    targetLat: number,
+    orientation: ArrayLike<number>,
+  ) => {
+    const ray = getGlobeCameraRayAt(
+      targetLon,
+      targetLat,
+      orientation,
+      distance,
+      ndcX,
+      ndcY,
+      aspect,
+    );
+    return intersectGlobeRay(ray.origin, ray.direction).point;
+  };
+  // Initial estimate: the rigid rotation.
+  const rigid = rotateGlobeCamera(
+    lon,
+    lat,
+    params.orientation,
+    getGlobeRotationBetween(hitAt(lon, lat, params.orientation), grabbed),
+  );
+  const orientation = getLockedGlobeOrientation(
+    params.orientation,
+    rigid.orientation,
+  );
+  // Tangent basis at the initial target, and at the grabbed point (for the residual).
+  const base = geodeticToEcef(rigid.lon, rigid.lat, 0, new Float64Array(3));
+  const baseRadius = Math.hypot(base[0], base[1], base[2]);
+  const baseEnu = getEnuBasis(rigid.lon, rigid.lat);
+  const grabbedGeodetic = ecefToGeodetic(
+    grabbed[0],
+    grabbed[1],
+    grabbed[2],
+    new Float64Array(3),
+  );
+  const grabbedEnu = getEnuBasis(grabbedGeodetic[0], grabbedGeodetic[1]);
+  const geodetic = new Float64Array(3);
+  const targetAt = (u: number, v: number) => {
+    const p = [0, 1, 2].map(
+      (i) => base[i] + (u * baseEnu[i] + v * baseEnu[3 + i]) * baseRadius,
+    );
+    ecefToGeodetic(p[0], p[1], p[2], geodetic);
+    return [geodetic[0], geodetic[1]];
+  };
+  const residualAt = (u: number, v: number) => {
+    const [targetLon, targetLat] = targetAt(u, v);
+    const hit = hitAt(targetLon, targetLat, orientation);
+    const d = [0, 1, 2].map((i) => hit[i] - grabbed[i]);
+    return [
+      d[0] * grabbedEnu[0] + d[1] * grabbedEnu[1] + d[2] * grabbedEnu[2],
+      d[0] * grabbedEnu[3] + d[1] * grabbedEnu[4] + d[2] * grabbedEnu[5],
+    ];
+  };
+  let u = 0;
+  let v = 0;
+  let r = residualAt(u, v);
+  let error = Math.hypot(r[0], r[1]);
+  const tolerance = 1e-7 * distance;
+  const h = 1e-7;
+  for (let iteration = 0; iteration < LOCKED_PAN_MAX_ITERATIONS; ++iteration) {
+    if (error < tolerance) break;
+    const ru = residualAt(u + h, v);
+    const rv = residualAt(u, v + h);
+    const j00 = (ru[0] - r[0]) / h;
+    const j10 = (ru[1] - r[1]) / h;
+    const j01 = (rv[0] - r[0]) / h;
+    const j11 = (rv[1] - r[1]) / h;
+    const det = j00 * j11 - j01 * j10;
+    if (!(Math.abs(det) > 0)) break;
+    let du = -(j11 * r[0] - j01 * r[1]) / det;
+    let dv = -(j00 * r[1] - j10 * r[0]) / det;
+    // Backtracking, such that the error decreases.
+    let accepted = false;
+    for (let k = 0; k < 8; ++k) {
+      const next = residualAt(u + du, v + dv);
+      const nextError = Math.hypot(next[0], next[1]);
+      if (nextError < error) {
+        u += du;
+        v += dv;
+        r = next;
+        error = nextError;
+        accepted = true;
+        break;
+      }
+      du /= 2;
+      dv /= 2;
+    }
+    if (!accepted) break;
+  }
+  const [newLon, newLat] = targetAt(u, v);
+  return { lon: newLon, lat: newLat, orientation };
 }

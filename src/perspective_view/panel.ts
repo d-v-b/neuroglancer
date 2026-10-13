@@ -25,13 +25,16 @@ import type { GeoViewState } from "#src/geo/geo_view.js";
 import { lonLatToGlobal } from "#src/geo/geo_view.js";
 import type { GlobeCamera } from "#src/geo/globe.js";
 import {
+  clampGlobeCameraDistance,
   computeGlobeCamera,
   ecefToGeodetic,
   getGlobeCameraRay,
   getGlobePixelAngle,
   getGlobeRotationBetween,
+  getLockedGlobeOrientation,
   getNorthUpGlobeOrientation,
   intersectGlobeRay,
+  panGlobeCameraLocked,
   rotateGlobeCamera,
 } from "#src/geo/globe.js";
 import type { VisibleRenderLayerTracker } from "#src/layer/index.js";
@@ -855,19 +858,22 @@ export class PerspectivePanel extends RenderedDataPanel {
     const bounds = this.element.getBoundingClientRect();
     const ndcX = (2 * (event.clientX - bounds.left)) / bounds.width - 1;
     const ndcY = 1 - (2 * (event.clientY - bounds.top)) / bounds.height;
-    const { origin, direction } = getGlobeCameraRay(
+    const aspect = logicalWidth / Math.max(1, logicalHeight);
+    const { origin, direction } = getGlobeCameraRay(camera, ndcX, ndcY, aspect);
+    return {
+      ...intersectGlobeRay(origin, direction),
       camera,
       ndcX,
       ndcY,
-      logicalWidth / Math.max(1, logicalHeight),
-    );
-    return { ...intersectGlobeRay(origin, direction), camera };
+      aspect,
+    };
   }
 
   /**
-   * Rotates the globe camera about the center of the Earth such that the grabbed point of the globe
-   * remains under the mouse.  The view moves rigidly, such that the camera passes smoothly over the
-   * poles (with north no longer up, see `resetGlobeNorth`).
+   * Pans the globe camera such that the grabbed point of the globe remains under the mouse.  With
+   * `GeoViewState.lockGlobeNorth`, the heading of the camera is kept (flipped by a half turn when
+   * passing over a pole); otherwise, the camera rotates rigidly about the center of the Earth, such
+   * that it passes smoothly over the poles, but the heading drifts (see `resetGlobeNorth`).
    *
    * If the drag started over the globe, the grabbed point follows the mouse also when the mouse
    * leaves the globe (using the closest point of the silhouette, see `intersectGlobeRay`), such
@@ -905,12 +911,42 @@ export class PerspectivePanel extends RenderedDataPanel {
       );
     }
     const orientationState = this.navigationState.pose.orientation;
-    const result = rotateGlobeCamera(
-      lonLat[0],
-      lonLat[1],
-      orientationState.orientation,
-      getGlobeRotationBetween(from, to),
-    );
+    const { orientation } = orientationState;
+    let result: { lon: number; lat: number; orientation: quat };
+    if (!geoView.lockGlobeNorth.value) {
+      result = rotateGlobeCamera(
+        lonLat[0],
+        lonLat[1],
+        orientation,
+        getGlobeRotationBetween(from, to),
+      );
+    } else if (grab.overGlobe) {
+      result = panGlobeCameraLocked({
+        lon: lonLat[0],
+        lat: lonLat[1],
+        orientation,
+        distance: clampGlobeCameraDistance(
+          this.navigationState.zoomFactor.value *
+            geoView.getMetersPerZoomUnit(),
+        ),
+        aspect: current.aspect,
+        ndcX: current.ndcX,
+        ndcY: current.ndcY,
+        grabbed: grab.point,
+      });
+    } else {
+      const rigid = rotateGlobeCamera(
+        lonLat[0],
+        lonLat[1],
+        orientation,
+        getGlobeRotationBetween(from, to),
+      );
+      result = {
+        lon: rigid.lon,
+        lat: rigid.lat,
+        orientation: getLockedGlobeOrientation(orientation, rigid.orientation),
+      };
+    }
     // The target is limited to the latitudes representable in the display CRS (e.g. Web
     // Mercator).
     const maxLatitude = geoView.info?.crs.maxLatitude ?? 90;

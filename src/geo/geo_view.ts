@@ -516,6 +516,12 @@ export class GeoViewState extends RefCounted {
   showGlobe = new TrackableBoolean(false, false);
 
   /**
+   * Whether panning the globe keeps the heading of the camera (north stays up), rather than
+   * rotating the view rigidly with the globe.
+   */
+  lockGlobeNorth = new TrackableBoolean(true, true);
+
+  /**
    * Whether the surface of the globe is raised by the terrain elevation (see `terrain`).
    */
   showGlobeTerrain = new TrackableBoolean(false, false);

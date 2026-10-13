@@ -19,12 +19,14 @@ import {
   computeGlobeCamera,
   ecefToGeodetic,
   geodeticToEcef,
+  getGlobeCameraHeading,
   getGlobeCameraRay,
   getGlobeRotationBetween,
   getNorthUpGlobeOrientation,
   GLOBE_MAX_CAMERA_DISTANCE,
   intersectGlobeRay,
   makeEllipsoidMesh,
+  panGlobeCameraLocked,
   rotateGlobeCamera,
   splitDouble,
   WGS84_SEMI_MAJOR_AXIS,
@@ -206,5 +208,82 @@ describe("globe geometry", () => {
     expect(back(northUp)[2]).toBeCloseTo(back(result.orientation)[2], 9);
     expect(back(northUp)[0]).toBeCloseTo(0, 9);
     expect(back(northUp)[1]).toBeLessThan(0);
+  });
+
+  it("pans with north locked, exactly under the mouse, and over the poles", () => {
+    const width = 800;
+    const height = 600;
+    const aspect = width / height;
+    const distance = 2e6;
+    let lon = 10;
+    let lat = 50;
+    let orientation = quat.setAxisAngle(quat.create(), [1, 0, 0], 0.6);
+    const hitAt = (x: number, y: number) => {
+      const camera = computeGlobeCamera({
+        lon,
+        lat,
+        distance,
+        orientation,
+        width,
+        height,
+      });
+      const ray = getGlobeCameraRay(camera, x, y, aspect);
+      return intersectGlobeRay(ray.origin, ray.direction).point;
+    };
+    const heading0 = getGlobeCameraHeading(orientation);
+    const startX = 0.3;
+    const startY = -0.4;
+    const grabbed = hitAt(startX, startY);
+    // A loop around the starting mouse position, which with rigid panning would rotate the view.
+    const steps = 48;
+    for (let i = 1; i <= steps; ++i) {
+      const angle = (2 * Math.PI * i) / steps;
+      const ndcX = startX + 0.3 * Math.sin(angle);
+      const ndcY = startY + 0.3 * (1 - Math.cos(angle));
+      ({ lon, lat, orientation } = panGlobeCameraLocked({
+        lon,
+        lat,
+        orientation,
+        distance,
+        aspect,
+        ndcX,
+        ndcY,
+        grabbed,
+      }));
+      // The grabbed point is under the mouse (to within float32 precision of the camera).
+      const hit = hitAt(ndcX, ndcY);
+      expect(
+        Math.hypot(...[0, 1, 2].map((k) => hit[k] - grabbed[k])),
+      ).toBeLessThan(10);
+      expect(getGlobeCameraHeading(orientation)).toBeCloseTo(heading0, 9);
+    }
+    // Back at the starting mouse position, the view is restored.
+    expect(lon).toBeCloseTo(10, 5);
+    expect(lat).toBeCloseTo(50, 5);
+
+    // Over the north pole: the heading flips by a half turn, and the tilt is unchanged.
+    lon = 0;
+    lat = 89;
+    orientation = quat.setAxisAngle(quat.create(), [1, 0, 0], 0.6);
+    const before = getGlobeCameraHeading(orientation);
+    const beyondPole = geodeticToEcef(180, 88, 0, new Float64Array(3));
+    const result = panGlobeCameraLocked({
+      lon,
+      lat,
+      orientation,
+      distance,
+      aspect,
+      ndcX: 0,
+      ndcY: 0,
+      grabbed: beyondPole,
+    });
+    expect(Math.abs(result.lon)).toBeCloseTo(180, 4);
+    expect(result.lat).toBeCloseTo(88, 4);
+    const turned = getGlobeCameraHeading(result.orientation) - before;
+    expect(
+      Math.abs(Math.atan2(Math.sin(turned), Math.cos(turned))),
+    ).toBeCloseTo(Math.PI, 9);
+    const back = (q: quat) => vec3.transformQuat(vec3.create(), [0, 0, 1], q);
+    expect(back(result.orientation)[2]).toBeCloseTo(back(orientation)[2], 6);
   });
 });

@@ -128,6 +128,10 @@ export class ViewerSettingsPanel extends SidePanel {
         "Show 3-d globe (geospatial data)",
         geoView.showGlobe,
       );
+      const lockNorthElement = addCheckbox(
+        "Keep north up when panning the globe",
+        geoView.lockGlobeNorth,
+      );
       const terrainElement = addCheckbox(
         "Show terrain on the globe",
         geoView.showGlobeTerrain,
@@ -151,6 +155,7 @@ export class ViewerSettingsPanel extends SidePanel {
             : "";
         graticuleElement.style.display = display;
         globeElement.style.display = display;
+        lockNorthElement.style.display = display;
         terrainElement.style.display = display;
         exaggerationWidget.element.style.display = display;
       };
