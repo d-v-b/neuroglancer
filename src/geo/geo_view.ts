@@ -29,12 +29,14 @@
  *     display in the UI (coordinate readout, scale bar, graticule).
  */
 
+import { debounce } from "lodash-es";
 import type { CoordinateSpace } from "#src/coordinate_transform.js";
 import { makeCoordinateSpace } from "#src/coordinate_transform.js";
 import type { Crs } from "#src/geo/crs.js";
 import type { TrackableDisplayCrs } from "#src/geo/display_crs.js";
 import { getDisplayCrs } from "#src/geo/display_crs.js";
 import { geodeticToEcef } from "#src/geo/globe.js";
+import { TerrainSource } from "#src/geo/terrain.js";
 import {
   GeographicTransform,
   haversineDistance,
@@ -48,8 +50,10 @@ import type {
 } from "#src/navigation_state.js";
 import { TrackableBoolean } from "#src/trackable_boolean.js";
 import type { WatchableValueInterface } from "#src/trackable_value.js";
+import { TrackableValue } from "#src/trackable_value.js";
 import { RefCounted } from "#src/util/disposable.js";
 import { mat3, quat, vec3 } from "#src/util/geom.js";
+import { verifyFinitePositiveFloat } from "#src/util/json.js";
 import { NullarySignal } from "#src/util/signal.js";
 
 /**
@@ -490,6 +494,11 @@ export interface GeoNavigationTarget {
 }
 
 /**
+ * Delay for coalescing the loading of terrain tiles into a single update.
+ */
+const TERRAIN_CHANGED_DEBOUNCE_MS = 100;
+
+/**
  * Viewer-level geospatial state.
  */
 export class GeoViewState extends RefCounted {
@@ -505,6 +514,44 @@ export class GeoViewState extends RefCounted {
    * display CRS coordinate space.
    */
   showGlobe = new TrackableBoolean(false, false);
+
+  /**
+   * Whether the surface of the globe is raised by the terrain elevation (see `terrain`).
+   */
+  showGlobeTerrain = new TrackableBoolean(false, false);
+
+  /**
+   * Vertical exaggeration of the terrain of the globe.
+   */
+  globeTerrainExaggeration = new TrackableValue<number>(
+    1,
+    verifyFinitePositiveFloat,
+  );
+
+  /**
+   * Signaled when terrain tiles have been loaded.  `terrainGeneration` is incremented.
+   */
+  terrainChanged = new NullarySignal();
+  terrainGeneration = 0;
+  private terrain_: TerrainSource | undefined;
+
+  /**
+   * Global terrain elevations, loaded on demand.
+   */
+  get terrain(): TerrainSource {
+    let terrain = this.terrain_;
+    if (terrain === undefined) {
+      terrain = this.terrain_ = new TerrainSource();
+      const notify = this.registerCancellable(
+        debounce(() => {
+          ++this.terrainGeneration;
+          this.terrainChanged.dispatch();
+        }, TERRAIN_CHANGED_DEBOUNCE_MS),
+      );
+      this.registerDisposer(terrain.changed.add(notify));
+    }
+    return terrain;
+  }
 
   private info_: GeoDisplayInfo | undefined;
   private infoStale = true;
@@ -551,6 +598,12 @@ export class GeoViewState extends RefCounted {
       this.showGraticule.changed.add(this.changed.dispatch),
     );
     this.registerDisposer(this.showGlobe.changed.add(this.changed.dispatch));
+    this.registerDisposer(
+      this.showGlobeTerrain.changed.add(this.changed.dispatch),
+    );
+    this.registerDisposer(
+      this.globeTerrainExaggeration.changed.add(this.changed.dispatch),
+    );
     this.registerDisposer(
       navigationState.position.changed.add(() => this.handlePositionChanged()),
     );

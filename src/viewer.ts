@@ -322,6 +322,11 @@ export class TrackableViewerState extends CompoundTrackable {
     this.add("showScaleBar", viewer.showScaleBar);
     this.add("showGraticule", viewer.geoView.showGraticule);
     this.add("showGlobe", viewer.geoView.showGlobe);
+    this.add("showGlobeTerrain", viewer.geoView.showGlobeTerrain);
+    this.add(
+      "globeTerrainExaggeration",
+      viewer.geoView.globeTerrainExaggeration,
+    );
     this.add("showDefaultAnnotations", viewer.showDefaultAnnotations);
 
     this.add("showSlices", viewer.showPerspectiveSliceViews);

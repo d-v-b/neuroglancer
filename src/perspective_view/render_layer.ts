@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import type { TerrainSource } from "#src/geo/terrain.js";
 import type { VisibleLayerInfo } from "#src/layer/index.js";
 import type { PerspectivePanel } from "#src/perspective_view/panel.js";
 import type {
@@ -44,6 +45,18 @@ export interface GlobeRenderContext {
   globalToEcef(globalPosition: ArrayLike<number>, out: Float64Array): boolean;
   /**
    * Changes whenever `globalToEcef` changes.
+   */
+  generation: number;
+}
+
+/**
+ * Terrain of the globe view, by which the surface is raised.
+ */
+export interface GlobeTerrainContext {
+  source: TerrainSource;
+  exaggeration: number;
+  /**
+   * Incremented when terrain tiles are loaded.
    */
   generation: number;
 }
@@ -112,6 +125,13 @@ export interface PerspectiveViewRenderContext
    * `PerspectiveViewRenderLayer.supportsGlobe`).
    */
   globe?: GlobeRenderContext;
+
+  /**
+   * For layers drawn on the globe (`PerspectiveViewRenderLayer.isGlobeLayer`), the index of the
+   * layer among them, and the terrain, if shown.
+   */
+  globeLayerIndex?: number;
+  globeTerrain?: GlobeTerrainContext;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-unsafe-declaration-merging

@@ -22,6 +22,7 @@
 import { ChunkState } from "#src/chunk_manager/base.js";
 import { ChunkRenderLayerFrontend } from "#src/chunk_manager/frontend.js";
 import { getGlobeTileAncestor } from "#src/geo/globe_tiles.js";
+import { chooseTerrainZoom } from "#src/geo/terrain.js";
 import type { VisibleLayerInfo } from "#src/layer/index.js";
 import type { PerspectivePanel } from "#src/perspective_view/panel.js";
 import type { PerspectiveViewRenderContext } from "#src/perspective_view/render_layer.js";
@@ -64,8 +65,24 @@ const MAX_CACHED_TILE_MESHES = 4096;
  */
 const GLOBE_TILE_STENCIL_BIT = 2;
 
+/**
+ * Time budget per frame for computing tile meshes with terrain, beyond which meshes with outdated
+ * terrain continue to be used, and the remaining meshes are computed in later frames.
+ */
+const TERRAIN_MESH_BUDGET_MS = 8;
+
 class GlobeTileGpuMeshBuffers implements GlobeTileGpuMesh {
   origin: Float64Array;
+  /**
+   * Identifies the terrain settings with which the mesh was computed, or `""` without terrain.
+   */
+  terrainKey = "";
+  /**
+   * Indicates that the terrain at the desired resolution was not yet available, and the value of
+   * `GlobeTerrainContext.generation` when the mesh was computed.
+   */
+  terrainIncomplete = false;
+  terrainGeneration = 0;
   positionHigh: GLBuffer;
   positionLow: GLBuffer;
   chunkPosition: GLBuffer;
@@ -99,18 +116,32 @@ class GlobeTileGpuMeshBuffers implements GlobeTileGpuMesh {
 class GlobeTileMeshCache {
   meshes = new Map<string, GlobeTileGpuMeshBuffers>();
 
-  get(key: string, compute: () => GlobeTileGpuMeshBuffers) {
+  /**
+   * Returns the cached mesh, recomputing it if `isCurrent` returns `false` and `canCompute` returns
+   * `true`.  Returns `undefined` if there is no cached mesh and it cannot be computed.
+   */
+  get(
+    key: string,
+    isCurrent: (mesh: GlobeTileGpuMeshBuffers) => boolean,
+    canCompute: () => boolean,
+    compute: () => GlobeTileGpuMeshBuffers,
+  ) {
     const { meshes } = this;
     let mesh = meshes.get(key);
-    if (mesh === undefined) {
+    if (mesh !== undefined) {
+      meshes.delete(key);
+      if (!isCurrent(mesh) && canCompute()) {
+        mesh.dispose();
+        mesh = compute();
+      }
+    } else {
+      if (!canCompute()) return undefined;
       mesh = compute();
       if (meshes.size >= MAX_CACHED_TILE_MESHES) {
         const oldestKey = meshes.keys().next().value!;
         meshes.get(oldestKey)!.dispose();
         meshes.delete(oldestKey);
       }
-    } else {
-      meshes.delete(key);
     }
     meshes.set(key, mesh);
     return mesh;
@@ -244,9 +275,76 @@ export class GlobeVolumeRenderLayer extends PerspectiveViewRenderLayer<GlobeVolu
       base.renderScaleTarget.value,
     );
 
+    const { globeTerrain } = renderContext;
+    const terrainKey =
+      globeTerrain === undefined ? "" : `${globeTerrain.exaggeration}`;
+    const meshDeadline = performance.now() + TERRAIN_MESH_BUDGET_MS;
+    let meshesDeferred = false;
+    const getMesh = (level: number, x: number, y: number) => {
+      const tsource = sources[level];
+      let meshCache = state.meshCaches.get(tsource);
+      if (meshCache === undefined) {
+        meshCache = new GlobeTileMeshCache();
+        state.meshCaches.set(tsource, meshCache);
+      }
+      return meshCache.get(
+        `${x},${y}`,
+        (mesh) =>
+          mesh.terrainKey === terrainKey &&
+          !(
+            mesh.terrainIncomplete &&
+            mesh.terrainGeneration !== globeTerrain?.generation
+          ),
+        () => {
+          // Meshes without terrain are cheap to compute.
+          if (globeTerrain === undefined || performance.now() < meshDeadline) {
+            return true;
+          }
+          meshesDeferred = true;
+          return false;
+        },
+        () => {
+          const status = { exact: true };
+          let getHeight:
+            | ((lon: number, lat: number, spacing: number) => number)
+            | undefined;
+          if (globeTerrain !== undefined) {
+            const { source, exaggeration } = globeTerrain;
+            getHeight = (lon, lat, spacing) => {
+              const elevation = source.sample(
+                lon,
+                lat,
+                chooseTerrainZoom(spacing, lat),
+                status,
+              );
+              // The ocean surface remains at sea level.
+              return Math.max(0, elevation ?? 0) * exaggeration;
+            };
+          }
+          const mesh = new GlobeTileGpuMeshBuffers(
+            gl,
+            computeGlobeTileMesh(
+              levels[level],
+              x,
+              y,
+              2 * footprintCache.get(levels, level, x, y).coneAngle,
+              getHeight,
+            ),
+          );
+          mesh.terrainKey = terrainKey;
+          mesh.terrainIncomplete = !status.exact;
+          mesh.terrainGeneration = globeTerrain?.generation ?? 0;
+          return mesh;
+        },
+      );
+    };
+
     // For each selected tile, draw the tile if it is loaded, and otherwise its nearest loaded
-    // ancestor.
-    const draws = new Map<string, GlobeTileDrawInfo & { level: number }>();
+    // ancestor as a fallback.
+    const draws = new Map<
+      string,
+      GlobeTileDrawInfo & { level: number; selected: boolean }
+    >();
     const getLoadedChunk = (level: number, x: number, y: number) => {
       const tsource = sources[level];
       setGlobeTilePosition(tsource, x, y);
@@ -263,36 +361,33 @@ export class GlobeVolumeRenderLayer extends PerspectiveViewRenderLayer<GlobeVolu
     for (const tile of tiles) {
       for (let level = tile.level; level < levels.length; ++level) {
         if (!valid[level]) continue;
-        const [x, y] =
-          level === tile.level
-            ? [tile.x, tile.y]
-            : getGlobeTileAncestor(levels, tile.level, tile.x, tile.y, level);
+        const selected = level === tile.level;
+        const [x, y] = selected
+          ? [tile.x, tile.y]
+          : getGlobeTileAncestor(levels, tile.level, tile.x, tile.y, level);
         const key = `${level},${x},${y}`;
-        if (draws.has(key)) break;
+        const existing = draws.get(key);
+        if (existing !== undefined) {
+          existing.selected ||= selected;
+          break;
+        }
         const chunk = getLoadedChunk(level, x, y);
         if (chunk === undefined) continue;
-        const tsource = sources[level];
-        let meshCache = state.meshCaches.get(tsource);
-        if (meshCache === undefined) {
-          meshCache = new GlobeTileMeshCache();
-          state.meshCaches.set(tsource, meshCache);
-        }
-        const mesh = meshCache.get(
-          `${x},${y}`,
-          () =>
-            new GlobeTileGpuMeshBuffers(
-              gl,
-              computeGlobeTileMesh(
-                levels[level],
-                x,
-                y,
-                2 * footprintCache.get(levels, level, x, y).coneAngle,
-              ),
-            ),
-        );
-        draws.set(key, { tsource, chunk, mesh, level });
+        const mesh = getMesh(level, x, y);
+        if (mesh === undefined) continue;
+        draws.set(key, {
+          tsource: sources[level],
+          chunk,
+          mesh,
+          level,
+          selected,
+        });
         break;
       }
+    }
+    if (meshesDeferred) {
+      // Compute the remaining meshes in the next frame.
+      requestAnimationFrame(() => this.redrawNeeded.dispatch());
     }
     if (draws.size === 0) return;
     // Finer tiles take precedence.
@@ -301,33 +396,57 @@ export class GlobeVolumeRenderLayer extends PerspectiveViewRenderLayer<GlobeVolu
     );
 
     base.setGLBlendMode(gl, 1);
-    gl.disable(WebGL2RenderingContext.DEPTH_TEST);
-    // The tiles of the far side of the Earth face away from the camera.
+    // Tiles facing away from the camera (e.g. on the far side of the Earth) are hidden.
     gl.enable(WebGL2RenderingContext.CULL_FACE);
     gl.cullFace(WebGL2RenderingContext.BACK);
     gl.frontFace(WebGL2RenderingContext.CCW);
-    gl.enable(WebGL2RenderingContext.STENCIL_TEST);
-    gl.stencilMask(GLOBE_TILE_STENCIL_BIT);
-    gl.clear(WebGL2RenderingContext.STENCIL_BUFFER_BIT);
-    gl.stencilFunc(
-      WebGL2RenderingContext.NOTEQUAL,
-      GLOBE_TILE_STENCIL_BIT,
-      GLOBE_TILE_STENCIL_BIT,
-    );
-    gl.stencilOp(
-      WebGL2RenderingContext.KEEP,
-      WebGL2RenderingContext.KEEP,
-      WebGL2RenderingContext.REPLACE,
-    );
-    base.drawGlobeTiles(
-      projectionParameters.viewProjectionMat,
-      view.target,
-      sortedDraws,
-    );
-    gl.stencilMask(0xffffffff);
-    gl.stencilFunc(WebGL2RenderingContext.ALWAYS, 1, 1);
+    gl.enable(WebGL2RenderingContext.DEPTH_TEST);
+    gl.depthFunc(WebGL2RenderingContext.LEQUAL);
+    gl.enable(WebGL2RenderingContext.POLYGON_OFFSET_FILL);
+    const { viewProjectionMat } = projectionParameters;
+    if ((renderContext.globeLayerIndex ?? 0) === 0) {
+      // The bottom layer defines the depth of the surface (which, with terrain, may hide itself).
+      // Fallback tiles are pushed back, such that they are hidden by loaded finer tiles.
+      gl.depthMask(true);
+      gl.polygonOffset(0, 0);
+      base.drawGlobeTiles(
+        viewProjectionMat,
+        view.target,
+        sortedDraws.filter((d) => d.selected),
+      );
+      gl.polygonOffset(1, 16);
+      base.drawGlobeTiles(
+        viewProjectionMat,
+        view.target,
+        sortedDraws.filter((d) => !d.selected),
+      );
+    } else {
+      // Other layers are drawn over the surface defined by the bottom layer, pulled forward to
+      // account for differences in their meshes, with each pixel drawn from the finest tile.
+      gl.depthMask(false);
+      gl.polygonOffset(-1, -16);
+      gl.enable(WebGL2RenderingContext.STENCIL_TEST);
+      gl.stencilMask(GLOBE_TILE_STENCIL_BIT);
+      gl.clear(WebGL2RenderingContext.STENCIL_BUFFER_BIT);
+      gl.stencilFunc(
+        WebGL2RenderingContext.NOTEQUAL,
+        GLOBE_TILE_STENCIL_BIT,
+        GLOBE_TILE_STENCIL_BIT,
+      );
+      gl.stencilOp(
+        WebGL2RenderingContext.KEEP,
+        WebGL2RenderingContext.KEEP,
+        WebGL2RenderingContext.REPLACE,
+      );
+      base.drawGlobeTiles(viewProjectionMat, view.target, sortedDraws);
+      gl.stencilMask(0xffffffff);
+      gl.stencilFunc(WebGL2RenderingContext.ALWAYS, 1, 1);
+    }
+    gl.polygonOffset(0, 0);
+    gl.disable(WebGL2RenderingContext.POLYGON_OFFSET_FILL);
+    gl.depthMask(true);
+    gl.depthFunc(WebGL2RenderingContext.LESS);
     gl.disable(WebGL2RenderingContext.CULL_FACE);
     gl.disable(WebGL2RenderingContext.BLEND);
-    gl.enable(WebGL2RenderingContext.DEPTH_TEST);
   }
 }

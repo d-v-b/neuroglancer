@@ -17,6 +17,7 @@
 import { describe, expect, it } from "vitest";
 import { geodeticToEcef } from "#src/geo/globe.js";
 import type { GlobeTileLevel } from "#src/geo/globe_tiles.js";
+import type { GlobeTileMesh } from "#src/sliceview/globe.js";
 import { computeGlobeTileMesh } from "#src/sliceview/globe.js";
 
 /**
@@ -86,5 +87,43 @@ describe("computeGlobeTileMesh", () => {
     for (const i of partial.indices) {
       expect(partial.chunkPosition[2 * i]).toBeLessThan(45);
     }
+    // With terrain, vertices are raised, and a skirt hangs from the edges.
+    const terrain = computeGlobeTileMesh(
+      makeLevel(),
+      2,
+      0,
+      Math.PI / 2,
+      () => 1000,
+    );
+    // The grid has the same resolution as without terrain.
+    const m = n;
+    const numGrid = (m + 1) * (m + 1);
+    expect(terrain.chunkPosition.length / 2).toBeGreaterThan(numGrid);
+    const radius = (positions: GlobeTileMesh, i: number) =>
+      Math.hypot(
+        ...[0, 1, 2].map(
+          (k) =>
+            positions.origin[k] +
+            positions.positionHigh[3 * i + k] +
+            positions.positionLow[3 * i + k],
+        ),
+      );
+    const center = (m / 2) * (m + 1) + m / 2;
+    const flatMesh = computeGlobeTileMesh(
+      makeLevel(),
+      2,
+      0,
+      Math.PI / 2,
+      () => 0,
+    );
+    expect(radius(terrain, center) - radius(flatMesh, center)).toBeCloseTo(
+      1000,
+      0,
+    );
+    // Skirt vertices lie below the first boundary vertex.
+    expect(radius(terrain, numGrid)).toBeLessThan(radius(terrain, 0) - 1000);
+    expect(Math.max(...terrain.indices)).toBe(
+      terrain.chunkPosition.length / 2 - 1,
+    );
   });
 });

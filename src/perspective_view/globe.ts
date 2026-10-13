@@ -63,6 +63,12 @@ const ELLIPSOID_NUM_LON = 256;
 const ELLIPSOID_NUM_LAT = 128;
 
 /**
+ * Depth in meters of the base surface below the ellipsoid, such that the surfaces of layers drawn on
+ * the globe, which approximate the ellipsoid by chords, are in front of it.
+ */
+const BASE_SURFACE_DEPTH = 3000;
+
+/**
  * Renders the WGS84 ellipsoid with a latitude/longitude graticule, as the background of the globe
  * view where no imagery is shown.
  */
@@ -76,7 +82,11 @@ export class GlobeBaseRenderer extends RefCounted {
 
   constructor(public gl: GL) {
     super();
-    const mesh = makeEllipsoidMesh(ELLIPSOID_NUM_LON, ELLIPSOID_NUM_LAT);
+    const mesh = makeEllipsoidMesh(
+      ELLIPSOID_NUM_LON,
+      ELLIPSOID_NUM_LAT,
+      -BASE_SURFACE_DEPTH,
+    );
     this.positionHigh = this.registerDisposer(GLBuffer.fromData(gl, mesh.high));
     this.positionLow = this.registerDisposer(GLBuffer.fromData(gl, mesh.low));
     this.lonLat = this.registerDisposer(GLBuffer.fromData(gl, mesh.lonLat));

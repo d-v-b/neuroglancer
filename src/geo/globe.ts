@@ -257,11 +257,12 @@ export function getGlobePixelAngle(height: number) {
 }
 
 /**
- * Generates the vertices of the ellipsoid as a latitude/longitude grid, in ECEF coordinates split
- * into high and low parts, with the geodetic coordinates of each vertex.  The grid has duplicate
- * vertices at the antimeridian such that longitudes are continuous within each triangle.
+ * Generates the vertices of the ellipsoid (or of a surface at a constant height above it) as a
+ * latitude/longitude grid, in ECEF coordinates split into high and low parts, with the geodetic
+ * coordinates of each vertex.  The grid has duplicate vertices at the antimeridian such that
+ * longitudes are continuous within each triangle.
  */
-export function makeEllipsoidMesh(numLon: number, numLat: number) {
+export function makeEllipsoidMesh(numLon: number, numLat: number, height = 0) {
   const numVertices = (numLon + 1) * (numLat + 1);
   const ecef = new Float64Array(numVertices * 3);
   const lonLat = new Float32Array(numVertices * 2);
@@ -270,7 +271,7 @@ export function makeEllipsoidMesh(numLon: number, numLat: number) {
     const lat = -90 + (180 * j) / numLat;
     for (let i = 0; i <= numLon; ++i) {
       const lon = -180 + (360 * i) / numLon;
-      geodeticToEcef(lon, lat, 0, ecef, 3 * v);
+      geodeticToEcef(lon, lat, height, ecef, 3 * v);
       lonLat[2 * v] = lon;
       lonLat[2 * v + 1] = lat;
       ++v;

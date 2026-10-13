@@ -128,6 +128,19 @@ export class ViewerSettingsPanel extends SidePanel {
         "Show 3-d globe (geospatial data)",
         geoView.showGlobe,
       );
+      const terrainElement = addCheckbox(
+        "Show terrain on the globe",
+        geoView.showGlobeTerrain,
+      );
+      const exaggerationWidget = this.registerDisposer(
+        new NumberInputWidget(geoView.globeTerrainExaggeration, {
+          label: "Terrain exaggeration",
+        }),
+      );
+      exaggerationWidget.element.classList.add(
+        "neuroglancer-settings-limit-widget",
+      );
+      scroll.appendChild(exaggerationWidget.element);
       // Only relevant for geospatial displays.
       const updateVisibility = () => {
         const { displayCrs } = geoView;
@@ -138,6 +151,8 @@ export class ViewerSettingsPanel extends SidePanel {
             : "";
         graticuleElement.style.display = display;
         globeElement.style.display = display;
+        terrainElement.style.display = display;
+        exaggerationWidget.element.style.display = display;
       };
       this.registerDisposer(geoView.changed.add(updateVisibility));
       updateVisibility();

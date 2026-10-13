@@ -36,6 +36,7 @@ import { PERSPECTIVE_VIEW_RPC_ID } from "#src/perspective_view/base.js";
 import { GlobeBaseRenderer } from "#src/perspective_view/globe.js";
 import type {
   GlobeRenderContext,
+  GlobeTerrainContext,
   PerspectiveViewReadyRenderContext,
   PerspectiveViewRenderContext,
 } from "#src/perspective_view/render_layer.js";
@@ -604,6 +605,13 @@ export class PerspectivePanel extends RenderedDataPanel {
           this.navigationState.pose.orientation.changed.dispatch();
         }
       };
+      this.registerDisposer(
+        geoView.terrainChanged.add(() => {
+          if (geoView.globeActive && geoView.showGlobeTerrain.value) {
+            this.scheduleRedraw();
+          }
+        }),
+      );
       this.registerDisposer(
         geoView.changed.add(() => {
           this.globalToEcef = undefined;
@@ -1359,9 +1367,23 @@ export class PerspectivePanel extends RenderedDataPanel {
         [invViewMatrix[12], invViewMatrix[13], invViewMatrix[14]],
         projectionParameters.viewProjectionMat,
       );
+      const geoView = this.viewer.geoView!;
+      const globeTerrain: GlobeTerrainContext | undefined = geoView
+        .showGlobeTerrain.value
+        ? {
+            source: geoView.terrain,
+            exaggeration: geoView.globeTerrainExaggeration.value,
+            generation: geoView.terrainGeneration,
+          }
+        : undefined;
+      let globeLayerIndex = 0;
       for (const [renderLayer, attachment] of visibleLayers) {
         if (renderLayer.isGlobeLayer) {
-          renderLayer.draw(renderContext, attachment);
+          renderLayer.draw(
+            { ...renderContext, globeLayerIndex, globeTerrain },
+            attachment,
+          );
+          ++globeLayerIndex;
         }
       }
       this.drawGlobeLayers(renderContext, globeCamera.target);

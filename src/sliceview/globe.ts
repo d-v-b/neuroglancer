@@ -28,6 +28,7 @@ import {
   geodeticToEcef,
   getGlobePixelAngle,
   splitDouble,
+  WGS84_SEMI_MAJOR_AXIS,
 } from "#src/geo/globe.js";
 import type {
   GlobeTile,
@@ -244,28 +245,62 @@ export interface GlobeTileMesh {
 }
 
 /**
+ * Minimum number of mesh segments per edge of a tile with terrain.
+ */
+const MIN_TERRAIN_TILE_SEGMENTS = 32;
+
+/**
+ * Depth of the skirts of tile meshes with terrain, as a multiple of the spacing of the vertices.
+ */
+const SKIRT_DEPTH_FACTOR = 2;
+
+/**
  * Computes the mesh of a tile: a grid over the voxel extent of the tile, mapped to the ellipsoid.
  * Grid cells with vertices that cannot be mapped to geodetic coordinates are omitted.
+ *
+ * @param getHeight If specified, returns the height above the ellipsoid of each vertex, given its
+ *     geodetic coordinates and the approximate spacing of the vertices in meters.  The mesh then
+ *     has a skirt: walls hanging from the edges of the tile, which hide cracks between adjacent
+ *     tiles whose heights are sampled at different vertices.
  */
 export function computeGlobeTileMesh(
   level: GlobeTileLevel,
   x: number,
   y: number,
   angularExtent: number,
+  getHeight?: (lon: number, lat: number, spacing: number) => number,
 ): GlobeTileMesh {
   const n = Math.min(
     MAX_TILE_SEGMENTS,
-    Math.max(MIN_TILE_SEGMENTS, Math.ceil(angularExtent * SEGMENTS_PER_RADIAN)),
+    Math.max(
+      getHeight === undefined ? MIN_TILE_SEGMENTS : MIN_TERRAIN_TILE_SEGMENTS,
+      Math.ceil(angularExtent * SEGMENTS_PER_RADIAN),
+    ),
   );
+  const spacing = (angularExtent * WGS84_SEMI_MAJOR_AXIS) / n;
   const [sx, sy] = level.tileSize;
   const x0 = Math.max(level.lowerVoxel[0], x * sx);
   const y0 = Math.max(level.lowerVoxel[1], y * sy);
   const x1 = Math.min(level.upperVoxel[0], (x + 1) * sx);
   const y1 = Math.min(level.upperVoxel[1], (y + 1) * sy);
-  const numVertices = (n + 1) * (n + 1);
+  const numGridVertices = (n + 1) * (n + 1);
+  // Grid vertices on the boundary, in order around the tile.
+  const boundary: number[] = [];
+  if (getHeight !== undefined) {
+    for (let i = 0; i < n; ++i) boundary.push(i);
+    for (let j = 0; j < n; ++j) boundary.push(j * (n + 1) + n);
+    for (let i = n; i > 0; --i) boundary.push(n * (n + 1) + i);
+    for (let j = n; j > 0; --j) boundary.push(j * (n + 1));
+  }
+  const numVertices = numGridVertices + boundary.length;
   const ecef = new Float64Array(numVertices * 3);
+  // Positions on the ellipsoid, which determine the orientation of the triangles.
+  const flat =
+    getHeight === undefined ? ecef : new Float64Array(numVertices * 3);
   const valid = new Uint8Array(numVertices);
   const chunkPosition = new Float32Array(numVertices * 2);
+  const lonLats = new Float64Array(numGridVertices * 2);
+  const heights = new Float64Array(numGridVertices);
   const lonLat = new Float64Array(2);
   const origin = new Float64Array(3);
   let haveOrigin = false;
@@ -277,13 +312,36 @@ export function computeGlobeTileMesh(
       chunkPosition[2 * v] = vx - x * sx;
       chunkPosition[2 * v + 1] = vy - y * sy;
       if (!level.toLonLat(vx, vy, lonLat)) continue;
-      geodeticToEcef(lonLat[0], lonLat[1], 0, ecef, 3 * v);
+      const height =
+        getHeight === undefined ? 0 : getHeight(lonLat[0], lonLat[1], spacing);
+      lonLats[2 * v] = lonLat[0];
+      lonLats[2 * v + 1] = lonLat[1];
+      heights[v] = height;
+      geodeticToEcef(lonLat[0], lonLat[1], height, ecef, 3 * v);
+      if (flat !== ecef) geodeticToEcef(lonLat[0], lonLat[1], 0, flat, 3 * v);
       valid[v] = 1;
       if (!haveOrigin) {
         origin.set(ecef.subarray(3 * v, 3 * v + 3));
         haveOrigin = true;
       }
     }
+  }
+  // Skirt vertices, below the boundary vertices.
+  const skirtDepth = SKIRT_DEPTH_FACTOR * spacing;
+  for (let k = 0; k < boundary.length; ++k) {
+    const v = boundary[k];
+    if (!valid[v]) continue;
+    const s = numGridVertices + k;
+    geodeticToEcef(
+      lonLats[2 * v],
+      lonLats[2 * v + 1],
+      heights[v] - skirtDepth,
+      ecef,
+      3 * s,
+    );
+    chunkPosition[2 * s] = chunkPosition[2 * v];
+    chunkPosition[2 * s + 1] = chunkPosition[2 * v + 1];
+    valid[s] = 1;
   }
   const relative = new Float64Array(numVertices * 3);
   for (let v = 0; v < numVertices; ++v) {
@@ -298,16 +356,17 @@ export function computeGlobeTileMesh(
   const indices: number[] = [];
   const addTriangle = (a: number, b: number, c: number) => {
     if (!valid[a] || !valid[b] || !valid[c]) return;
-    // Orient the triangle such that its normal points away from the center of the Earth.
-    const ax = ecef[3 * a];
-    const ay = ecef[3 * a + 1];
-    const az = ecef[3 * a + 2];
-    const ux = ecef[3 * b] - ax;
-    const uy = ecef[3 * b + 1] - ay;
-    const uz = ecef[3 * b + 2] - az;
-    const wx = ecef[3 * c] - ax;
-    const wy = ecef[3 * c + 1] - ay;
-    const wz = ecef[3 * c + 2] - az;
+    // Orient the triangle such that its normal on the ellipsoid points away from the center of
+    // the Earth.
+    const ax = flat[3 * a];
+    const ay = flat[3 * a + 1];
+    const az = flat[3 * a + 2];
+    const ux = flat[3 * b] - ax;
+    const uy = flat[3 * b + 1] - ay;
+    const uz = flat[3 * b + 2] - az;
+    const wx = flat[3 * c] - ax;
+    const wy = flat[3 * c + 1] - ay;
+    const wz = flat[3 * c + 2] - az;
     const nx = uy * wz - uz * wy;
     const ny = uz * wx - ux * wz;
     const nz = ux * wy - uy * wx;
@@ -328,6 +387,16 @@ export function computeGlobeTileMesh(
       addTriangle(a, b, d);
       addTriangle(a, d, c);
     }
+  }
+  // The skirt walls are vertical, and visible from both sides.
+  for (let k = 0; k < boundary.length; ++k) {
+    const k1 = (k + 1) % boundary.length;
+    const a = boundary[k];
+    const b = boundary[k1];
+    const sa = numGridVertices + k;
+    const sb = numGridVertices + k1;
+    if (!valid[a] || !valid[b] || !valid[sa] || !valid[sb]) continue;
+    indices.push(a, b, sb, a, sb, sa, a, sb, b, a, sa, sb);
   }
   return {
     origin,
