@@ -21,15 +21,28 @@ import type { Viewer } from "#src/viewer.js";
 import { TrackableViewerState } from "#src/viewer.js";
 
 // The `TrackableViewerState` constructor reads many trackable fields of
-// `Viewer`. A proxy returns one stub trackable for each unknown field. The
-// proxy continues to work when the state gets a new field.
+// `Viewer`, some of them nested (e.g. `viewer.geoView.showGlobe`). A proxy
+// returns one stub trackable for each unknown field, which in turn returns
+// itself for each unknown field. The proxy continues to work when the state
+// gets a new field.
 function makeFakeTrackable(): Trackable {
-  return {
+  const trackable: Trackable = {
     changed: new NullarySignal(),
     reset: () => {},
     restoreState: () => {},
     toJSON: () => undefined,
   };
+  const proxy: Trackable = new Proxy(trackable, {
+    get: (obj, prop) => {
+      if (prop in obj) {
+        return (obj as unknown as Record<string | symbol, unknown>)[prop];
+      }
+      // Not thenable or convertible to a primitive.
+      if (typeof prop === "symbol" || prop === "then") return undefined;
+      return proxy;
+    },
+  });
+  return proxy;
 }
 
 // The fake viewer has no `sidePanelManager`, as a viewer with no chrome.

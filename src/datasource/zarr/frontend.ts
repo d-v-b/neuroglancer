@@ -181,10 +181,12 @@ export class MultiscaleVolumeChunkSource extends GenericMultiscaleVolumeChunkSou
               {
                 sharedKvStoreContext: this.sharedKvStoreContext,
                 spec,
+                // `variableUrls` is omitted for single arrays, such that the parameters (which
+                // identify the chunk source) are unchanged.
                 parameters: {
                   url: scale.url,
                   metadata,
-                  variableUrls,
+                  ...(variableUrls === undefined ? {} : { variableUrls }),
                 },
               },
             ),
