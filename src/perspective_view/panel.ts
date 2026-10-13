@@ -27,8 +27,12 @@ import type { GlobeCamera } from "#src/geo/globe.js";
 import {
   computeGlobeCamera,
   ecefToGeodetic,
+  getGlobeCameraRay,
   getGlobePixelAngle,
-  WGS84_SEMI_MAJOR_AXIS,
+  getGlobeRotationBetween,
+  getNorthUpGlobeOrientation,
+  intersectGlobeRay,
+  rotateGlobeCamera,
 } from "#src/geo/globe.js";
 import type { VisibleRenderLayerTracker } from "#src/layer/index.js";
 import { makeRenderedPanelVisibleLayerTracker } from "#src/layer/index.js";
@@ -524,17 +528,12 @@ export class PerspectivePanel extends RenderedDataPanel {
             out;
           const { geoView } = this.viewer;
           if (geoView?.globeActive) {
-            const [lon, lat] = geoView.getLonLat(out.globalPosition) ?? [0, 0];
-            const camera = (this.globeCamera = computeGlobeCamera({
-              lon,
-              lat,
-              distance:
-                navigationState.zoomFactor.value *
-                geoView.getMetersPerZoomUnit(),
-              orientation: navigationState.pose.orientation.orientation,
-              width: logicalWidth,
-              height: logicalHeight,
-            }));
+            const camera = (this.globeCamera = this.computeGlobeCamera(
+              geoView,
+              out.globalPosition,
+              logicalWidth,
+              logicalHeight,
+            ));
             out.globeTarget = camera.target;
             mat4.copy(invViewMatrix, camera.invViewMatrix);
             mat4.copy(projectionMat, camera.projectionMat);
@@ -657,10 +656,17 @@ export class PerspectivePanel extends RenderedDataPanel {
       element,
       "rotate-via-mouse-drag",
       (e: ActionEvent<MouseEvent>) => {
-        startRelativeMouseDrag(e.detail, (_event, deltaX, deltaY) => {
+        let grab: { point: Float64Array; overGlobe: boolean } | undefined;
+        if (this.globeCamera !== undefined) {
+          const start = this.getGlobePointAtMouse(e.detail);
+          if (start !== undefined) {
+            grab = { point: start.point, overGlobe: start.hit };
+          }
+        }
+        startRelativeMouseDrag(e.detail, (event, deltaX, deltaY) => {
           this.context.flagContinuousCameraMotion();
           if (this.globeCamera !== undefined) {
-            this.panGlobe(deltaX, deltaY);
+            if (grab !== undefined) this.panGlobe(grab, event, deltaX, deltaY);
             return;
           }
           this.navigationState.pose.rotateRelative(
@@ -812,39 +818,125 @@ export class PerspectivePanel extends RenderedDataPanel {
   }
 
   /**
-   * Moves the target of the globe camera such that the Earth follows the mouse.
+   * Computes the camera of the globe view from the navigation state.
    */
-  private panGlobe(deltaX: number, deltaY: number) {
+  private computeGlobeCamera(
+    geoView: GeoViewState,
+    globalPosition: ArrayLike<number>,
+    width: number,
+    height: number,
+  ) {
+    const [lon, lat] = geoView.getLonLat(globalPosition) ?? [0, 0];
+    return computeGlobeCamera({
+      lon,
+      lat,
+      distance:
+        this.navigationState.zoomFactor.value * geoView.getMetersPerZoomUnit(),
+      orientation: this.navigationState.pose.orientation.orientation,
+      width,
+      height,
+    });
+  }
+
+  /**
+   * Returns the point of the globe under the mouse (see `intersectGlobeRay`), using the camera of
+   * the current navigation state.
+   */
+  private getGlobePointAtMouse(event: MouseEvent) {
     const { geoView } = this.viewer;
-    const camera = this.globeCamera;
-    if (geoView === undefined || camera === undefined) return;
+    if (geoView === undefined) return undefined;
+    const { logicalWidth, logicalHeight } = this.projectionParameters.value;
+    const camera = this.computeGlobeCamera(
+      geoView,
+      this.navigationState.position.value,
+      logicalWidth,
+      logicalHeight,
+    );
+    const bounds = this.element.getBoundingClientRect();
+    const ndcX = (2 * (event.clientX - bounds.left)) / bounds.width - 1;
+    const ndcY = 1 - (2 * (event.clientY - bounds.top)) / bounds.height;
+    const { origin, direction } = getGlobeCameraRay(
+      camera,
+      ndcX,
+      ndcY,
+      logicalWidth / Math.max(1, logicalHeight),
+    );
+    return { ...intersectGlobeRay(origin, direction), camera };
+  }
+
+  /**
+   * Rotates the globe camera about the center of the Earth such that the grabbed point of the globe
+   * remains under the mouse.  The view moves rigidly, such that the camera passes smoothly over the
+   * poles (with north no longer up, see `resetGlobeNorth`).
+   *
+   * If the mouse is not over the globe, at the start of the drag or later (`grab.overGlobe` is then
+   * cleared for the rest of the drag), the view moves as if the center of the view were grabbed and
+   * moved by the mouse displacement.
+   */
+  private panGlobe(
+    grab: { point: Float64Array; overGlobe: boolean },
+    event: MouseEvent,
+    deltaX: number,
+    deltaY: number,
+  ) {
+    const { geoView } = this.viewer;
+    if (geoView === undefined) return;
     const lonLat = geoView.getLonLat(this.navigationState.position.value);
-    if (lonLat === undefined) return;
-    const { logicalHeight } = this.projectionParameters.value;
-    const eyeDistance = Math.hypot(
-      camera.invViewMatrix[12],
-      camera.invViewMatrix[13],
-      camera.invViewMatrix[14],
+    const current = this.getGlobePointAtMouse(event);
+    if (lonLat === undefined || current === undefined) return;
+    if (!current.hit) grab.overGlobe = false;
+    let from: ArrayLike<number> = current.point;
+    let to: ArrayLike<number> = grab.point;
+    if (!grab.overGlobe) {
+      const { camera } = current;
+      const m = camera.invViewMatrix;
+      const distance = Math.hypot(m[12], m[13], m[14]);
+      const metersPerPixel =
+        distance *
+        getGlobePixelAngle(this.projectionParameters.value.logicalHeight);
+      // The point now under the center of the view displaced by the mouse motion.
+      to = camera.target;
+      from = [0, 1, 2].map(
+        (i) =>
+          camera.target[i] +
+          (m[i] * deltaX - m[4 + i] * deltaY) * metersPerPixel,
+      );
+    }
+    const orientationState = this.navigationState.pose.orientation;
+    const result = rotateGlobeCamera(
+      lonLat[0],
+      lonLat[1],
+      orientationState.orientation,
+      getGlobeRotationBetween(from, to),
     );
-    const metersPerPixel = eyeDistance * getGlobePixelAngle(logicalHeight);
-    const orientation = this.navigationState.pose.orientation.orientation;
-    const right = vec3.transformQuat(vec3.create(), kAxes[0], orientation);
-    const up = vec3.transformQuat(vec3.create(), kAxes[1], orientation);
-    const east = (-deltaX * right[0] + deltaY * up[0]) * metersPerPixel;
-    const north = (-deltaX * right[1] + deltaY * up[1]) * metersPerPixel;
-    const [lon, lat] = lonLat;
-    const radiansToDegrees = 180 / Math.PI;
-    const newLat = Math.max(
-      -89.9,
-      Math.min(89.9, lat + (north / WGS84_SEMI_MAJOR_AXIS) * radiansToDegrees),
+    // The target is limited to the latitudes representable in the display CRS (e.g. Web
+    // Mercator).
+    const maxLatitude = geoView.info?.crs.maxLatitude ?? 90;
+    const lat = Math.max(-maxLatitude, Math.min(maxLatitude, result.lat));
+    const lon = ((((result.lon + 180) % 360) + 360) % 360) - 180;
+    quat.copy(orientationState.orientation, result.orientation);
+    orientationState.changed.dispatch();
+    geoView.setLonLat(lon, lat);
+  }
+
+  /**
+   * Orients the globe camera north, keeping its tilt.
+   */
+  private resetGlobeNorth() {
+    const orientationState = this.navigationState.pose.orientation;
+    quat.copy(
+      orientationState.orientation,
+      getNorthUpGlobeOrientation(orientationState.orientation),
     );
-    const newLon =
-      lon +
-      (east /
-        (WGS84_SEMI_MAJOR_AXIS *
-          Math.max(0.01, Math.cos((lat * Math.PI) / 180)))) *
-        radiansToDegrees;
-    geoView.setLonLat(((((newLon + 180) % 360) + 360) % 360) - 180, newLat);
+    orientationState.changed.dispatch();
+  }
+
+  protected snapOrientation() {
+    if (this.globeCamera !== undefined) {
+      this.resetGlobeNorth();
+      return;
+    }
+    super.snapOrientation();
   }
 
   /**

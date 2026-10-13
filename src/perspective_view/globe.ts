@@ -64,9 +64,11 @@ const ELLIPSOID_NUM_LAT = 128;
 
 /**
  * Depth in meters of the base surface below the ellipsoid, such that the surfaces of layers drawn on
- * the globe, which approximate the ellipsoid by chords, are in front of it.
+ * the globe, which approximate the ellipsoid by chords (up to about 2 km below it for the coarsest
+ * tiles) and may be pushed back by a polygon offset (see `GlobeVolumeRenderLayer`), are in front of
+ * it.
  */
-const BASE_SURFACE_DEPTH = 3000;
+const BASE_SURFACE_DEPTH = 15000;
 
 /**
  * Renders the WGS84 ellipsoid with a latitude/longitude graticule, as the background of the globe

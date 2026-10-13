@@ -475,7 +475,7 @@ export abstract class RenderedDataPanel extends RenderedPanel {
     });
 
     registerActionListener(element, "snap", () => {
-      this.navigationState.pose.snap();
+      this.snapOrientation();
     });
 
     registerActionListener(element, "zoom-in", () => {
@@ -606,9 +606,7 @@ export abstract class RenderedDataPanel extends RenderedPanel {
       }
     });
 
-    registerActionListener(element, "snap", () =>
-      this.navigationState.pose.snap(),
-    );
+    registerActionListener(element, "snap", () => this.snapOrientation());
 
     registerActionListener(
       element,
@@ -797,6 +795,13 @@ export abstract class RenderedDataPanel extends RenderedPanel {
   }
 
   abstract translateByViewportPixels(deltaX: number, deltaY: number): void;
+
+  /**
+   * Snaps the orientation of the view (the "snap" action).
+   */
+  protected snapOrientation() {
+    this.navigationState.pose.snap();
+  }
 
   handleMouseMove(clientX: number, clientY: number) {
     const { element } = this;

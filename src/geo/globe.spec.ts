@@ -19,8 +19,13 @@ import {
   computeGlobeCamera,
   ecefToGeodetic,
   geodeticToEcef,
+  getGlobeCameraRay,
+  getGlobeRotationBetween,
+  getNorthUpGlobeOrientation,
   GLOBE_MAX_CAMERA_DISTANCE,
+  intersectGlobeRay,
   makeEllipsoidMesh,
+  rotateGlobeCamera,
   splitDouble,
   WGS84_SEMI_MAJOR_AXIS,
   WGS84_SEMI_MINOR_AXIS,
@@ -124,5 +129,82 @@ describe("globe geometry", () => {
     expect(mesh.numVertices).toBe(9 * 5);
     expect(mesh.indices.length).toBe(8 * 4 * 6);
     expect(Math.max(...mesh.indices)).toBe(mesh.numVertices - 1);
+  });
+
+  it("pans the camera rigidly, also across the poles", () => {
+    const a = WGS84_SEMI_MAJOR_AXIS;
+    // Rays that hit the ellipsoid, and that miss it (closest silhouette point).
+    const hit = intersectGlobeRay([2 * a, 0, 0], [-1, 0, 0]);
+    expect(hit.hit).toBe(true);
+    expect(hit.point[0]).toBeCloseTo(a, 3);
+    const pole = intersectGlobeRay([0, 0, 2 * a], [0, 0, -1]);
+    expect(pole.point[2]).toBeCloseTo(WGS84_SEMI_MINOR_AXIS, 3);
+    const miss = intersectGlobeRay([2 * a, 0, 0], [0, 1, 0]);
+    expect(miss.hit).toBe(false);
+    expect(Array.from(miss.point).map((v) => v / a)).toEqual([1, 0, 0]);
+
+    // The ray through the center of the view hits the target.
+    const camera = computeGlobeCamera({
+      lon: 20,
+      lat: 40,
+      distance: 1e6,
+      orientation: quat.setAxisAngle(quat.create(), [1, 0, 0], 0.5),
+      width: 800,
+      height: 600,
+    });
+    const ray = getGlobeCameraRay(camera, 0, 0, 800 / 600);
+    const center = intersectGlobeRay(ray.origin, ray.direction).point;
+    for (let i = 0; i < 3; ++i) {
+      expect(center[i]).toBeCloseTo(camera.target[i], 0);
+    }
+
+    // Rotations map directions, and are limited to below a half turn.
+    const r = getGlobeRotationBetween([1, 0, 0], [0, 2, 0]);
+    expect(Array.from(r.subarray(0, 3)).map((v) => +v.toFixed(12))).toEqual([
+      0, 1, 0,
+    ]);
+    const half = getGlobeRotationBetween([1, 0, 0], [-1, 1e-9, 0]);
+    expect(half[0]).toBeGreaterThan(-1);
+
+    // Panning over the north pole: from 85N on the 0 meridian to 85N on the 180 meridian.  The
+    // camera axes rotate with the globe, so the heading flips while the tilt is unchanged.
+    const orientation = quat.setAxisAngle(quat.create(), [1, 0, 0], 0.4);
+    const from = geodeticToEcef(0, 85, 0, new Float64Array(3));
+    const to = geodeticToEcef(180, 85, 0, new Float64Array(3));
+    const rotation = getGlobeRotationBetween(from, to);
+    const result = rotateGlobeCamera(0, 85, orientation, rotation);
+    expect(Math.abs(result.lon)).toBeCloseTo(180, 6);
+    expect(result.lat).toBeCloseTo(85, 6);
+    const before = computeGlobeCamera({
+      lon: 0,
+      lat: 85,
+      distance: 1e6,
+      orientation,
+      width: 800,
+      height: 600,
+    });
+    const after = computeGlobeCamera({
+      lon: result.lon,
+      lat: result.lat,
+      distance: 1e6,
+      orientation: result.orientation,
+      width: 800,
+      height: 600,
+    });
+    for (let col = 0; col < 3; ++col) {
+      for (let i = 0; i < 3; ++i) {
+        let rotated = 0;
+        for (let k = 0; k < 3; ++k) {
+          rotated += rotation[3 * k + i] * before.invViewMatrix[4 * col + k];
+        }
+        expect(after.invViewMatrix[4 * col + i]).toBeCloseTo(rotated, 6);
+      }
+    }
+    // Resetting north keeps the tilt.
+    const back = (q: quat) => vec3.transformQuat(vec3.create(), [0, 0, 1], q);
+    const northUp = getNorthUpGlobeOrientation(result.orientation);
+    expect(back(northUp)[2]).toBeCloseTo(back(result.orientation)[2], 9);
+    expect(back(northUp)[0]).toBeCloseTo(0, 9);
+    expect(back(northUp)[1]).toBeLessThan(0);
   });
 });
