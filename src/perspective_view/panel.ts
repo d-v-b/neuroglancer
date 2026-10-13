@@ -869,9 +869,12 @@ export class PerspectivePanel extends RenderedDataPanel {
    * remains under the mouse.  The view moves rigidly, such that the camera passes smoothly over the
    * poles (with north no longer up, see `resetGlobeNorth`).
    *
-   * If the mouse is not over the globe, at the start of the drag or later (`grab.overGlobe` is then
-   * cleared for the rest of the drag), the view moves as if the center of the view were grabbed and
-   * moved by the mouse displacement.
+   * If the drag started over the globe, the grabbed point follows the mouse also when the mouse
+   * leaves the globe (using the closest point of the silhouette, see `intersectGlobeRay`), such
+   * that the view only depends on the mouse position, and returning the mouse to a previous
+   * position restores the previous view.  If the drag started off the globe (`grab.overGlobe` is
+   * `false`), the view moves as if the center of the view were grabbed and moved by the mouse
+   * displacement.
    */
   private panGlobe(
     grab: { point: Float64Array; overGlobe: boolean },
@@ -884,7 +887,6 @@ export class PerspectivePanel extends RenderedDataPanel {
     const lonLat = geoView.getLonLat(this.navigationState.position.value);
     const current = this.getGlobePointAtMouse(event);
     if (lonLat === undefined || current === undefined) return;
-    if (!current.hit) grab.overGlobe = false;
     let from: ArrayLike<number> = current.point;
     let to: ArrayLike<number> = grab.point;
     if (!grab.overGlobe) {
