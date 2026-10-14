@@ -63,6 +63,7 @@ function makeGeographicDataSource(): DataSource {
         default: true,
         subsource: { staticAnnotations: {} as any },
       },
+      { id: "mesh", default: true, subsource: { mesh: {} as any } },
       { id: "other", default: true, subsource: {} },
     ],
     geoReference: { crs: "EPSG:4326", modelDimensions: [0, 1] },
@@ -71,9 +72,10 @@ function makeGeographicDataSource(): DataSource {
 
 describe("reprojectDataSource", () => {
   it("retains geometric subsources only for identity reprojections", () => {
+    // The bounding box of the data (static annotations) is omitted without a warning.
     for (const [displayCrs, expectedIds, expectedDropped] of [
-      ["EPSG:4326", ["bounds", "other"], []],
-      ["EPSG:3857", ["other"], ["bounds"]],
+      ["EPSG:4326", ["bounds", "mesh", "other"], []],
+      ["EPSG:3857", ["other"], ["mesh"]],
     ] as [string, string[], string[]][]) {
       const result = reprojectDataSource(
         makeGeographicDataSource(),

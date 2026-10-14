@@ -288,7 +288,11 @@ export function reprojectDataSource(
     ) {
       // Geometric subsources other than volumes are not reprojected.  If the reprojection is the
       // identity, the affine approximation of the model transform is exact, and they are retained.
-      droppedSubsources.push(entry.id);
+      // Static annotations (the bounding box of the data, provided by many data sources) are
+      // omitted without a warning.
+      if (subsource.staticAnnotations === undefined) {
+        droppedSubsources.push(entry.id);
+      }
       continue;
     } else {
       subsources.push(entry);
