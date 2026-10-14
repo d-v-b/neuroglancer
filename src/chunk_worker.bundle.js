@@ -7,6 +7,7 @@ import "#src/chunk_manager/backend.js";
 import "#src/kvstore/backend.js";
 import "#src/sliceview/backend.js";
 import "#src/sliceview/globe_backend.js";
+import "#src/sliceview/volume/stacked_backend.js";
 import "#src/perspective_view/backend.js";
 import "#src/volume_rendering/backend.js";
 import "#src/annotation/backend.js";

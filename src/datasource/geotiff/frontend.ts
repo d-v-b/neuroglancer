@@ -25,10 +25,7 @@
  */
 
 import { WithParameters } from "#src/chunk_manager/frontend.js";
-import type {
-  CoordinateArray,
-  CoordinateSpaceTransform,
-} from "#src/coordinate_transform.js";
+import type { CoordinateSpaceTransform } from "#src/coordinate_transform.js";
 import {
   makeCoordinateSpace,
   makeIdentityTransformedBoundingBox,
@@ -44,11 +41,8 @@ import {
 } from "#src/datasource/geotiff/decode.js";
 import { getGeoTiffGeoreference } from "#src/datasource/geotiff/geokeys.js";
 import {
-  alignGeoTiffBands,
-  getGeoTiffBandName,
   getGeoTiffDefaultShader,
   getTiffScales,
-  resolveGeoTiffBandUrl,
 } from "#src/datasource/geotiff/metadata.js";
 import type {
   ByteRangeReader,
@@ -112,20 +106,10 @@ function getTileFormat(
   };
 }
 
-/**
- * A file of a (possibly multi-file) TIFF image, whose samples form consecutive channels.
- */
-export interface GeoTiffBand {
-  name: string;
-  url: string;
-  tiff: TiffFile;
-}
-
 export class GeoTiffMultiscaleVolumeChunkSource extends MultiscaleVolumeChunkSource {
   dataType: DataType;
   volumeType = VolumeType.IMAGE;
   private defaultShader_: string | undefined;
-  samplesPerPixel: number;
 
   get rank() {
     return 3;
@@ -135,54 +119,50 @@ export class GeoTiffMultiscaleVolumeChunkSource extends MultiscaleVolumeChunkSou
     return this.defaultShader_;
   }
 
-  /**
-   * @param levels For each resolution level (ordered by decreasing resolution), the image of each
-   *     band (see `alignGeoTiffBands`).
-   * @param reference Index of the band whose images define the voxel grid of each level.
-   */
   constructor(
     public sharedKvStoreContext: SharedKvStoreContext,
-    public bands: GeoTiffBand[],
-    public levels: TiffImage[][],
-    public reference: number,
+    public url: string,
+    public tiff: TiffFile,
+    public scales: TiffImage[],
   ) {
     super(sharedKvStoreContext.chunkManager);
-    const base = levels[0][reference];
+    const base = scales[0];
     this.dataType = getTiffDataType(base.sampleFormat, base.bitsPerSample);
-    this.samplesPerPixel = levels[0].reduce(
-      (sum, image) => sum + image.samplesPerPixel,
-      0,
-    );
     this.defaultShader_ = getGeoTiffDefaultShader(
       this.dataType,
-      this.samplesPerPixel,
+      base.samplesPerPixel,
       base.noData,
     );
   }
 
   getSources(volumeSourceOptions: VolumeSourceOptions) {
-    const { levels, reference, bands, samplesPerPixel: spp } = this;
-    const base = levels[0][reference];
+    const { scales, tiff } = this;
+    const base = scales[0];
     const rank = 3;
     const stride = rank + 1;
+    const spp = base.samplesPerPixel;
     return transposeNestedArrays(
-      levels.map((images) => {
-        const image = images[reference];
+      scales.map((image) => {
         const chunkToMultiscaleTransform = new Float32Array(stride * stride);
         chunkToMultiscaleTransform[0] = base.width / image.width;
         chunkToMultiscaleTransform[stride + 1] = base.height / image.height;
         chunkToMultiscaleTransform[2 * stride + 2] = 1;
         chunkToMultiscaleTransform[stride * stride - 1] = 1;
-        const getLayout = (bandImage: TiffImage): TiffTileLayout => ({
+        const layout: TiffTileLayout = {
           width: image.width,
           height: image.height,
-          tileWidth: bandImage.tileWidth,
-          tileHeight: bandImage.tileHeight,
-          isTiled: bandImage.isTiled,
-          samplesPerPixel: bandImage.samplesPerPixel,
-          planarConfiguration: bandImage.planarConfiguration,
-        });
-        const [chunkWidth, chunkHeight] = getTiffChunkSize(getLayout(image));
+          tileWidth: image.tileWidth,
+          tileHeight: image.tileHeight,
+          isTiled: image.isTiled,
+          samplesPerPixel: spp,
+          planarConfiguration: image.planarConfiguration,
+        };
+        const [chunkWidth, chunkHeight] = getTiffChunkSize(layout);
+        // Strips are shared by multiple chunks if the chunks do not consist of whole strips.
+        const cacheTiles =
+          chunkWidth !== image.tileWidth ||
+          (chunkHeight % image.tileHeight !== 0 &&
+            chunkHeight !== image.height);
         return makeDefaultVolumeChunkSpecifications({
           rank,
           dataType: this.dataType,
@@ -197,20 +177,12 @@ export class GeoTiffMultiscaleVolumeChunkSource extends MultiscaleVolumeChunkSou
               sharedKvStoreContext: this.sharedKvStoreContext,
               spec,
               parameters: {
-                bands: images.map((bandImage, i) => ({
-                  url: bands[i].url,
-                  format: getTileFormat(bandImage, bands[i].tiff.littleEndian),
-                  layout: getLayout(bandImage),
-                  // Tiles (strips) are shared by multiple chunks if the chunks do not consist of
-                  // whole tiles.
-                  cacheTiles:
-                    (chunkWidth % bandImage.tileWidth !== 0 &&
-                      chunkWidth !== image.width) ||
-                    (chunkHeight % bandImage.tileHeight !== 0 &&
-                      chunkHeight !== image.height),
-                  offsets: bandImage.offsets,
-                  byteCounts: bandImage.byteCounts,
-                })),
+                url: this.url,
+                format: getTileFormat(image, tiff.littleEndian),
+                layout,
+                cacheTiles,
+                offsets: image.offsets,
+                byteCounts: image.byteCounts,
               },
             }),
             chunkToMultiscaleTransform,
@@ -222,87 +194,16 @@ export class GeoTiffMultiscaleVolumeChunkSource extends MultiscaleVolumeChunkSou
 }
 
 /**
- * Checks that the bands of a multi-file image cover the same extent, to within a pixel of the
- * reference band.  `images` are the full-resolution images of the bands, which (unlike overviews)
- * carry the georeferencing.
- */
-function checkGeoTiffBandExtents(
-  bands: GeoTiffBand[],
-  images: TiffImage[],
-  reference: number,
-) {
-  const extentOf = (image: TiffImage) => {
-    const georeference = getGeoTiffGeoreference(image);
-    if (georeference === undefined) return undefined;
-    const [a00, a10, a01, a11, t0, t1] = georeference.pixelToCrs;
-    return {
-      crs: georeference.crs,
-      corners: [
-        [t0, t1],
-        [
-          t0 + a00 * image.width + a01 * image.height,
-          t1 + a10 * image.width + a11 * image.height,
-        ],
-      ],
-      pixel: Math.sqrt(Math.abs(a00 * a11 - a01 * a10)),
-    };
-  };
-  const expected = extentOf(images[reference]);
-  for (let i = 0; i < bands.length; ++i) {
-    if (i === reference) continue;
-    const extent = extentOf(images[i]);
-    if ((extent === undefined) !== (expected === undefined)) {
-      throw new Error(
-        `Band ${JSON.stringify(bands[i].name)} differs in georeferencing from band ${JSON.stringify(bands[reference].name)}`,
-      );
-    }
-    if (extent === undefined || expected === undefined) continue;
-    const mismatch = extent.corners.some((corner, k) =>
-      corner.some(
-        (v, j) => Math.abs(v - expected.corners[k][j]) > expected.pixel,
-      ),
-    );
-    if (extent.crs !== expected.crs || mismatch) {
-      throw new Error(
-        `Band ${JSON.stringify(bands[i].name)} does not cover the same extent as band ${JSON.stringify(bands[reference].name)}`,
-      );
-    }
-  }
-}
-
-/**
- * Constructs the data source for a parsed TIFF file, or for multiple TIFF files whose samples are
- * combined as the channels (bands) of a single image.
+ * Constructs the data source for a parsed TIFF file.
  */
 export function getGeoTiffDataSource(
   sharedKvStoreContext: SharedKvStoreContext,
-  bands: GeoTiffBand[],
+  url: string,
+  tiff: TiffFile,
   crsOverride: string | undefined,
 ): DataSource {
-  const bandScales = bands.map((band) => getTiffScales(band.tiff));
-  const firstBase = bandScales[0][0];
-  for (let i = 1; i < bands.length; ++i) {
-    const other = bandScales[i][0];
-    if (
-      other.sampleFormat !== firstBase.sampleFormat ||
-      other.bitsPerSample !== firstBase.bitsPerSample
-    ) {
-      throw new Error(
-        `Band ${JSON.stringify(bands[i].name)} differs in data type from band ${JSON.stringify(bands[0].name)}`,
-      );
-    }
-  }
-  const { reference, levels } = alignGeoTiffBands(bandScales);
-  checkGeoTiffBandExtents(
-    bands,
-    bandScales.map((scales) => scales[0]),
-    reference,
-  );
-  const base = levels[0][reference];
-  const samplesPerPixel = levels[0].reduce(
-    (sum, image) => sum + image.samplesPerPixel,
-    0,
-  );
+  const scales = getTiffScales(tiff);
+  const base = scales[0];
   const georeference = getGeoTiffGeoreference(base);
   const names = ["x", "y", "c^"];
   const rank = 3;
@@ -357,14 +258,13 @@ export function getGeoTiffDataSource(
     boundingBoxes: [
       makeIdentityTransformedBoundingBox({
         lowerBounds: new Float64Array(rank),
-        upperBounds: Float64Array.of(base.width, base.height, samplesPerPixel),
+        upperBounds: Float64Array.of(
+          base.width,
+          base.height,
+          base.samplesPerPixel,
+        ),
       }),
     ],
-    // Channels are labeled by band name for multi-file images.
-    coordinateArrays:
-      bands.length === 1
-        ? undefined
-        : [undefined, undefined, getGeoTiffChannelLabels(bands, levels[0])],
   });
   const outputSpace = makeCoordinateSpace({
     names,
@@ -380,33 +280,15 @@ export function getGeoTiffDataSource(
   };
   const volume = new GeoTiffMultiscaleVolumeChunkSource(
     sharedKvStoreContext,
-    bands,
-    levels,
-    reference,
+    url,
+    tiff,
+    scales,
   );
   return {
     modelTransform,
     subsources: [{ id: "default", default: true, subsource: { volume } }],
     geoReference:
       crs === undefined ? undefined : { crs, modelDimensions: [0, 1] },
-  };
-}
-
-function getGeoTiffChannelLabels(
-  bands: GeoTiffBand[],
-  images: TiffImage[],
-): CoordinateArray {
-  const labels: string[] = [];
-  bands.forEach((band, i) => {
-    const n = images[i].samplesPerPixel;
-    for (let k = 0; k < n; ++k) {
-      labels.push(n === 1 ? band.name : `${band.name}.${k}`);
-    }
-  });
-  return {
-    explicit: false,
-    coordinates: Array.from(labels, (_, i) => i),
-    labels,
   };
 }
 
@@ -479,46 +361,37 @@ export class GeoTiffDataSourceProvider
     );
     if (authorityAndPath || query) {
       throw new Error(
-        `Invalid URL ${JSON.stringify(options.url.url)}: expected "geotiff:" optionally followed by "#crs=<CRS>&bands=<files>"`,
+        `Invalid URL ${JSON.stringify(options.url.url)}: expected "geotiff:" optionally followed by "#crs=<CRS>"`,
       );
     }
     let crsOverride: string | undefined;
-    const { kvStoreUrl } = options;
-    // Additional files whose samples are appended as channels, e.g. the other bands of a
-    // Sentinel-2 scene, relative to the URL of the first file.
-    const bandUrls = [kvStoreUrl];
     if (fragment) {
       const params = new URLSearchParams(fragment);
       for (const key of params.keys()) {
-        if (key !== "crs" && key !== "bands") {
+        if (key !== "crs") {
           throw new Error(`Unsupported GeoTIFF option: ${JSON.stringify(key)}`);
         }
       }
       crsOverride = params.get("crs") ?? undefined;
-      const bandsParam = params.get("bands");
-      if (bandsParam) {
-        for (const band of bandsParam.split(",")) {
-          if (band) bandUrls.push(resolveGeoTiffBandUrl(kvStoreUrl, band));
-        }
-      }
     }
+    const { kvStoreUrl } = options;
     return options.registry.chunkManager.memoize.getAsync(
-      { type: "geotiff:get", urls: bandUrls, crsOverride },
+      { type: "geotiff:get", url: kvStoreUrl, crsOverride },
       options,
       async (progressOptions): Promise<DataSource> => {
         const { sharedKvStoreContext } = options.registry;
-        const tiffs = await Promise.all(
-          bandUrls.map((url) =>
-            readTiffMetadata(sharedKvStoreContext, url, progressOptions),
-          ),
+        const tiff = await readTiffMetadata(
+          sharedKvStoreContext,
+          kvStoreUrl,
+          progressOptions,
         );
-        const bands = bandUrls.map((url, i) => ({
-          name: getGeoTiffBandName(url),
-          url,
-          tiff: tiffs[i],
-        }));
         return {
-          ...getGeoTiffDataSource(sharedKvStoreContext, bands, crsOverride),
+          ...getGeoTiffDataSource(
+            sharedKvStoreContext,
+            kvStoreUrl,
+            tiff,
+            crsOverride,
+          ),
           canonicalUrl: `${kvStoreUrl}|${options.url.url}`,
         };
       },

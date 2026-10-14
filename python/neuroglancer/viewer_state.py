@@ -622,6 +622,9 @@ class ImageLayer(Layer, _AnnotationLayerOptions):
     cross_section_render_scale = crossSectionRenderScale = wrapped_property(
         "crossSectionRenderScale", optional(float, 1)
     )
+    stack_sources = stackSources = wrapped_property(
+        "stackSources", optional(bool, False)
+    )
 
     @staticmethod
     def interpolate(a, b, t):

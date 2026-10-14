@@ -38,11 +38,8 @@ import {
 } from "#src/datasource/geotiff/decode.js";
 import { getGeoTiffGeoreference } from "#src/datasource/geotiff/geokeys.js";
 import {
-  alignGeoTiffBands,
-  getGeoTiffBandName,
   getGeoTiffDefaultShader,
   getTiffScales,
-  resolveGeoTiffBandUrl,
 } from "#src/datasource/geotiff/metadata.js";
 import type {
   ByteRangeReader,
@@ -901,50 +898,6 @@ describe("geotiff", () => {
     )!;
     expect(georeference.crs).toBeUndefined();
     expect(georeference.crsError).toMatch(/unsupported linear unit 9014/);
-  });
-
-  it("aligns the resolution levels of multi-file bands", () => {
-    // Overviews halve the size, rounding up.
-    const pyramid = (size: number, levels: number) =>
-      Array.from({ length: levels }, (_, i) => {
-        const s = Math.ceil(size / 2 ** i);
-        return { width: s, height: s } as TiffImage;
-      });
-    const b10 = pyramid(10980, 5);
-    const b20 = pyramid(5490, 4);
-    const single = alignGeoTiffBands([b10]);
-    expect(single.reference).toBe(0);
-    expect(single.levels.map((l) => l[0].width)).toEqual([
-      10980, 5490, 2745, 1373, 687,
-    ]);
-    // 10 m and 20 m bands: the levels are those of the 20 m band, and the 10 m band contributes
-    // its overviews.
-    const mixed = alignGeoTiffBands([b10, b20, b10]);
-    expect(mixed.reference).toBe(1);
-    expect(mixed.levels.map((l) => l.map((image) => image.width))).toEqual([
-      [5490, 5490, 5490],
-      [2745, 2745, 2745],
-      [1373, 1373, 1373],
-      [687, 687, 687],
-    ]);
-    expect(mixed.levels[0][0]).toBe(b10[1]);
-    // Band URLs are relative to the first band, and named by their file name.
-    const base = "https://example.com/s2/S2B_33SVB_20240725_0_L2A/B04.tif";
-    expect(resolveGeoTiffBandUrl(base, "B08.tif")).toBe(
-      "https://example.com/s2/S2B_33SVB_20240725_0_L2A/B08.tif",
-    );
-    expect(resolveGeoTiffBandUrl(base, "https://other.org/x.tif")).toBe(
-      "https://other.org/x.tif",
-    );
-    expect(getGeoTiffBandName(base)).toBe("B04");
-  });
-
-  it("rejects bands without images of matching size", () => {
-    const image = (size: number) =>
-      ({ width: size, height: size }) as TiffImage;
-    expect(() => alignGeoTiffBands([[image(1000)], [image(300)]])).toThrow(
-      /no images of matching size/,
-    );
   });
 
   it("selects default shaders", () => {

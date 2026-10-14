@@ -998,11 +998,16 @@ export function getVolumetricTransformedSources(
         factor;
     }
   }
-  const allSources = getSources({
-    displayRank: displayRank,
-    multiscaleToViewTransform: multiscaleToViewTransform,
-    modelChannelDimensionIndices: transform.channelToRenderLayerDimensions,
-  });
+  let allSources: SliceViewSingleResolutionSource<SliceViewChunkSource>[][];
+  try {
+    allSources = getSources({
+      displayRank: displayRank,
+      multiscaleToViewTransform: multiscaleToViewTransform,
+      modelChannelDimensionIndices: transform.channelToRenderLayerDimensions,
+    });
+  } catch (e) {
+    return returnError((e as Error).message);
+  }
   const { voxelPhysicalScales: globalScales } = displayDimensionRenderInfo;
   try {
     const getTransformedSource = (

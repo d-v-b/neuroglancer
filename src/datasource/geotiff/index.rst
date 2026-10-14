@@ -16,24 +16,11 @@ URL syntax
 
 - :file:`{KVSTORE-URL}|geotiff:`
 - :file:`{KVSTORE-URL}|geotiff:#crs={CRS}`
-- :file:`{KVSTORE-URL}|geotiff:#bands={FILE},{FILE},...`
 
 The optional :file:`crs` parameter specifies the CRS of the image, as an EPSG
 code (e.g. :file:`EPSG:31468`) or a proj4 definition, overriding the CRS
 determined from the GeoTIFF keys. This is necessary for images in CRSs that are
 not built in.
-
-The optional :file:`bands` parameter specifies additional files whose samples
-are appended to the channels of the image, for multispectral images stored as
-one file per band (e.g. Sentinel-2 or Landsat scenes). The files are specified
-relative to the first file (or as absolute URLs), and must have the same data
-type and cover the same extent. Bands may have different resolutions: the
-resolution levels are those of the band with the coarsest full-resolution
-image, and each band contributes its image (or overview) of the same size. The
-channels are labeled by the file names of the bands, such that the shader
-accesses the bands as channels ``0``, ``1``, ... in the order given (starting
-with the first file). Both parameters may be combined, e.g.
-:file:`#crs=EPSG:32633&bands=B03.tif`.
 
 Examples
 --------
@@ -43,16 +30,6 @@ Examples
   <https://registry.opendata.aws/sentinel-2-l2a-cogs/>`__ open dataset:
 
   :file:`https://sentinel-cogs.s3.us-west-2.amazonaws.com/sentinel-s2-l2a-cogs/33/S/VB/2024/7/S2B_33SVB_20240725_0_L2A/TCI.tif|geotiff:`
-
-- The 10 m bands of the same scene (red, green, blue, and near infrared) as a
-  4-channel image, e.g. for false color and NDVI shaders:
-
-  :file:`https://sentinel-cogs.s3.us-west-2.amazonaws.com/sentinel-s2-l2a-cogs/33/S/VB/2024/7/S2B_33SVB_20240725_0_L2A/B04.tif|geotiff:#bands=B03.tif,B02.tif,B08.tif`
-
-- Shortwave infrared, near infrared, and red bands at 20 m (the 10 m red band is
-  combined at its 20 m overview):
-
-  :file:`https://sentinel-cogs.s3.us-west-2.amazonaws.com/sentinel-s2-l2a-cogs/33/S/VB/2024/7/S2B_33SVB_20240725_0_L2A/B12.tif|geotiff:#bands=B11.tif,B8A.tif,B04.tif`
 
 Images
 ------

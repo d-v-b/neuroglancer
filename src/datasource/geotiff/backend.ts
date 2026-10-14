@@ -18,12 +18,10 @@ import { decodeJpeg } from "#src/async_computation/decode_jpeg_request.js";
 import { decodeZstd } from "#src/async_computation/decode_zstd_request.js";
 import { requestAsyncComputation } from "#src/async_computation/request.js";
 import { WithParameters } from "#src/chunk_manager/backend.js";
-import type { GeoTiffBandParameters } from "#src/datasource/geotiff/base.js";
 import { GeoTiffTileSourceParameters } from "#src/datasource/geotiff/base.js";
 import type {
   DecodedTiffTile,
   ImageDecoders,
-  SampleArray,
 } from "#src/datasource/geotiff/decode.js";
 import {
   decodeTiffTile,
@@ -79,37 +77,31 @@ async function decodeWebp(
   }
 }
 
-/**
- * Reads the tiles of one band of a chunk source.
- */
-class GeoTiffBandReader {
-  private rangeReader: CoalescingRangeReader;
-  private tileCache: DecodedTileCache<DecodedTiffTile | undefined>;
+@registerSharedObject()
+export class GeoTiffTileSource extends WithParameters(
+  WithSharedKvStoreContextCounterpart(VolumeChunkSource),
+  GeoTiffTileSourceParameters,
+) {
+  private kvStore = this.sharedKvStoreContext.kvStoreContext.getKvStore(
+    this.parameters.url,
+  );
 
-  constructor(
-    source: GeoTiffTileSource,
-    public parameters: GeoTiffBandParameters,
-    maxCachedBytes: number,
-  ) {
-    const kvStore = source.sharedKvStoreContext.kvStoreContext.getKvStore(
-      parameters.url,
-    );
-    this.rangeReader = new CoalescingRangeReader(
-      async (offset, length, signal) => {
-        const { store, path } = kvStore;
-        const response = await store.read(path, {
-          signal,
-          byteRange: { offset, length },
-          throwIfMissing: true,
-        });
-        return getByteRangeFromResponse(response!, offset, length);
-      },
-    );
-    this.tileCache = new DecodedTileCache<DecodedTiffTile | undefined>(
-      maxCachedBytes,
-      (tile) => tile?.data.byteLength ?? 0,
-    );
-  }
+  private rangeReader = new CoalescingRangeReader(
+    async (offset, length, signal) => {
+      const { store, path } = this.kvStore;
+      const response = await store.read(path, {
+        signal,
+        byteRange: { offset, length },
+        throwIfMissing: true,
+      });
+      return getByteRangeFromResponse(response!, offset, length);
+    },
+  );
+
+  private tileCache = new DecodedTileCache<DecodedTiffTile | undefined>(
+    MAX_CACHED_TILE_BYTES,
+    (tile) => tile?.data.byteLength ?? 0,
+  );
 
   private async downloadTile(
     index: number,
@@ -154,76 +146,31 @@ class GeoTiffBandReader {
     return decodeTiffTile(compressed, format, rows, decoders);
   }
 
-  /**
-   * Reads the region of the band covered by a chunk into `output` (planar samples).  Returns
-   * `false` if all tiles of the region are sparse.
-   */
-  read(
-    output: SampleArray,
-    x0: number,
-    y0: number,
-    width: number,
-    height: number,
-    signal: AbortSignal,
-  ) {
-    const { parameters } = this;
+  async download(chunk: VolumeChunk, signal: AbortSignal): Promise<void> {
+    const { parameters, spec } = this;
+    const [x0, y0] = computeChunkBounds(this, chunk);
+    const [width, height] = chunk.chunkDataSize!;
+    const { layout } = parameters;
+    const output = makeChunkData(
+      spec.dataType,
+      width * height * layout.samplesPerPixel,
+    );
     const getTile = parameters.cacheTiles
       ? (index: number, rows: number) =>
           this.tileCache.get(index, signal, (sharedSignal) =>
             this.downloadTile(index, rows, sharedSignal),
           )
       : (index: number, rows: number) => this.downloadTile(index, rows, signal);
-    return readTiffChunk(
+    const nonEmpty = await readTiffChunk(
       output,
       x0,
       y0,
       width,
       height,
-      parameters.layout,
+      layout,
       getTile,
     );
-  }
-}
-
-@registerSharedObject()
-export class GeoTiffTileSource extends WithParameters(
-  WithSharedKvStoreContextCounterpart(VolumeChunkSource),
-  GeoTiffTileSourceParameters,
-) {
-  private bandReaders = this.parameters.bands.map(
-    (band) =>
-      new GeoTiffBandReader(
-        this,
-        band,
-        MAX_CACHED_TILE_BYTES / this.parameters.bands.length,
-      ),
-  );
-
-  async download(chunk: VolumeChunk, signal: AbortSignal): Promise<void> {
-    const { spec } = this;
-    const [x0, y0] = computeChunkBounds(this, chunk);
-    const [width, height] = chunk.chunkDataSize!;
-    const { bandReaders } = this;
-    const pixels = width * height;
-    let numSamples = 0;
-    for (const reader of bandReaders) {
-      numSamples += reader.parameters.layout.samplesPerPixel;
-    }
-    const output = makeChunkData(spec.dataType, pixels * numSamples);
-    // The samples of each band form consecutive channels.
-    let sampleOffset = 0;
-    const results = await Promise.all(
-      bandReaders.map((reader) => {
-        const { samplesPerPixel } = reader.parameters.layout;
-        const bandOutput = output.subarray(
-          sampleOffset * pixels,
-          (sampleOffset + samplesPerPixel) * pixels,
-        );
-        sampleOffset += samplesPerPixel;
-        return reader.read(bandOutput, x0, y0, width, height, signal);
-      }),
-    );
-    if (!results.some((nonEmpty) => nonEmpty)) return;
+    if (!nonEmpty) return;
     await postProcessRawData(
       chunk,
       signal,

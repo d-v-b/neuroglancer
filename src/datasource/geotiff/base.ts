@@ -19,10 +19,7 @@ import type {
   TiffTileLayout,
 } from "#src/datasource/geotiff/decode.js";
 
-/**
- * Parameters for reading one file (band) of a TIFF image, at one resolution level.
- */
-export interface GeoTiffBandParameters {
+export class GeoTiffTileSourceParameters {
   url: string;
   format: TiffTileFormat;
   layout: TiffTileLayout;
@@ -33,13 +30,6 @@ export interface GeoTiffBandParameters {
   cacheTiles: boolean;
   offsets: number[];
   byteCounts: number[];
-}
-
-export class GeoTiffTileSourceParameters {
-  /**
-   * The files whose samples form the channels of the chunks, in order.  All have the same size.
-   */
-  bands: GeoTiffBandParameters[];
 
   static RPC_ID = "geotiff/TileSource";
 }
