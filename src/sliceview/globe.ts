@@ -44,7 +44,9 @@ import type { Affine2d } from "#src/geo/source_warp.js";
 import { applyAffine2d } from "#src/geo/source_warp.js";
 import { GeographicTransform, TransformStatus } from "#src/geo/transform.js";
 import type { ProjectionParameters } from "#src/projection_parameters.js";
+import { getChunkPositionFromCombinedGlobalLocalPositions } from "#src/render_coordinate_transform.js";
 import type { TransformedSource } from "#src/sliceview/base.js";
+import { updateFixedCurPositionInChunks } from "#src/sliceview/chunk_position.js";
 
 export const GLOBE_VOLUME_RENDER_LAYER_RPC_ID =
   "sliceview/GlobeVolumeRenderLayer";
@@ -198,6 +200,66 @@ export function selectGlobeSourceTiles(
     sourceLevels.footprintCache,
     options,
   );
+}
+
+const tempChunkPosition = new Float32Array(16);
+
+/**
+ * Updates `tsource.curPositionInChunks` and `fixedPositionWithinChunk` for the dimensions other
+ * than the georeferenced dimensions, from the global and local positions: the non-display
+ * dimensions (see `updateFixedCurPositionInChunks`) and also the other display dimensions (e.g. a
+ * vertical dimension), which are not mapped to the globe and are taken at the global position.
+ * Returns `false` if the position is outside the bounds of the source.
+ */
+export function updateGlobePositionInChunks(
+  tsource: TransformedSource<any, any>,
+  globalPosition: Float32Array,
+  localPosition: Float32Array,
+): boolean {
+  if (!updateFixedCurPositionInChunks(tsource, globalPosition, localPosition)) {
+    return false;
+  }
+  const { spec } = tsource.source;
+  const { rank, chunkDataSize, lowerChunkBound, upperChunkBound } = spec;
+  const chunkPosition =
+    rank <= tempChunkPosition.length
+      ? tempChunkPosition
+      : new Float32Array(rank);
+  if (
+    !getChunkPositionFromCombinedGlobalLocalPositions(
+      chunkPosition,
+      globalPosition,
+      localPosition,
+      tsource.layerRank,
+      tsource.combinedGlobalLocalToChunkTransform,
+    )
+  ) {
+    return false;
+  }
+  const { chunkDimensions } = tsource.geo!;
+  const { curPositionInChunks, fixedPositionWithinChunk } = tsource;
+  for (const chunkDim of tsource.chunkDisplayDimensionIndices) {
+    if (
+      chunkDim < 0 ||
+      chunkDim >= rank ||
+      chunkDim === chunkDimensions[0] ||
+      chunkDim === chunkDimensions[1]
+    ) {
+      continue;
+    }
+    const size = chunkDataSize[chunkDim];
+    const x = chunkPosition[chunkDim];
+    const chunk = Math.min(
+      upperChunkBound[chunkDim] - 1,
+      Math.max(lowerChunkBound[chunkDim], Math.floor(x / size)),
+    );
+    curPositionInChunks[chunkDim] = chunk;
+    fixedPositionWithinChunk[chunkDim] = Math.min(
+      size - 1,
+      Math.max(0, Math.floor(x - chunk * size)),
+    );
+  }
+  return true;
 }
 
 /**

@@ -39,9 +39,9 @@ import {
   SCALE_PRIORITY_MULTIPLIER,
 } from "#src/sliceview/backend.js";
 import type { TransformedSource } from "#src/sliceview/base.js";
-import { updateFixedCurPositionInChunks } from "#src/sliceview/chunk_position.js";
 import {
   getGlobeSourceLevels,
+  updateGlobePositionInChunks,
   getGlobeTileView,
   GLOBE_VOLUME_RENDER_LAYER_RPC_ID,
   GLOBE_VOLUME_RENDER_LAYER_UPDATE_SOURCES_RPC_ID,
@@ -147,7 +147,7 @@ class GlobeVolumeRenderLayerBackend extends withChunkManager(
       const { globalPosition } = projectionParameters;
       const localPosition = this.localPosition.value;
       const valid = sources.map((tsource) =>
-        updateFixedCurPositionInChunks(tsource, globalPosition, localPosition),
+        updateGlobePositionInChunks(tsource, globalPosition, localPosition),
       );
       const altitude = Math.max(
         1,

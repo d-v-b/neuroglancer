@@ -28,7 +28,6 @@ import type { PerspectivePanel } from "#src/perspective_view/panel.js";
 import type { PerspectiveViewRenderContext } from "#src/perspective_view/render_layer.js";
 import { PerspectiveViewRenderLayer } from "#src/perspective_view/render_layer.js";
 import { SharedWatchableValue } from "#src/shared_watchable_value.js";
-import { updateFixedCurPositionInChunks } from "#src/sliceview/chunk_position.js";
 import type { FrontendTransformedSource } from "#src/sliceview/frontend.js";
 import {
   getVolumetricTransformedSources,
@@ -38,6 +37,7 @@ import type { GlobeTileMesh } from "#src/sliceview/globe.js";
 import {
   computeGlobeTileMesh,
   getGlobeSourceLevels,
+  updateGlobePositionInChunks,
   getGlobeTileView,
   GLOBE_VOLUME_RENDER_LAYER_RPC_ID,
   GLOBE_VOLUME_RENDER_LAYER_UPDATE_SOURCES_RPC_ID,
@@ -263,7 +263,7 @@ export class GlobeVolumeRenderLayer extends PerspectiveViewRenderLayer<GlobeVolu
     const valid = sources.map(
       (tsource) =>
         tsource.geo!.subspaceIndices !== undefined &&
-        updateFixedCurPositionInChunks(
+        updateGlobePositionInChunks(
           tsource,
           projectionParameters.globalPosition,
           localPosition,

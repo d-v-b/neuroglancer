@@ -18,7 +18,10 @@ import { describe, expect, it } from "vitest";
 import { geodeticToEcef } from "#src/geo/globe.js";
 import type { GlobeTileLevel } from "#src/geo/globe_tiles.js";
 import type { GlobeTileMesh } from "#src/sliceview/globe.js";
-import { computeGlobeTileMesh } from "#src/sliceview/globe.js";
+import {
+  computeGlobeTileMesh,
+  updateGlobePositionInChunks,
+} from "#src/sliceview/globe.js";
 
 /**
  * Level of an equirectangular source with 1-degree voxels covering the Earth, whose voxels with
@@ -125,5 +128,48 @@ describe("computeGlobeTileMesh", () => {
     expect(Math.max(...terrain.indices)).toBe(
       terrain.chunkPosition.length / 2 - 1,
     );
+  });
+});
+
+describe("updateGlobePositionInChunks", () => {
+  it("positions display dimensions other than the georeferenced ones", () => {
+    // Chunk dimensions [lon, lat, depth], all displayed, with chunk coordinates equal to the
+    // global coordinates.  The depth is not mapped to the globe, and is taken at the global
+    // position.
+    const identity = Float32Array.of(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0);
+    const tsource = {
+      source: {
+        spec: {
+          rank: 3,
+          chunkDataSize: Uint32Array.of(10, 10, 4),
+          lowerChunkBound: Float32Array.of(0, 0, 0),
+          upperChunkBound: Float32Array.of(10, 10, 13),
+        },
+      },
+      layerRank: 3,
+      combinedGlobalLocalToChunkTransform: identity,
+      // Rows of display dimensions are zero.
+      fixedLayerToChunkTransform: new Float32Array(12),
+      nonDisplayLowerClipBound: Float32Array.of(
+        -Infinity,
+        -Infinity,
+        -Infinity,
+      ),
+      nonDisplayUpperClipBound: Float32Array.of(Infinity, Infinity, Infinity),
+      chunkDisplayDimensionIndices: [0, 1, 2],
+      curPositionInChunks: new Float32Array(3),
+      fixedPositionWithinChunk: new Uint32Array(3),
+      geo: { chunkDimensions: [0, 1] },
+    } as any;
+    const local = new Float32Array(0);
+    expect(
+      updateGlobePositionInChunks(tsource, Float32Array.of(55, 33, 6.5), local),
+    ).toBe(true);
+    expect(tsource.curPositionInChunks[2]).toBe(1);
+    expect(tsource.fixedPositionWithinChunk[2]).toBe(2);
+    // Positions beyond the bounds are clamped.
+    updateGlobePositionInChunks(tsource, Float32Array.of(55, 33, 100), local);
+    expect(tsource.curPositionInChunks[2]).toBe(12);
+    expect(tsource.fixedPositionWithinChunk[2]).toBe(3);
   });
 });
