@@ -22,7 +22,7 @@ URL syntax
 - :file:`{KVSTORE-URL/}|zarr3:{additional/path/}`
 - :file:`{KVSTORE-URL/}|zarr:#dimension_separator=/`
 - :file:`{KVSTORE-URL/}|zarr2:#dimension_separator=/`
-- :file:`{KVSTORE-URL/}|zarr:#variables=uo,vo` (xarray dataset)
+- :file:`{KVSTORE-URL/}|zarr:#variable=uo` (xarray dataset or GeoZarr multiscale group)
 - :file:`{KVSTORE-URL/}|zarr:#georeference=false` (disable georeferencing)
 
 Specifying an :file:`{additional/path/}` after the zarr URL scheme is currently
@@ -133,17 +133,17 @@ conventions, the valid range and fill value are in packed units.
 
 A Zarr group with consolidated metadata (``.zmetadata`` for zarr v2, or
 ``consolidated_metadata`` in ``zarr.json`` for zarr v3) written by xarray may be
-opened directly. Its data variables with identical dimensions, shape, chunking,
-and data type are combined along an additional channel dimension ``c^``.
-By default, the primary data variable is chosen by preferring variables with
-longitude and latitude dimensions, then higher rank, then more elements;
-coordinates, auxiliary coordinates, and CF bounds arrays (referenced by a
-``bounds`` attribute, or with a trailing dimension such as ``bnds`` or ``nv``)
-are not data variables. Specific variables may be selected using the
-:file:`#variables={a,b}` URL parameter, which must list at least one variable. If the selected variables are the eastward and northward components
-of a vector field (indicated by CF standard names beginning with
-``eastward_``/``northward_``), such as ocean currents or winds, the default
-shader shows the speed, optionally colored by direction.
+opened directly, showing one of its data variables. By default, the primary
+data variable is chosen by preferring variables with longitude and latitude
+dimensions, then higher rank, then more elements; coordinates, auxiliary
+coordinates, and CF bounds arrays (referenced by a ``bounds`` attribute, or with
+a trailing dimension such as ``bnds`` or ``nv``) are not data variables. Another
+variable may be selected using the :file:`#variable={name}` URL parameter, or
+by specifying the URL of the variable's array.
+
+To combine multiple variables in a shader (e.g. the eastward and northward
+components of ocean currents, to show the speed), specify each as a data source
+of an image layer with :ref:`stackSources<image-layer-stack-sources>` enabled.
 
 Examples
 ~~~~~~~~
@@ -154,9 +154,9 @@ Examples
 
   :file:`https://s3.waw3-1.cloudferro.com/mdl-arco-geo-012/arco/GLOBAL_ANALYSISFORECAST_PHY_001_024/cmems_mod_glo_phy-thetao_anfc_0.083deg_P1M-m_202406/geoChunked.zarr/thetao/|zarr2:`
 
-- Ocean currents (``uo`` and ``vo`` combined) from the same product:
+- Eastward ocean currents from the same product:
 
-  :file:`https://s3.waw3-1.cloudferro.com/mdl-arco-geo-007/arco/GLOBAL_ANALYSISFORECAST_PHY_001_024/cmems_mod_glo_phy-cur_anfc_0.083deg_P1M-m_202406/geoChunked.zarr/|zarr2:`
+  :file:`https://s3.waw3-1.cloudferro.com/mdl-arco-geo-007/arco/GLOBAL_ANALYSISFORECAST_PHY_001_024/cmems_mod_glo_phy-cur_anfc_0.083deg_P1M-m_202406/geoChunked.zarr/uo/|zarr2:`
 
 .. _zarr-geozarr:
 
@@ -166,13 +166,14 @@ GeoZarr multiscale groups
 Groups following the `multiscales <https://github.com/zarr-conventions/multiscales>`__
 zarr convention, whose resolution levels (the ``asset`` entries of the
 ``multiscales.layout`` attribute) are groups of data variables as above, are
-displayed as multiscale volumes. This is the layout of, for example, the
-Sentinel-2 products of the ESA `EOPF Sentinel Zarr
+displayed as multiscale volumes of one data variable, selected as above (e.g.
+:file:`#variable=b04`), over the levels that contain it. This is the layout of,
+for example, the Sentinel-2 products of the ESA `EOPF Sentinel Zarr
 <https://zarr.eopf.copernicus.eu/>`__ service, whose ``measurements/reflectance``
 group has levels ``r10m``, ``r20m``, ``r60m``, ... holding one array per
-spectral band. The data variables selected by :file:`#variables={a,b}` are
-combined as channels at each level that contains all of them, starting with
-the finest such level.
+spectral band; since a band at all resolutions is not a single array, it is
+addressed by the multiscale group and the variable name. Multiple bands are
+combined using :ref:`stackSources<image-layer-stack-sources>`.
 
 Data variables (also of a single dataset) are georeferenced from the
 attributes of the `spatial <https://github.com/zarr-conventions/spatial>`__ and
@@ -190,10 +191,9 @@ product) is used for the groups within it.
 Example
 ~~~~~~~
 
-- Sentinel-2 L2A red, green, blue and near infrared bands (Po delta, 12 May
-  2025):
+- Sentinel-2 L2A red band (Po delta, 12 May 2025):
 
-  :file:`https://s3.explorer.eopf.copernicus.eu/esa-zarr-sentinel-explorer-fra/tests-output/sentinel-2-l2a/S2C_MSIL2A_20250512T100611_N0511_R022_T32TQQ_20250512T173114.zarr/measurements/reflectance/|zarr3:#variables=b04,b03,b02,b08`
+  :file:`https://s3.explorer.eopf.copernicus.eu/esa-zarr-sentinel-explorer-fra/tests-output/sentinel-2-l2a/S2C_MSIL2A_20250512T100611_N0511_R022_T32TQQ_20250512T173114.zarr/measurements/reflectance/|zarr3:#variable=b04`
 
 Zarr v2 features
 ----------------

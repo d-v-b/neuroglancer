@@ -20,13 +20,11 @@ import {
   getElevations,
   getGeoZarrGeoreference,
   getRegularAxis,
-  getXarrayDatasetDefaultShader,
   getXarrayDefaultShader,
   isGeographicCoordinate,
-  isVectorPair,
   parseGeoZarrMultiscales,
   pressureToAltitude,
-  selectXarrayVariables,
+  selectXarrayVariable,
   unpackCfValues,
 } from "#src/datasource/zarr/geo.js";
 import type { ArrayMetadata } from "#src/datasource/zarr/metadata/index.js";
@@ -220,15 +218,9 @@ describe("xarray georeferencing", () => {
       ["uo", ["time", "latitude", "longitude"], [3, 10, 20]],
       ["mask", ["latitude", "longitude"], [10, 20]],
     ]);
-    // Default: variables matching the highest-rank variable ("uo" and "vo").
-    expect(selectXarrayVariables(arrays, undefined)).toEqual(["uo", "vo"]);
-    expect(selectXarrayVariables(arrays, ["uo", "vo"])).toEqual(["uo", "vo"]);
-    const currents = makeArrays([
-      ["latitude", ["latitude"], [10]],
-      ["uo", ["latitude", "longitude"], [10, 20]],
-      ["vo", ["latitude", "longitude"], [10, 20]],
-    ]);
-    expect(selectXarrayVariables(currents, undefined)).toEqual(["uo", "vo"]);
+    // Default: the highest-rank variable (the first by name among equals).
+    expect(selectXarrayVariable(arrays, undefined)).toBe("uo");
+    expect(selectXarrayVariable(arrays, "vo")).toBe("vo");
     // CMIP6-style dataset with CF bounds arrays.
     const cmip = makeArrays([
       ["lat", ["lat"], [10], { bounds: "lat_bnds" }],
@@ -242,42 +234,25 @@ describe("xarray georeferencing", () => {
       ["areacello", ["y", "x"], [10, 20]],
       ["sst", ["time", "lat", "lon"], [3, 10, 20]],
     ]);
-    expect(selectXarrayVariables(cmip, undefined)).toEqual(["sst"]);
+    expect(selectXarrayVariable(cmip, undefined)).toBe("sst");
     // Variables with longitude and latitude dimensions are preferred.
     const mixed = makeArrays([
       ["a", ["t", "y", "x"], [3, 10, 20]],
       ["b", ["lat", "lon"], [10, 20]],
     ]);
-    expect(selectXarrayVariables(mixed, undefined)).toEqual(["b"]);
-  });
-
-  it("rejects an empty list of variables", () => {
-    const arrays = makeArrays([["uo", ["y", "x"], [2, 2]]]);
-    expect(() => selectXarrayVariables(arrays, [])).toThrow(
-      /must list at least one variable/,
-    );
+    expect(selectXarrayVariable(mixed, undefined)).toBe("b");
   });
 
   it("rejects missing variables", () => {
     const arrays = makeArrays([["uo", ["y", "x"], [2, 2]]]);
-    expect(() => selectXarrayVariables(arrays, ["vo"])).toThrow(
+    expect(() => selectXarrayVariable(arrays, "vo")).toThrow(
       /Variable "vo" not found/,
-    );
-  });
-
-  it("rejects variables with differing shapes", () => {
-    const arrays = makeArrays([
-      ["uo", ["y", "x"], [2, 2]],
-      ["sst", ["y", "x"], [2, 3]],
-    ]);
-    expect(() => selectXarrayVariables(arrays, ["uo", "sst"])).toThrow(
-      /must have the same dimensions/,
     );
   });
 
   it("rejects datasets without data variables", () => {
     const arrays = makeArrays([["latitude", ["latitude"], [10]]]);
-    expect(() => selectXarrayVariables(arrays, undefined)).toThrow(
+    expect(() => selectXarrayVariable(arrays, undefined)).toThrow(
       /no data variables/,
     );
   });
@@ -291,17 +266,6 @@ describe("xarray georeferencing", () => {
     expect(shader).toContain("range=[-10, 40]");
     expect(shader).toContain("9.969209968386869e+36");
     expect(shader).toContain("getDataValue()");
-    const u = makeMetadata({ standard_name: "eastward_sea_water_velocity" });
-    const v = makeMetadata({ standard_name: "northward_sea_water_velocity" });
-    expect(isVectorPair([u, v])).toBe(true);
-    expect(isVectorPair([v, u])).toBe(false);
-    expect(getXarrayDatasetDefaultShader([u, v])).toContain(
-      "length(vec2(u, v))",
-    );
-    // Other multi-variable datasets show the first variable.
-    expect(getXarrayDatasetDefaultShader([temperature, temperature])).toContain(
-      "getDataValue(0)",
-    );
     // Packed integer variables.
     const packed = makeMetadata(
       {

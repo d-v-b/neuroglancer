@@ -705,63 +705,6 @@ function getMissingValueTest(metadata: ArrayMetadata, expr: string) {
   return test;
 }
 
-/**
- * Determines whether two variables are the eastward and northward components of a vector field
- * (e.g. ocean currents or winds).
- */
-export function isVectorPair(metadata: ArrayMetadata[]): boolean {
-  if (metadata.length !== 2) return false;
-  const standardNames = metadata.map((m) =>
-    String(m.userAttributes.standard_name ?? ""),
-  );
-  return (
-    standardNames[0].startsWith("eastward_") &&
-    standardNames[1].startsWith("northward_")
-  );
-}
-
-/**
- * Returns the default shader for the data variables of an xarray dataset combined as channels.
- */
-export function getXarrayDatasetDefaultShader(
-  metadata: ArrayMetadata[],
-): string | undefined {
-  if (metadata.length === 1) return getXarrayDefaultShader(metadata[0]);
-  if (
-    isVectorPair(metadata) &&
-    metadata.every((m) => {
-      const { scale, offset } = getCfPacking(m.userAttributes);
-      return m.dataType === DataType.FLOAT32 && scale === 1 && offset === 0;
-    })
-  ) {
-    const missingTest = getMissingValueTest(metadata[0], "u");
-    return `#uicontrol float maxSpeed slider(min=0.05, max=3, default=1, step=0.05)
-#uicontrol bool colorByDirection checkbox(default=false)
-vec3 hsvToRgb(vec3 c) {
-  vec3 p = abs(fract(c.xxx + vec3(1.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0);
-  return c.z * mix(vec3(1.0), clamp(p - 1.0, 0.0, 1.0), c.y);
-}
-void main() {
-  float u = getDataValue(0);
-  float v = getDataValue(1);
-  if (${missingTest}) {
-    emitTransparent();
-    return;
-  }
-  float speed = length(vec2(u, v));
-  float t = clamp(speed / maxSpeed, 0.0, 1.0);
-  if (colorByDirection) {
-    // Hue encodes the direction of flow; brightness encodes speed.
-    emitRGB(hsvToRgb(vec3(atan(v, u) / 6.28318531 + 0.5, 0.9, t)));
-  } else {
-    emitRGB(colormapCubehelix(t));
-  }
-}
-`;
-  }
-  return getXarrayDefaultShader(metadata[0], "0");
-}
-
 const SHADER_DATA_TYPES = [
   DataType.FLOAT32,
   DataType.UINT8,
@@ -868,18 +811,23 @@ const BOUNDS_DIMENSION_NAMES = [
 ];
 
 /**
- * Selects the data variables of an xarray dataset to display.
- *
- * If `requested` is not specified, selects the data variable that is most likely the primary one
- * (preferring variables with both longitude and latitude dimensions, then higher rank, then more
- * elements, then name), along with all other data variables with the same dimensions, shape,
- * chunking, and data type.  Coordinates (including auxiliary coordinates and CF bounds arrays) are
- * not data variables.
+ * Selects the data variable of an xarray dataset to display: the requested variable, or by
+ * default the primary data variable, preferring variables with longitude and latitude dimensions,
+ * then higher rank, then more elements.  Coordinates, auxiliary coordinates, and CF bounds arrays
+ * are not data variables.
  */
-export function selectXarrayVariables(
+export function selectXarrayVariable(
   arrays: Map<string, XarrayArrayInfo>,
-  requested: string[] | undefined,
-): string[] {
+  requested: string | undefined,
+): string {
+  if (requested !== undefined) {
+    if (!arrays.has(requested)) {
+      throw new Error(
+        `Variable ${JSON.stringify(requested)} not found in dataset`,
+      );
+    }
+    return requested;
+  }
   const coordinates = new Set<string>();
   for (const [name, array] of arrays) {
     if (array.dims.length === 1 && array.dims[0] === name)
@@ -890,31 +838,6 @@ export function selectXarrayVariables(
         for (const c of value.split(/\s+/)) coordinates.add(c);
       }
     }
-  }
-  const signature = (name: string) => {
-    const { shape, dims, dtype, chunks } = arrays.get(name)!;
-    return JSON.stringify([shape, dims, dtype, chunks]);
-  };
-  if (requested !== undefined) {
-    if (requested.length === 0) {
-      throw new Error("variables option must list at least one variable");
-    }
-    for (const name of requested) {
-      if (!arrays.has(name)) {
-        throw new Error(
-          `Variable ${JSON.stringify(name)} not found in dataset`,
-        );
-      }
-    }
-    const first = signature(requested[0]);
-    for (const name of requested) {
-      if (signature(name) !== first) {
-        throw new Error(
-          `Variables ${JSON.stringify(requested[0])} and ${JSON.stringify(name)} must have the same dimensions, shape, chunks, and data type`,
-        );
-      }
-    }
-    return requested;
   }
   const candidates = Array.from(arrays.keys())
     .filter((name) => {
@@ -954,8 +877,7 @@ export function selectXarrayVariables(
       break;
     }
   }
-  const first = signature(best);
-  return candidates.filter((name) => signature(name) === first);
+  return best;
 }
 
 /**

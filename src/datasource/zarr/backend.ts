@@ -35,7 +35,6 @@ import { WithSharedKvStoreContextCounterpart } from "#src/kvstore/backend.js";
 import { postProcessRawData } from "#src/sliceview/backend_chunk_decoders/postprocess.js";
 import type { VolumeChunk } from "#src/sliceview/volume/backend.js";
 import { VolumeChunkSource } from "#src/sliceview/volume/backend.js";
-import { DATA_TYPE_BYTES, makeDataTypeArrayView } from "#src/util/data_type.js";
 import { registerSharedObject } from "#src/worker_rpc.js";
 
 @registerSharedObject()
@@ -43,14 +42,10 @@ export class ZarrVolumeChunkSource extends WithParameters(
   WithSharedKvStoreContextCounterpart(VolumeChunkSource),
   VolumeChunkSourceParameters,
 ) {
-  private chunkKvStores = (
-    this.parameters.variableUrls ?? [this.parameters.url]
-  ).map((url) =>
-    applySharding(
-      this.chunkManager,
-      this.parameters.metadata.codecs,
-      this.sharedKvStoreContext.kvStoreContext.getKvStore(url),
-    ),
+  private chunkKvStore = applySharding(
+    this.chunkManager,
+    this.parameters.metadata.codecs,
+    this.sharedKvStoreContext.kvStoreContext.getKvStore(this.parameters.url),
   );
 
   async download(chunk: VolumeChunk, signal: AbortSignal) {
@@ -59,8 +54,7 @@ export class ZarrVolumeChunkSource extends WithParameters(
     const { chunkGridPosition } = chunk;
     const { metadata } = parameters;
     let baseKey = "";
-    // Rank of the zarr array(s), which excludes the variable dimension, if any.
-    const rank = metadata.rank;
+    const rank = this.spec.rank;
     const { physicalToLogicalDimension } = metadata.codecs.layoutInfo[0];
     let sep: string;
     if (metadata.chunkKeyEncoding === ChunkKeyEncoding.DEFAULT) {
@@ -91,49 +85,18 @@ export class ZarrVolumeChunkSource extends WithParameters(
       baseKey += `${sep}${keyCoords[i]}`;
       sep = metadata.dimensionSeparator;
     }
-    const { chunkKvStores } = this;
-    const decodedVariables = await Promise.all(
-      chunkKvStores.map(async (chunkKvStore) => {
-        const response = await chunkKvStore.kvStore.read(
-          chunkKvStore.getChunkKey(chunkGridPosition, baseKey),
-          { signal },
-        );
-        if (response === undefined) return undefined;
-        return await decodeArray(
-          chunkKvStore.decodeCodecs,
-          new Uint8Array(await response.response.arrayBuffer()),
-          signal,
-        );
-      }),
+    const { chunkKvStore } = this;
+    const response = await chunkKvStore.kvStore.read(
+      chunkKvStore.getChunkKey(chunkGridPosition, baseKey),
+      { signal },
     );
-    if (parameters.variableUrls === undefined) {
-      const decoded = decodedVariables[0];
-      if (decoded !== undefined) {
-        await postProcessRawData(chunk, signal, decoded);
-      }
-      return;
+    if (response !== undefined) {
+      const decoded = await decodeArray(
+        chunkKvStore.decodeCodecs,
+        new Uint8Array(await response.response.arrayBuffer()),
+        signal,
+      );
+      await postProcessRawData(chunk, signal, decoded);
     }
-    // Concatenate variables along the last (slowest-varying) chunk dimension.
-    if (decodedVariables.every((x) => x === undefined)) return;
-    const { dataType } = this.spec;
-    const elementsPerVariable = readChunkShape.reduce((a, b) => a * b, 1);
-    const combined = makeDataTypeArrayView(
-      dataType,
-      new ArrayBuffer(
-        elementsPerVariable *
-          decodedVariables.length *
-          DATA_TYPE_BYTES[dataType],
-      ),
-    );
-    const { fillValue } = metadata;
-    decodedVariables.forEach((decoded, i) => {
-      const offset = i * elementsPerVariable;
-      if (decoded === undefined) {
-        (combined as any).fill(fillValue, offset, offset + elementsPerVariable);
-      } else {
-        (combined as any).set(decoded, offset);
-      }
-    });
-    await postProcessRawData(chunk, signal, combined);
   }
 }
