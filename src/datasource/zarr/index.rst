@@ -38,9 +38,10 @@ syntax.
 The :file:`{KVSTORE-URL/}` must refer to a directory, and the combination
 of :file:`{KVSTORE-URL/}` and any :file:`{additional/path/}` after the zarr
 URL scheme must specify either a Zarr array, a Zarr group with OME-Zarr
-multiscale metadata, or a Zarr group written by `xarray
+multiscale metadata, a Zarr group written by `xarray
 <https://docs.xarray.dev/en/stable/user-guide/io.html#zarr>`__ with consolidated
-metadata (see :ref:`zarr-xarray`).
+metadata (see :ref:`zarr-xarray`), or a GeoZarr multiscale group whose levels
+are such groups (see :ref:`zarr-geozarr`).
 
 Data types
 ----------
@@ -157,6 +158,43 @@ Examples
 
   :file:`https://s3.waw3-1.cloudferro.com/mdl-arco-geo-007/arco/GLOBAL_ANALYSISFORECAST_PHY_001_024/cmems_mod_glo_phy-cur_anfc_0.083deg_P1M-m_202406/geoChunked.zarr/|zarr2:`
 
+.. _zarr-geozarr:
+
+GeoZarr multiscale groups
+-------------------------
+
+Groups following the `multiscales <https://github.com/zarr-conventions/multiscales>`__
+zarr convention, whose resolution levels (the ``asset`` entries of the
+``multiscales.layout`` attribute) are groups of data variables as above, are
+displayed as multiscale volumes. This is the layout of, for example, the
+Sentinel-2 products of the ESA `EOPF Sentinel Zarr
+<https://zarr.eopf.copernicus.eu/>`__ service, whose ``measurements/reflectance``
+group has levels ``r10m``, ``r20m``, ``r60m``, ... holding one array per
+spectral band. The data variables selected by :file:`#variables={a,b}` are
+combined as channels at each level that contains all of them, starting with
+the finest such level.
+
+Data variables (also of a single dataset) are georeferenced from the
+attributes of the `spatial <https://github.com/zarr-conventions/spatial>`__ and
+`proj <https://github.com/zarr-experimental/geo-proj>`__ conventions, of the
+arrays or their enclosing groups and layout entries: the CRS (``proj:code`` or
+``proj:wkt2``), the affine transform from pixel to CRS coordinates
+(``spatial:transform``, which must not be rotated), the spatial dimensions
+(``spatial:dimensions``, default ``["y", "x"]``), and the registration
+(``spatial:registration``). Projected data are :ref:`reprojected<geospatial>`
+into the display CRS.
+
+Consolidated metadata stored in an ancestor group (e.g. only at the root of a
+product) is used for the groups within it.
+
+Example
+~~~~~~~
+
+- Sentinel-2 L2A red, green, blue and near infrared bands (Po delta, 12 May
+  2025):
+
+  :file:`https://s3.explorer.eopf.copernicus.eu/esa-zarr-sentinel-explorer-fra/tests-output/sentinel-2-l2a/S2C_MSIL2A_20250512T100611_N0511_R022_T32TQQ_20250512T173114.zarr/measurements/reflectance/|zarr3:#variables=b04,b03,b02,b08`
+
 Zarr v2 features
 ----------------
 
@@ -182,7 +220,9 @@ Supported codecs:
 - crc32c (not validated)
 - blosc
 - bytes
+- cast_value (to and from integer and float32 data types, with ``scalar_map``)
 - gzip
+- scale_offset (float32 arrays)
 - sharding_indexed
 - transpose
 - zstd

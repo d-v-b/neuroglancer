@@ -32,16 +32,23 @@ import type {
 } from "#src/datasource/index.js";
 import { getKvStorePathCompletions } from "#src/datasource/kvstore_completions.js";
 import { VolumeChunkSourceParameters } from "#src/datasource/zarr/base.js";
-import type { XarrayGeoreference } from "#src/datasource/zarr/geo.js";
+import type {
+  GeoZarrMultiscaleLevel,
+  XarrayGeoreference,
+} from "#src/datasource/zarr/geo.js";
 import {
   selectXarrayVariables,
+  getGeoZarrGeoreference,
   getXarrayDatasetDefaultShader,
   getXarrayDefaultShader,
   getXarrayGeoreference,
+  parseGeoZarrMultiscales,
 } from "#src/datasource/zarr/geo.js";
 import "#src/datasource/zarr/codec/bytes/resolve.js";
+import "#src/datasource/zarr/codec/cast_value/resolve.js";
 import "#src/datasource/zarr/codec/crc32c/resolve.js";
 import "#src/datasource/zarr/codec/gzip/resolve.js";
+import "#src/datasource/zarr/codec/scale_offset/resolve.js";
 import "#src/datasource/zarr/codec/sharding_indexed/resolve.js";
 import "#src/datasource/zarr/codec/transpose/resolve.js";
 import type {
@@ -58,6 +65,7 @@ import {
 } from "#src/datasource/zarr/metadata/parse.js";
 import type { OmeMultiscaleMetadata } from "#src/datasource/zarr/ome.js";
 import { parseOmeMetadata } from "#src/datasource/zarr/ome.js";
+import { getCrs } from "#src/geo/crs.js";
 import type { AutoDetectRegistry } from "#src/kvstore/auto_detect.js";
 import { simpleFilePresenceAutoDetectDirectorySpec } from "#src/kvstore/auto_detect.js";
 import { WithSharedKvStoreContext } from "#src/kvstore/chunk_source_frontend.js";
@@ -263,6 +271,30 @@ interface XarrayVariable {
 }
 
 /**
+ * Maximum number of ancestor groups searched for consolidated metadata.
+ */
+const MAX_CONSOLIDATED_METADATA_DEPTH = 4;
+
+/**
+ * Returns the URL of the parent group of a zarr group (within the same key-value store), and the
+ * name of the group, or `undefined` if there is no parent.
+ */
+function getParentGroupUrl(
+  url: string,
+): { url: string; name: string } | undefined {
+  const trimmed = url.replace(/\/+$/, "");
+  const index = trimmed.lastIndexOf("/");
+  if (index === -1) return undefined;
+  const name = trimmed.slice(index + 1);
+  const parent = trimmed.slice(0, index + 1);
+  // Do not leave the key-value store (e.g. the root of a URL or of a pipeline component).
+  if (name === "" || name.includes("|") || /:\/*$/.test(parent)) {
+    return undefined;
+  }
+  return { url: parent, name };
+}
+
+/**
  * Returns the names and metadata JSON of the arrays in an xarray dataset (zarr group), from its
  * consolidated metadata.
  */
@@ -317,15 +349,32 @@ async function getConsolidatedArrays(
       });
     }
   } else {
-    const groupJson = await getJsonResource(
-      sharedKvStoreContext,
-      joinBaseUrlAndPath(url, "zarr.json"),
-      "zarr v3 group metadata",
-      options,
-    );
-    const metadata = groupJson?.consolidated_metadata?.metadata;
-    if (metadata == null || typeof metadata !== "object") return undefined;
-    for (const [name, zarrJson] of Object.entries<any>(metadata)) {
+    // The consolidated metadata may be stored in an ancestor group (e.g. only at the root of a
+    // hierarchy), with keys relative to that group.
+    let metadata: Record<string, any> | undefined;
+    let prefix = "";
+    let groupUrl = url;
+    for (let depth = 0; depth <= MAX_CONSOLIDATED_METADATA_DEPTH; ++depth) {
+      const groupJson = await getJsonResource(
+        sharedKvStoreContext,
+        joinBaseUrlAndPath(groupUrl, "zarr.json"),
+        "zarr v3 group metadata",
+        options,
+      );
+      const consolidated = groupJson?.consolidated_metadata?.metadata;
+      if (consolidated != null && typeof consolidated === "object") {
+        metadata = consolidated;
+        break;
+      }
+      const parent = getParentGroupUrl(groupUrl);
+      if (parent === undefined) break;
+      prefix = `${parent.name}/${prefix}`;
+      groupUrl = parent.url;
+    }
+    if (metadata === undefined) return undefined;
+    for (const [key, zarrJson] of Object.entries<any>(metadata)) {
+      if (!key.startsWith(prefix)) continue;
+      const name = key.slice(prefix.length);
       if (name.includes("/") || zarrJson?.node_type !== "array") continue;
       arrays.set(name, {
         shape: zarrJson.shape,
@@ -439,6 +488,141 @@ function getMultiscaleInfoForXarrayDataset(
   };
 }
 
+/**
+ * Resolves a group following the multiscales zarr convention whose levels are xarray datasets
+ * (e.g. GeoZarr products such as the Sentinel-2 products of the ESA EOPF): the selected data
+ * variables are combined as channels at each level that contains all of them, and the levels are
+ * related by their georeferencing (or, without it, by their shapes).
+ */
+async function resolveGeoZarrMultiscale(
+  sharedKvStoreContext: SharedKvStoreContext,
+  url: string,
+  groupAttributes: Record<string, unknown>,
+  levels: GeoZarrMultiscaleLevel[],
+  zarrVersion: 2 | 3,
+  requested: string[] | undefined,
+  georeference: boolean,
+  options: {
+    explicitDimensionSeparator: DimensionSeparator | undefined;
+  } & Partial<ProgressOptions>,
+): Promise<{
+  multiscaleInfo: ZarrMultiscaleInfo;
+  variables: XarrayVariable[];
+  geo: XarrayGeoreference | undefined;
+}> {
+  const levelUrls = levels.map((level) =>
+    kvstoreEnsureDirectoryPipelineUrl(pipelineUrlJoin(url, level.asset)),
+  );
+  const levelArrays = await Promise.all(
+    levelUrls.map((levelUrl) =>
+      getConsolidatedArrays(
+        sharedKvStoreContext,
+        levelUrl,
+        zarrVersion,
+        options,
+      ),
+    ),
+  );
+  const hasAll = (index: number, names: string[]) =>
+    names.every((name) => levelArrays[index]?.has(name));
+  let names: string[];
+  let firstLevel: number;
+  if (requested !== undefined) {
+    firstLevel = levelArrays.findIndex((_, i) => hasAll(i, requested));
+    if (firstLevel === -1) {
+      throw new Error(
+        `No resolution level contains all of the variables ${JSON.stringify(requested)}`,
+      );
+    }
+    names = selectXarrayVariables(levelArrays[firstLevel]!, requested);
+  } else {
+    firstLevel = levelArrays.findIndex((arrays) => arrays !== undefined);
+    if (firstLevel === -1) {
+      throw new Error(
+        "No consolidated metadata found for the resolution levels",
+      );
+    }
+    names = selectXarrayVariables(levelArrays[firstLevel]!, undefined);
+  }
+  const kept: number[] = [];
+  for (let i = firstLevel; i < levels.length; ++i) {
+    if (hasAll(i, names)) kept.push(i);
+  }
+  const levelVariables = await Promise.all(
+    kept.map(async (i) => {
+      const variables = await resolveXarrayDataset(
+        sharedKvStoreContext,
+        levelUrls[i],
+        zarrVersion,
+        names,
+        options,
+      );
+      if (variables === undefined) {
+        throw new Error(
+          `Resolution level ${JSON.stringify(levels[i].asset)} not found`,
+        );
+      }
+      return variables;
+    }),
+  );
+  const levelGeo = kept.map((i, k) => {
+    if (!georeference) return undefined;
+    const [first] = levelVariables[k];
+    return getGeoZarrGeoreference(
+      {
+        ...groupAttributes,
+        ...levels[i].attrs,
+        ...first.metadata.userAttributes,
+      },
+      first.metadata.dimensionNames,
+    );
+  });
+  const geo = levelGeo[0];
+  const base = getMultiscaleInfoForXarrayDataset(levelVariables[0], geo);
+  const rank = base.coordinateSpace.rank;
+  const stride = rank + 1;
+  const baseMetadata = levelVariables[0][0].metadata;
+  const scales = levelVariables.map((variables, k): ZarrScaleInfo => {
+    const [first] = variables;
+    const transform = matrix.createIdentity(Float64Array, stride);
+    if (k > 0) {
+      const levelGeoreference = levelGeo[k];
+      if (geo !== undefined && levelGeoreference !== undefined) {
+        // Map the voxel corners of this level to those of the finest level.
+        for (const [dim, axis, baseAxis] of [
+          [geo.lonDim, levelGeoreference.lon, geo.lon],
+          [geo.latDim, levelGeoreference.lat, geo.lat],
+        ] as const) {
+          transform[dim * stride + dim] = axis.step / baseAxis.step;
+          transform[rank * stride + dim] =
+            (axis.start -
+              axis.step / 2 -
+              (baseAxis.start - baseAxis.step / 2)) /
+            baseAxis.step;
+        }
+      } else {
+        for (let dim = 0; dim < first.metadata.rank; ++dim) {
+          transform[dim * stride + dim] =
+            baseMetadata.shape[dim] / first.metadata.shape[dim];
+        }
+      }
+    }
+    return {
+      url: first.url,
+      transform,
+      metadata: first.metadata,
+      ...(variables.length > 1
+        ? { variableUrls: variables.map((v) => v.url) }
+        : {}),
+    };
+  });
+  return {
+    multiscaleInfo: { ...base, scales },
+    variables: levelVariables[0],
+    geo,
+  };
+}
+
 interface ZarrScaleInfo {
   url: string;
   transform: Float64Array;
@@ -504,12 +688,15 @@ function getMultiscaleInfoForSingleArray(
   );
   const unitsAndScales = metadata.dimensionUnits.map(parseDimensionUnit);
   if (geo !== undefined) {
+    // Coordinates are in the native units of the CRS (labelled "m" for all linear units, since
+    // the reprojection operates on native units).
+    const unit = getCrs(geo.crs).unit === "deg" ? "deg" : "m";
     unitsAndScales[geo.lonDim] = {
-      unit: "deg",
+      unit,
       scale: Math.abs(geo.lon.step),
     };
     unitsAndScales[geo.latDim] = {
-      unit: "deg",
+      unit,
       scale: Math.abs(geo.lat.step),
     };
     // Vertical scales are converted from meters to display CRS units on reprojection (see
@@ -796,7 +983,36 @@ export class ZarrDataSource implements KvStoreBasedDataSourceProvider {
             metadata.userAttributes,
             metadata.zarrVersion,
           );
-          if (omeMetadata === undefined) {
+          const geoZarrLevels =
+            omeMetadata === undefined
+              ? parseGeoZarrMultiscales(metadata.userAttributes)
+              : undefined;
+          if (geoZarrLevels !== undefined) {
+            // A multiscale GeoZarr group whose levels are xarray datasets.
+            const resolved = await resolveGeoZarrMultiscale(
+              sharedKvStoreContext,
+              kvStoreUrl,
+              metadata.userAttributes,
+              geoZarrLevels,
+              metadata.zarrVersion,
+              requestedVariables,
+              georeference,
+              {
+                ...progressOptions,
+                explicitDimensionSeparator: dimensionSeparator,
+              },
+            );
+            multiscaleInfo = resolved.multiscaleInfo;
+            geo = resolved.geo;
+            channelMetadata = {
+              channels: resolved.variables.map((v) => ({ label: v.name })),
+            };
+            if (geo !== undefined) {
+              defaultShader = getXarrayDatasetDefaultShader(
+                resolved.variables.map((v) => v.metadata),
+              );
+            }
+          } else if (omeMetadata === undefined) {
             // May be an xarray dataset.
             const variables = await resolveXarrayDataset(
               sharedKvStoreContext,
@@ -815,12 +1031,20 @@ export class ZarrDataSource implements KvStoreBasedDataSourceProvider {
             }
             const [first] = variables;
             if (georeference) {
-              geo = await getXarrayGeoreference(
-                sharedKvStoreContext,
-                first.url,
-                first.metadata,
-                progressOptions,
-              );
+              geo =
+                getGeoZarrGeoreference(
+                  {
+                    ...metadata.userAttributes,
+                    ...first.metadata.userAttributes,
+                  },
+                  first.metadata.dimensionNames,
+                ) ??
+                (await getXarrayGeoreference(
+                  sharedKvStoreContext,
+                  first.url,
+                  first.metadata,
+                  progressOptions,
+                ));
             }
             multiscaleInfo = getMultiscaleInfoForXarrayDataset(variables, geo);
             channelMetadata = {

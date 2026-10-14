@@ -1,0 +1,53 @@
+/**
+ * @license
+ * Copyright 2026 Google Inc.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import { registerCodec } from "#src/datasource/zarr/codec/decode.js";
+import type { CodecArrayInfo } from "#src/datasource/zarr/codec/index.js";
+import { CodecKind } from "#src/datasource/zarr/codec/index.js";
+import type { Configuration } from "#src/datasource/zarr/codec/scale_offset/resolve.js";
+
+/**
+ * Decodes values encoded by the `scale_offset` codec: `value = encoded / scale + offset`.
+ */
+export function decodeScaleOffset(
+  configuration: Configuration,
+  encoded: Float32Array<ArrayBuffer>,
+): Float32Array<ArrayBuffer> {
+  const { offset, scale } = configuration;
+  const decoded = new Float32Array(encoded.length);
+  for (let i = 0; i < encoded.length; ++i) {
+    decoded[i] = encoded[i] / scale + offset;
+  }
+  return decoded;
+}
+
+registerCodec({
+  name: "scale_offset",
+  kind: CodecKind.arrayToArray,
+  async decode(
+    configuration: Configuration,
+    decodedArrayInfo: CodecArrayInfo,
+    encoded,
+    signal: AbortSignal,
+  ) {
+    decodedArrayInfo;
+    signal;
+    return decodeScaleOffset(
+      configuration,
+      encoded as Float32Array<ArrayBuffer>,
+    );
+  },
+});

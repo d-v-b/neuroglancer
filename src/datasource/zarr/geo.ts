@@ -957,3 +957,92 @@ export function selectXarrayVariables(
   const first = signature(best);
   return candidates.filter((name) => signature(name) === first);
 }
+
+/**
+ * Returns the georeference of an array of a GeoZarr dataset from the attributes of the `proj:`
+ * and `spatial:` zarr conventions (https://github.com/zarr-conventions/spatial,
+ * https://github.com/zarr-experimental/geo-proj): the CRS (`proj:code` or `proj:wkt2`) and the
+ * affine transform from pixel to CRS coordinates (`spatial:transform`, in the order
+ * `[a, b, c, d, e, f]` with `x = a * column + b * row + c` and `y = d * column + e * row + f`) of
+ * the dimensions `spatial:dimensions` (`[y, x]`).  Returns `undefined` if the attributes are
+ * missing or not supported (e.g. rotated transforms).
+ *
+ * @param attrs Attributes of the array, merged with those of the enclosing groups.
+ */
+export function getGeoZarrGeoreference(
+  attrs: Record<string, unknown>,
+  dimensionNames: readonly (string | null)[],
+): XarrayGeoreference | undefined {
+  const crs = attrs["proj:code"] ?? attrs["proj:wkt2"];
+  if (typeof crs !== "string" || crs === "") return undefined;
+  const transform = attrs["spatial:transform"];
+  if (
+    !Array.isArray(transform) ||
+    transform.length < 6 ||
+    !transform.every((v) => typeof v === "number" && Number.isFinite(v))
+  ) {
+    return undefined;
+  }
+  const [a, b, c, d, e, f] = transform as number[];
+  if (b !== 0 || d !== 0 || a === 0 || e === 0) return undefined;
+  const dimensions = attrs["spatial:dimensions"] ?? ["y", "x"];
+  if (
+    !Array.isArray(dimensions) ||
+    dimensions.length !== 2 ||
+    !dimensions.every((x) => typeof x === "string")
+  ) {
+    return undefined;
+  }
+  const [yName, xName] = dimensions as string[];
+  const lonDim = dimensionNames.indexOf(xName);
+  const latDim = dimensionNames.indexOf(yName);
+  if (lonDim === -1 || latDim === -1) return undefined;
+  // With "pixel" registration (the default), the transform maps pixel corners; with "node"
+  // registration, pixel centers.
+  const halfPixel = attrs["spatial:registration"] === "node" ? 0 : 0.5;
+  return {
+    crs,
+    lonDim,
+    latDim,
+    lon: { start: c + halfPixel * a, step: a },
+    lat: { start: f + halfPixel * e, step: e },
+    verticalScales: new Map(),
+    verticalElevations: new Map(),
+  };
+}
+
+/**
+ * A resolution level of a GeoZarr multiscale group.
+ */
+export interface GeoZarrMultiscaleLevel {
+  /**
+   * Path of the level group, relative to the multiscale group.
+   */
+  asset: string;
+  /**
+   * Attributes of the level (e.g. `spatial:transform`) specified in the layout.
+   */
+  attrs: Record<string, unknown>;
+}
+
+/**
+ * Returns the resolution levels of a group following the multiscales zarr convention
+ * (https://github.com/zarr-conventions/multiscales), ordered as in its layout (from the finest
+ * resolution), or `undefined` if the group does not follow it.
+ */
+export function parseGeoZarrMultiscales(
+  attrs: Record<string, unknown>,
+): GeoZarrMultiscaleLevel[] | undefined {
+  const multiscales = attrs.multiscales as { layout?: unknown } | undefined;
+  if (multiscales == null || typeof multiscales !== "object") return undefined;
+  const { layout } = multiscales;
+  if (!Array.isArray(layout) || layout.length === 0) return undefined;
+  const levels: GeoZarrMultiscaleLevel[] = [];
+  for (const entry of layout) {
+    if (entry == null || typeof entry !== "object") return undefined;
+    const { asset, ...rest } = entry as Record<string, unknown>;
+    if (typeof asset !== "string" || asset === "") return undefined;
+    levels.push({ asset, attrs: rest });
+  }
+  return levels;
+}

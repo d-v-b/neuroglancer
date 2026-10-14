@@ -18,11 +18,13 @@ import { describe, expect, it } from "vitest";
 import type { XarrayArrayInfo } from "#src/datasource/zarr/geo.js";
 import {
   getElevations,
+  getGeoZarrGeoreference,
   getRegularAxis,
   getXarrayDatasetDefaultShader,
   getXarrayDefaultShader,
   isGeographicCoordinate,
   isVectorPair,
+  parseGeoZarrMultiscales,
   pressureToAltitude,
   selectXarrayVariables,
   unpackCfValues,
@@ -343,6 +345,69 @@ void main() {
 }
 `);
     expect(getXarrayDefaultShader(makeMetadata({}, 0, DataType.UINT64))).toBe(
+      undefined,
+    );
+  });
+});
+
+describe("GeoZarr conventions", () => {
+  it("determines the georeference and resolution levels", () => {
+    // Attributes of an EOPF Sentinel-2 product (UTM zone 32N, 10 m pixels).
+    const attrs = {
+      "proj:code": "EPSG:32632",
+      "spatial:dimensions": ["y", "x"],
+      "spatial:transform": [10, 0, 699960, 0, -10, 5000040],
+    };
+    expect(getGeoZarrGeoreference(attrs, ["y", "x"])).toEqual({
+      crs: "EPSG:32632",
+      lonDim: 1,
+      latDim: 0,
+      lon: { start: 699965, step: 10 },
+      lat: { start: 5000035, step: -10 },
+      verticalScales: new Map(),
+      verticalElevations: new Map(),
+    });
+    // Dimension order follows the array; "node" registration maps pixel centers.
+    const node = getGeoZarrGeoreference(
+      { ...attrs, "spatial:registration": "node" },
+      ["band", "x", "y"],
+    )!;
+    expect([node.lonDim, node.latDim]).toEqual([1, 2]);
+    expect(node.lon.start).toBe(699960);
+    expect(
+      parseGeoZarrMultiscales({
+        multiscales: {
+          layout: [
+            { asset: "r10m", "spatial:transform": [10, 0, 0, 0, -10, 0] },
+            { asset: "r20m", derived_from: "r10m" },
+          ],
+        },
+      }),
+    ).toEqual([
+      { asset: "r10m", attrs: { "spatial:transform": [10, 0, 0, 0, -10, 0] } },
+      { asset: "r20m", attrs: { derived_from: "r10m" } },
+    ]);
+  });
+
+  it("ignores missing or unsupported georeferencing", () => {
+    const attrs = {
+      "proj:code": "EPSG:32632",
+      "spatial:transform": [10, 0, 699960, 0, -10, 5000040],
+    };
+    expect(getGeoZarrGeoreference({}, ["y", "x"])).toBe(undefined);
+    // Rotated transforms.
+    expect(
+      getGeoZarrGeoreference(
+        { ...attrs, "spatial:transform": [10, 1, 0, 0, -10, 0] },
+        ["y", "x"],
+      ),
+    ).toBe(undefined);
+    // Spatial dimensions not among the array dimensions.
+    expect(getGeoZarrGeoreference(attrs, ["lat", "lon"])).toBe(undefined);
+    expect(parseGeoZarrMultiscales({ multiscales: { layout: [] } })).toBe(
+      undefined,
+    );
+    expect(parseGeoZarrMultiscales({ multiscales: [{ datasets: [] }] })).toBe(
       undefined,
     );
   });
