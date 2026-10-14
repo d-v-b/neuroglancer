@@ -51,6 +51,66 @@ export function getTiffScales(tiff: TiffFile): TiffImage[] {
 }
 
 /**
+ * Aligns the resolution levels of the bands of a multi-file image (e.g. the bands of a Sentinel-2
+ * scene, stored as separate files with different resolutions): the levels are those of the band
+ * with the coarsest full-resolution image (the reference band), and each band contributes its
+ * image of the same size (to within a pixel, as overview sizes are rounded) at each level.  Levels
+ * at which a band has no such image are omitted.
+ *
+ * @param bandScales For each band, its images ordered by decreasing resolution (see
+ *     `getTiffScales`).
+ * @returns The index of the reference band, and for each level, the image of each band.
+ */
+export function alignGeoTiffBands(bandScales: TiffImage[][]): {
+  reference: number;
+  levels: TiffImage[][];
+} {
+  let reference = 0;
+  for (let i = 1; i < bandScales.length; ++i) {
+    if (bandScales[i][0].width < bandScales[reference][0].width) reference = i;
+  }
+  const levels: TiffImage[][] = [];
+  for (const image of bandScales[reference]) {
+    const level: TiffImage[] = [];
+    for (const scales of bandScales) {
+      const match = scales.find(
+        (other) =>
+          Math.abs(other.width - image.width) <= 1 &&
+          Math.abs(other.height - image.height) <= 1,
+      );
+      if (match === undefined) break;
+      level.push(match);
+    }
+    if (level.length !== bandScales.length) {
+      if (levels.length === 0) {
+        throw new Error(
+          `Bands have no images of matching size (${image.width}x${image.height})`,
+        );
+      }
+      continue;
+    }
+    levels.push(level);
+  }
+  return { reference, levels };
+}
+
+/**
+ * Returns the URL of a band file specified relative to the URL of the first band (or absolute).
+ */
+export function resolveGeoTiffBandUrl(baseUrl: string, band: string) {
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(band)) return band;
+  return baseUrl.replace(/[^/]*$/, band);
+}
+
+/**
+ * Returns the name of a band file: its file name without the extension.
+ */
+export function getGeoTiffBandName(url: string) {
+  const name = url.replace(/\/+$/, "").replace(/^.*\//, "");
+  return name.replace(/\.[^.]*$/, "") || name;
+}
+
+/**
  * Returns the default shader for an image, or `undefined` to use the generic default.
  */
 export function getGeoTiffDefaultShader(
