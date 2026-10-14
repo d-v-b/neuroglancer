@@ -16,11 +16,16 @@
 
 import "#src/layer/image/style.css";
 
-import type { CoordinateSpace } from "#src/coordinate_transform.js";
+import type {
+  CoordinateSpace,
+  CoordinateSpaceTransform,
+} from "#src/coordinate_transform.js";
 import {
   CoordinateSpaceCombiner,
   isChannelDimension,
   isLocalDimension,
+  makeCoordinateSpace,
+  makeIdentityTransformedBoundingBox,
   TrackableCoordinateSpace,
 } from "#src/coordinate_transform.js";
 import type {
@@ -35,24 +40,34 @@ import {
 } from "#src/layer/index.js";
 import type { LoadedDataSubsource } from "#src/layer/layer_data_source.js";
 import { Overlay } from "#src/overlay.js";
-import { getChannelSpace } from "#src/render_coordinate_transform.js";
+import type { RenderLayerTransformOrError } from "#src/render_coordinate_transform.js";
+import {
+  getChannelSpace,
+  getRenderLayerTransform,
+  getWatchableRenderLayerTransform,
+} from "#src/render_coordinate_transform.js";
 import {
   RenderScaleHistogram,
   trackableRenderScaleTarget,
 } from "#src/render_scale_statistics.js";
 import { DataType, VolumeType } from "#src/sliceview/volume/base.js";
 import { MultiscaleVolumeChunkSource } from "#src/sliceview/volume/frontend.js";
+import { GlobeVolumeRenderLayer } from "#src/sliceview/volume/globe_render_layer.js";
 import {
+  DEFAULT_FRAGMENT_MAIN,
   defineImageLayerShader,
   getTrackableFragmentMain,
   ImageRenderLayer,
 } from "#src/sliceview/volume/image_renderlayer.js";
+import { StackedMultiscaleVolumeChunkSource } from "#src/sliceview/volume/stacked.js";
+import { appendChannelDimension } from "#src/sliceview/volume/stacked_base.js";
 import { trackableAlphaValue } from "#src/trackable_alpha.js";
 import { trackableBlendModeValue } from "#src/trackable_blend.js";
 import { TrackableBoolean } from "#src/trackable_boolean.js";
 import { trackableFiniteFloat } from "#src/trackable_finite_float.js";
 import type { WatchableValueInterface } from "#src/trackable_value.js";
 import {
+  constantWatchableValue,
   makeCachedDerivedWatchableValue,
   makeCachedLazyDerivedWatchableValue,
   registerNested,
@@ -60,9 +75,10 @@ import {
 } from "#src/trackable_value.js";
 import { UserLayerWithAnnotationsMixin } from "#src/ui/annotations.js";
 import { setClipboard } from "#src/util/clipboard.js";
-import type { Borrowed } from "#src/util/disposable.js";
+import type { Borrowed, RefCounted } from "#src/util/disposable.js";
 import { makeValueOrError } from "#src/util/error.js";
 import { verifyOptionalObjectProperty } from "#src/util/json.js";
+import * as matrix from "#src/util/matrix.js";
 import {
   trackableShaderModeValue,
   VolumeRenderingModes,
@@ -115,6 +131,7 @@ const CHANNEL_DIMENSIONS_JSON_KEY = "channelDimensions";
 const VOLUME_RENDERING_JSON_KEY = "volumeRendering";
 const VOLUME_RENDERING_GAIN_JSON_KEY = "volumeRenderingGain";
 const VOLUME_RENDERING_DEPTH_SAMPLES_JSON_KEY = "volumeRenderingDepthSamples";
+const STACK_SOURCES_JSON_KEY = "stackSources";
 
 export interface ImageLayerSelectionState extends UserLayerSelectionState {
   value: any;
@@ -130,6 +147,12 @@ export class ImageUserLayer extends Base {
   blendMode = trackableBlendModeValue();
   codeVisible = new TrackableBoolean(true);
   hideInactiveShaderControls = new TrackableBoolean(false);
+  /**
+   * Whether the volume sources of the layer are combined, in order, as the channels of a single
+   * volume (e.g. the spectral bands of a satellite image stored as separate arrays), such that the
+   * shader can combine them.
+   */
+  stackSources = new TrackableBoolean(false, false);
   fragmentMain = getTrackableFragmentMain();
   shaderError = makeWatchableShaderError();
   dataType = new WatchableValue<DataType | undefined>(undefined);
@@ -210,6 +233,10 @@ export class ImageUserLayer extends Base {
       isLocalDimension;
     this.blendMode.changed.add(this.specificationChanged.dispatch);
     this.opacity.changed.add(this.specificationChanged.dispatch);
+    this.stackSources.changed.add(() => {
+      this.specificationChanged.dispatch();
+      this.updateDataSubsourceActivations();
+    });
     this.codeVisible.changed.add(this.specificationChanged.dispatch);
     this.hideInactiveShaderControls.changed.add(
       this.specificationChanged.dispatch,
@@ -234,6 +261,10 @@ export class ImageUserLayer extends Base {
 
   activateDataSubsources(subsources: Iterable<LoadedDataSubsource>) {
     let dataType: DataType | undefined;
+    const volumes: {
+      loadedSubsource: LoadedDataSubsource;
+      volume: MultiscaleVolumeChunkSource;
+    }[] = [];
     for (const loadedSubsource of subsources) {
       if (this.addStaticAnnotations(loadedSubsource)) continue;
       const { subsourceEntry } = loadedSubsource;
@@ -250,59 +281,254 @@ export class ImageUserLayer extends Base {
         continue;
       }
       dataType = volume.dataType;
-      loadedSubsource.activate((context) => {
-        loadedSubsource.addRenderLayer(
-          new ImageRenderLayer(volume, {
-            opacity: this.opacity,
-            blendMode: this.blendMode,
-            shaderControlState: this.shaderControlState,
-            shaderError: this.shaderError,
-            transform: loadedSubsource.getRenderLayerTransform(
-              this.channelCoordinateSpace,
-            ),
-            renderScaleTarget: this.sliceViewRenderScaleTarget,
-            renderScaleHistogram: this.sliceViewRenderScaleHistogram,
-            localPosition: this.localPosition,
-            channelCoordinateSpace: this.channelCoordinateSpace,
-          }),
-        );
-        const volumeRenderLayer = context.registerDisposer(
-          new VolumeRenderingRenderLayer({
-            gain: this.volumeRenderingGain,
-            multiscaleSource: volume,
-            shaderControlState: this.shaderControlState,
-            shaderError: this.shaderError,
-            transform: loadedSubsource.getRenderLayerTransform(
-              this.channelCoordinateSpace,
-            ),
-            depthSamplesTarget: this.volumeRenderingDepthSamplesTarget,
-            chunkResolutionHistogram:
-              this.volumeRenderingChunkResolutionHistogram,
-            localPosition: this.localPosition,
-            channelCoordinateSpace: this.channelCoordinateSpace,
-            mode: this.volumeRenderingMode,
-          }),
-        );
-        context.registerDisposer(
-          loadedSubsource.messages.addChild(volumeRenderLayer.messages),
-        );
-        context.registerDisposer(
-          registerNested((context, volumeRenderingMode) => {
-            if (volumeRenderingMode === VolumeRenderingModes.OFF) return;
-            context.registerDisposer(
-              this.addRenderLayer(volumeRenderLayer.addRef()),
-            );
-          }, this.volumeRenderingMode),
-        );
-        this.shaderError.changed.dispatch();
-      });
+      volumes.push({ loadedSubsource, volume });
     }
     this.dataType.value = dataType;
+    if (this.stackSources.value && volumes.length > 1) {
+      this.activateStackedVolumes(volumes);
+      return;
+    }
+    for (const { loadedSubsource, volume } of volumes) {
+      const { defaultShader } = volume;
+      if (
+        defaultShader !== undefined &&
+        this.fragmentMain.value === DEFAULT_FRAGMENT_MAIN
+      ) {
+        this.fragmentMain.value = defaultShader;
+      }
+      loadedSubsource.activate((context) => {
+        this.addVolumeRenderLayers(
+          loadedSubsource,
+          context,
+          volume,
+          loadedSubsource.getRenderLayerTransform(this.channelCoordinateSpace),
+        );
+      });
+    }
+  }
+
+  /**
+   * Combines the volumes of multiple subsources as the channels of a single volume (see
+   * `stackSources`), rendered by the render layers of the first subsource.
+   */
+  private activateStackedVolumes(
+    volumes: {
+      loadedSubsource: LoadedDataSubsource;
+      volume: MultiscaleVolumeChunkSource;
+    }[],
+  ) {
+    const deactivateAll = (message: string) => {
+      for (const { loadedSubsource } of volumes) {
+        loadedSubsource.deactivate(message);
+      }
+    };
+    // The volumes either all have a channel dimension (named the same, and the last dimension),
+    // whose channels are concatenated, or none, in which case a channel dimension is appended.
+    const rank = volumes[0].volume.rank;
+    const channelInfo = volumes.map(({ loadedSubsource, volume }) => {
+      const { inputSpace } = loadedSubsource.loadedDataSource.transform.value;
+      const channelDims: number[] = [];
+      for (let dim = 0; dim < volume.rank; ++dim) {
+        if (isChannelDimension(inputSpace.names[dim] ?? "")) {
+          channelDims.push(dim);
+        }
+      }
+      const dim = channelDims[0];
+      return {
+        rank: volume.rank,
+        channelDims,
+        name: dim === undefined ? undefined : inputSpace.names[dim],
+        size:
+          dim === undefined
+            ? 1
+            : inputSpace.bounds.upperBounds[dim] -
+              inputSpace.bounds.lowerBounds[dim],
+      };
+    });
+    if (channelInfo.some((info) => info.rank !== rank)) {
+      deactivateAll("Combined sources must have the same rank");
+      return;
+    }
+    const hasChannels = channelInfo[0].channelDims.length > 0;
+    let channelDim: number | undefined;
+    let channelName = "c^";
+    if (hasChannels) {
+      const { name } = channelInfo[0];
+      if (
+        channelInfo.some(
+          (info) =>
+            info.channelDims.length !== 1 ||
+            info.channelDims[0] !== rank - 1 ||
+            info.name !== name,
+        )
+      ) {
+        deactivateAll(
+          "Combined sources must all have a single channel dimension (the last, with the same name), or none",
+        );
+        return;
+      }
+      channelDim = rank - 1;
+      channelName = name!;
+    }
+    const sourceChannels = channelInfo.map((info) => info.size);
+    const numChannels = sourceChannels.reduce((a, b) => a + b, 0);
+    const [first, ...rest] = volumes;
+    first.loadedSubsource.activate(
+      (context) => {
+        const volume = new StackedMultiscaleVolumeChunkSource(
+          first.volume.chunkManager,
+          volumes.map(({ loadedSubsource, volume }) => ({
+            volume,
+            getModelToRenderLayerTransform: () => {
+              const { loadedDataSource } = loadedSubsource;
+              const { layer } = loadedDataSource;
+              const transform = getRenderLayerTransform(
+                layer.manager.root.coordinateSpace.value,
+                layer.localPosition.coordinateSpace.value,
+                loadedDataSource.transform.value,
+                loadedSubsource,
+              );
+              return transform.error === undefined ? transform : undefined;
+            },
+          })),
+          channelDim,
+          sourceChannels,
+        );
+        // The channel dimension spans the channels of all sources.
+        context.registerDisposer(
+          this.channelCoordinateSpaceCombiner.bind(
+            constantWatchableValue(
+              makeCoordinateSpace({
+                names: [channelName],
+                units: [""],
+                scales: Float64Array.of(1),
+                boundingBoxes: [
+                  makeIdentityTransformedBoundingBox({
+                    lowerBounds: Float64Array.of(0),
+                    upperBounds: Float64Array.of(numChannels),
+                  }),
+                ],
+              }),
+            ),
+          ),
+        );
+        let transform: WatchableValueInterface<RenderLayerTransformOrError>;
+        if (channelDim !== undefined) {
+          transform = first.loadedSubsource.getRenderLayerTransform(
+            this.channelCoordinateSpace,
+          );
+        } else {
+          const { loadedSubsource } = first;
+          const { loadedDataSource } = loadedSubsource;
+          const { layer } = loadedDataSource;
+          const indices = loadedSubsource.modelSubspaceDimensionIndices;
+          const subsourceRank = indices.length;
+          const extendedTransform = context.registerDisposer(
+            makeCachedDerivedWatchableValue(
+              (t: CoordinateSpaceTransform) =>
+                appendChannelDimension(t, channelName, numChannels),
+              [loadedDataSource.transform],
+            ),
+          );
+          transform = context.registerDisposer(
+            getWatchableRenderLayerTransform(
+              layer.manager.root.coordinateSpace,
+              layer.localPosition.coordinateSpace,
+              extendedTransform,
+              {
+                modelSubspaceDimensionIndices: [
+                  ...indices,
+                  loadedDataSource.transform.value.sourceRank,
+                ],
+                subsourceToModelSubspaceTransform:
+                  matrix.extendHomogeneousTransform(
+                    new Float32Array((subsourceRank + 2) ** 2),
+                    subsourceRank + 1,
+                    loadedSubsource.subsourceToModelSubspaceTransform,
+                    subsourceRank,
+                  ),
+              },
+              this.channelCoordinateSpace,
+            ),
+          );
+        }
+        this.addVolumeRenderLayers(
+          first.loadedSubsource,
+          context,
+          volume,
+          transform,
+        );
+      },
+      "stacked",
+      ...rest.map(({ loadedSubsource }) => loadedSubsource),
+    );
+    // The other subsources are active, but rendered by the render layers of the first.
+    for (const { loadedSubsource } of rest) {
+      loadedSubsource.activate(() => {}, "stacked", first.loadedSubsource);
+    }
+  }
+
+  /**
+   * Adds the render layers showing a volume (slice views, globe, and volume rendering).
+   */
+  private addVolumeRenderLayers(
+    loadedSubsource: LoadedDataSubsource,
+    context: RefCounted,
+    volume: MultiscaleVolumeChunkSource,
+    transform: WatchableValueInterface<RenderLayerTransformOrError>,
+  ) {
+    const imageRenderLayer = new ImageRenderLayer(volume, {
+      opacity: this.opacity,
+      blendMode: this.blendMode,
+      shaderControlState: this.shaderControlState,
+      shaderError: this.shaderError,
+      transform,
+      renderScaleTarget: this.sliceViewRenderScaleTarget,
+      renderScaleHistogram: this.sliceViewRenderScaleHistogram,
+      localPosition: this.localPosition,
+      channelCoordinateSpace: this.channelCoordinateSpace,
+    });
+    loadedSubsource.addRenderLayer(imageRenderLayer);
+    if (
+      loadedSubsource.loadedDataSource.dataSource.geoReference !== undefined
+    ) {
+      // Shown on the globe of the perspective panel in globe mode.
+      loadedSubsource.addRenderLayer(
+        new GlobeVolumeRenderLayer(imageRenderLayer),
+      );
+    }
+    const volumeRenderLayer = context.registerDisposer(
+      new VolumeRenderingRenderLayer({
+        gain: this.volumeRenderingGain,
+        multiscaleSource: volume,
+        shaderControlState: this.shaderControlState,
+        shaderError: this.shaderError,
+        transform,
+        depthSamplesTarget: this.volumeRenderingDepthSamplesTarget,
+        chunkResolutionHistogram: this.volumeRenderingChunkResolutionHistogram,
+        localPosition: this.localPosition,
+        channelCoordinateSpace: this.channelCoordinateSpace,
+        mode: this.volumeRenderingMode,
+      }),
+    );
+    context.registerDisposer(
+      loadedSubsource.messages.addChild(volumeRenderLayer.messages),
+    );
+    context.registerDisposer(
+      registerNested((context, volumeRenderingMode) => {
+        if (volumeRenderingMode === VolumeRenderingModes.OFF) return;
+        context.registerDisposer(
+          this.addRenderLayer(volumeRenderLayer.addRef()),
+        );
+      }, this.volumeRenderingMode),
+    );
+    this.shaderError.changed.dispatch();
   }
 
   restoreState(specification: any) {
     super.restoreState(specification);
     this.opacity.restoreState(specification[OPACITY_JSON_KEY]);
+    this.stackSources.restoreState(specification[STACK_SOURCES_JSON_KEY]);
     this.codeVisible.restoreState(specification[CODE_VISIBLE_KEY]);
     this.hideInactiveShaderControls.restoreState(
       specification[HIDE_INACTIVE_SHADER_CONTROLS_JSON_KEY],
@@ -351,6 +577,7 @@ export class ImageUserLayer extends Base {
   toJSON() {
     const x = super.toJSON();
     x[OPACITY_JSON_KEY] = this.opacity.toJSON();
+    x[STACK_SOURCES_JSON_KEY] = this.stackSources.toJSON();
     x[BLEND_JSON_KEY] = this.blendMode.toJSON();
     x[CODE_VISIBLE_KEY] = this.codeVisible.toJSON();
     x[HIDE_INACTIVE_SHADER_CONTROLS_JSON_KEY] =

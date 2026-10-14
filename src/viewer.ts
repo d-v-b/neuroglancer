@@ -38,6 +38,7 @@ import type { DataSourceRegistry } from "#src/datasource/index.js";
 import { StateShare, stateShareEnabled } from "#src/datasource/state_share.js";
 import type { DisplayContext } from "#src/display_context.js";
 import { TrackableWindowedViewport } from "#src/display_context.js";
+import { GeoViewState } from "#src/geo/geo_view.js";
 import {
   HelpPanelState,
   InputEventBindingHelpDialog,
@@ -85,6 +86,7 @@ import {
 } from "#src/trackable_value.js";
 import { CommandCatalog } from "#src/ui/command_catalog.js";
 import { CommandRegistry } from "#src/ui/command_registry.js";
+import { GeoStatusWidget } from "#src/ui/geo_status_widget.js";
 import {
   LayerArchiveCountWidget,
   LayerListPanel,
@@ -302,6 +304,7 @@ export class TrackableViewerState extends CompoundTrackable {
     super();
     this.add("title", viewer.title);
     this.add("dimensions", viewer.coordinateSpace);
+    this.add("crs", viewer.layerSpecification.displayCrs);
     this.add("relativeDisplayScales", viewer.relativeDisplayScales);
     this.add("displayDimensions", viewer.displayDimensions);
     this.add("position", viewer.position);
@@ -317,6 +320,14 @@ export class TrackableViewerState extends CompoundTrackable {
     this.add("wireFrame", viewer.wireFrame);
     this.add("enableAdaptiveDownsampling", viewer.enableAdaptiveDownsampling);
     this.add("showScaleBar", viewer.showScaleBar);
+    this.add("showGraticule", viewer.geoView.showGraticule);
+    this.add("showGlobe", viewer.geoView.showGlobe);
+    this.add("lockGlobeNorth", viewer.geoView.lockGlobeNorth);
+    this.add("showGlobeTerrain", viewer.geoView.showGlobeTerrain);
+    this.add(
+      "globeTerrainExaggeration",
+      viewer.geoView.globeTerrainExaggeration,
+    );
     this.add("showDefaultAnnotations", viewer.showDefaultAnnotations);
 
     this.add("showSlices", viewer.showPerspectiveSliceViews);
@@ -492,6 +503,7 @@ export class Viewer extends RefCounted implements ViewerState {
   wireFrame = new TrackableBoolean(false, false);
   enableAdaptiveDownsampling = new TrackableBoolean(true, true);
   showScaleBar = new TrackableBoolean(true, true);
+  geoView: GeoViewState;
   showPerspectiveSliceViews = new TrackableBoolean(true, true);
   hideCrossSectionBackground3D = new TrackableBoolean(false, false);
   visibleLayerRoles = allRenderLayerRoles();
@@ -698,6 +710,21 @@ export class Viewer extends RefCounted implements ViewerState {
       this.globalToolBinder,
     );
 
+    this.geoView = this.registerDisposer(
+      new GeoViewState(
+        this.layerSpecification.displayCrs,
+        this.navigationState.coordinateSpace,
+        this.navigationState,
+      ),
+    );
+    // The 3-d view shares the position of the cross sections, but has its own zoom.
+    this.registerDisposer(
+      this.geoView.registerNavigationTarget(() => ({
+        position: undefined,
+        zooms: [this.perspectiveNavigationState.zoomFactor],
+      })),
+    );
+
     this.registerDisposer(
       display.updateStarted.add(() => {
         this.onUpdateDisplay();
@@ -731,6 +758,8 @@ export class Viewer extends RefCounted implements ViewerState {
           this.navigationState.reset();
           this.perspectiveNavigationState.pose.orientation.reset();
           this.perspectiveNavigationState.zoomFactor.reset();
+          // Let the next georeferenced data source determine the display CRS.
+          this.layerSpecification.displayCrs.reset();
           this.layout.restoreState("4panel-alt");
           this.resetInitiated.dispatch();
           if (
@@ -823,6 +852,17 @@ export class Viewer extends RefCounted implements ViewerState {
       ),
     );
     topRow.appendChild(positionWidget.element);
+
+    const geoStatusWidget = this.registerDisposer(
+      new GeoStatusWidget(this.geoView, this.mouseState),
+    );
+    this.registerDisposer(
+      new ElementVisibilityFromTrackableBoolean(
+        this.uiControlVisibility.showLocation,
+        geoStatusWidget.element,
+      ),
+    );
+    topRow.appendChild(geoStatusWidget.element);
 
     const mousePositionWidget = this.registerDisposer(
       new MousePositionWidget(

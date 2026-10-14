@@ -48,6 +48,7 @@ import {
   SliceViewBase,
 } from "#src/sliceview/base.js";
 import { ChunkLayout } from "#src/sliceview/chunk_layout.js";
+import { deserializeGeoTransformedSourceInfo } from "#src/sliceview/geo.js";
 import type { WatchableValueInterface } from "#src/trackable_value.js";
 import { raceWithAbort } from "#src/util/abort.js";
 import { erf } from "#src/util/erf.js";
@@ -179,9 +180,18 @@ export class SliceViewBackend extends SliceViewIntermediateBase {
           tsource.renderLayer.localPosition.value,
           tsource,
           getNormalizedChunkLayout(projectionParameters, tsource.chunkLayout),
-          (positionInChunks) => {
-            vec3.multiply(tempChunkPosition, positionInChunks, chunkSize);
-            const priority = -vec3.distance(localCenter, tempChunkPosition);
+          (positionInChunks, screenDistance) => {
+            let priority: number;
+            if (screenDistance !== undefined) {
+              // Warped source: `positionInChunks` is in true chunk coordinates, which are not
+              // comparable to `localCenter` (approximate chunk coordinates), and the chunk may be
+              // visible in a world copy.  Use the screen distance instead, which is comparable to
+              // the distance in voxels at the appropriate resolution.
+              priority = -screenDistance;
+            } else {
+              vec3.multiply(tempChunkPosition, positionInChunks, chunkSize);
+              priority = -vec3.distance(localCenter, tempChunkPosition);
+            }
             const { curPositionInChunks } = tsource;
             const chunk = tsource.source.getChunk(curPositionInChunks);
             chunkManager.requestChunk(
@@ -321,6 +331,11 @@ export function deserializeTransformedSources<
           serializedSource.combinedGlobalLocalToChunkTransform,
         curPositionInChunks: new Float32Array(rank),
         fixedPositionWithinChunk: new Uint32Array(rank),
+        geo: deserializeGeoTransformedSourceInfo(
+          serializedSource.geo,
+          rank,
+          serializedSource.chunkDisplayDimensionIndices,
+        ),
       };
       return tsource;
     }),
@@ -460,7 +475,14 @@ function getPrefetchChunkOffsets(
 
   const { rank: chunkRank, chunkDataSize } = tsource.source.spec;
   const { mean: meanVec, variance: varianceVec } = velocityEstimator;
+  // For non-identity warped sources, the velocity (computed using the affine approximation of the
+  // warp) does not correspond to a direction in the true chunk grid, so prefetching along the
+  // warped dimensions is disabled.
+  const { geo } = tsource;
+  const skippedChunkDimensions: readonly number[] =
+    geo !== undefined && !geo.warp.isIdentity ? geo.chunkDimensions : [];
   for (let chunkDim = 0; chunkDim < chunkRank; ++chunkDim) {
+    if (skippedChunkDimensions.includes(chunkDim)) continue;
     const isDisplayDimension =
       tsource.chunkDisplayDimensionIndices.includes(chunkDim);
     let mean = 0;

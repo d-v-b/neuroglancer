@@ -39,6 +39,11 @@ import {
   computeNumPickIds,
   MultiscaleAnnotationSource,
 } from "#src/annotation/frontend_source.js";
+import {
+  convertAnnotationsToEcef,
+  getGlobeRenderSubspaceTransform,
+  isGlobeAnnotationType,
+} from "#src/annotation/globe.js";
 import type {
   AnnotationBase,
   SerializedAnnotations,
@@ -67,6 +72,7 @@ import type {
 import type { DisplayDimensionRenderInfo } from "#src/navigation_state.js";
 import type { PerspectivePanel } from "#src/perspective_view/panel.js";
 import type {
+  GlobeRenderContext,
   PerspectiveViewReadyRenderContext,
   PerspectiveViewRenderContext,
 } from "#src/perspective_view/render_layer.js";
@@ -123,10 +129,11 @@ import type { Borrowed, Owned } from "#src/util/disposable.js";
 import { RefCounted } from "#src/util/disposable.js";
 import { Endianness, ENDIANNESS } from "#src/util/endian.js";
 import type { ValueOrError } from "#src/util/error.js";
-import { mat4 } from "#src/util/geom.js";
+import { mat4, vec3 } from "#src/util/geom.js";
 import type { MessageList } from "#src/util/message_list.js";
 import { MessageSeverity } from "#src/util/message_list.js";
 import type { AnyConstructor, MixinConstructor } from "#src/util/mixin.js";
+import { getObjectId } from "#src/util/object_id.js";
 import { NullarySignal } from "#src/util/signal.js";
 import { withSharedVisibility } from "#src/visibility_priority/frontend.js";
 import { GLBuffer } from "#src/webgl/buffer.js";
@@ -476,6 +483,13 @@ function AnnotationRenderLayer<
   class C extends (Base as AnyConstructor<VisibilityTrackedRenderLayer>) {
     curRank = -1;
     private renderHelpers: AnnotationRenderHelper[] = [];
+    /**
+     * Annotation buffers converted for display on the globe (see `convertAnnotationsToEcef`).
+     */
+    private globeBuffers = new Map<
+      SerializedAnnotations,
+      { key: string; buffer: GLBuffer; frameNumber: number }
+    >();
     private tempChunkPosition: Float32Array;
 
     handlePropertiesChanged = () => {
@@ -528,6 +542,9 @@ function AnnotationRenderLayer<
       this.registerDisposer(() => {
         for (const helper of this.renderHelpers) {
           helper.dispose();
+        }
+        for (const entry of this.globeBuffers.values()) {
+          entry.buffer.dispose();
         }
       });
       this.role = base.state.role;
@@ -634,6 +651,55 @@ function AnnotationRenderLayer<
       );
     }
 
+    /**
+     * Returns the buffer of annotations converted for display on the globe, or `undefined` if the
+     * annotations cannot be shown on the globe.
+     */
+    private getGlobeBuffer(
+      chunk: AnnotationGeometryDataInterface,
+      renderContext: PerspectiveViewRenderContext,
+      globe: GlobeRenderContext,
+      state: AnnotationChunkRenderParameters,
+    ) {
+      const rank = this.curRank;
+      if (rank < 3) return undefined;
+      const { serializedAnnotations } = chunk;
+      const { globeBuffers } = this;
+      const { frameNumber, projectionParameters } = renderContext;
+      const key = `${globe.generation}/${getObjectId(state.chunkDisplayTransform)}`;
+      let entry = globeBuffers.get(serializedAnnotations);
+      if (entry === undefined || entry.key !== key) {
+        const data = convertAnnotationsToEcef(
+          serializedAnnotations,
+          this.base.source.annotationPropertySerializers,
+          rank,
+          {
+            renderSubspaceTransform: state.renderSubspaceTransform,
+            displaySubspaceModelMatrix:
+              state.chunkDisplayTransform.displaySubspaceModelMatrix,
+            displayDimensionIndices:
+              projectionParameters.displayDimensionRenderInfo
+                .displayDimensionIndices,
+            globalPosition: projectionParameters.globalPosition,
+            globalToEcef: globe.globalToEcef,
+          },
+        );
+        const buffer = entry?.buffer ?? new GLBuffer(this.gl);
+        buffer.setData(data);
+        entry = { key, buffer, frameNumber };
+        globeBuffers.set(serializedAnnotations, entry);
+        // Release the buffers of annotations no longer drawn.
+        for (const [other, otherEntry] of globeBuffers) {
+          if (otherEntry.frameNumber < frameNumber - 1) {
+            otherEntry.buffer.dispose();
+            globeBuffers.delete(other);
+          }
+        }
+      }
+      entry.frameNumber = frameNumber;
+      return entry.buffer;
+    }
+
     drawGeometry(
       chunk: AnnotationGeometryDataInterface,
       renderContext: PerspectiveViewRenderContext | SliceViewPanelRenderContext,
@@ -643,6 +709,25 @@ function AnnotationRenderLayer<
       const { base } = this;
       const { chunkDisplayTransform } = state;
       const { serializedAnnotations } = chunk;
+      const { globe } = renderContext as PerspectiveViewRenderContext;
+      let buffer = chunk.buffer!;
+      let subspaceMatrix = state.renderSubspaceTransform;
+      let modelClipBounds = state.modelClipBounds;
+      if (globe !== undefined) {
+        const globeBuffer = this.getGlobeBuffer(
+          chunk,
+          renderContext as PerspectiveViewRenderContext,
+          globe,
+          state,
+        );
+        if (globeBuffer === undefined) return;
+        buffer = globeBuffer;
+        const rank = this.curRank;
+        subspaceMatrix = getGlobeRenderSubspaceTransform(rank);
+        // The first three model coordinates hold ECEF coordinates, and are not clipped.
+        modelClipBounds = Float32Array.from(modelClipBounds);
+        modelClipBounds.fill(0, rank, rank + 3);
+      }
       const { typeToIdMaps, typeToOffset, typeToSize, typeToInstanceCounts } =
         serializedAnnotations;
       let pickId = 0;
@@ -655,22 +740,33 @@ function AnnotationRenderLayer<
         );
       }
       const hoverValue = base.hoverState.value;
-      const modelViewProjectionMatrix = mat4.multiply(
-        tempMat,
-        renderContext.projectionParameters.viewProjectionMat,
-        chunkDisplayTransform.displaySubspaceModelMatrix,
-      );
+      let modelViewProjectionMatrix: mat4;
+      if (globe !== undefined) {
+        // ECEF coordinates relative to the target.
+        const { target } = globe;
+        modelViewProjectionMatrix = mat4.translate(
+          tempMat,
+          renderContext.projectionParameters.viewProjectionMat,
+          vec3.fromValues(-target[0], -target[1], -target[2]),
+        );
+      } else {
+        modelViewProjectionMatrix = mat4.multiply(
+          tempMat,
+          renderContext.projectionParameters.viewProjectionMat,
+          chunkDisplayTransform.displaySubspaceModelMatrix,
+        );
+      }
       const context: AnnotationRenderContext = {
         annotationLayer: base,
         renderContext,
         selectedIndex: 0,
         basePickId: pickId,
-        buffer: chunk.buffer!,
+        buffer,
         bufferOffset: 0,
         count: 0,
         modelViewProjectionMatrix,
-        modelClipBounds: state.modelClipBounds,
-        subspaceMatrix: state.renderSubspaceTransform,
+        modelClipBounds,
+        subspaceMatrix,
         renderSubspaceModelMatrix:
           chunkDisplayTransform.displaySubspaceModelMatrix,
         renderSubspaceInvModelMatrix:
@@ -683,7 +779,10 @@ function AnnotationRenderLayer<
       for (const annotationType of annotationTypes) {
         const idMap = typeToIdMaps[annotationType];
         let count = typeToSize[annotationType];
-        if (count > 0) {
+        if (
+          count > 0 &&
+          (globe === undefined || isGlobeAnnotationType(annotationType))
+        ) {
           const handler = getAnnotationTypeRenderHandler(annotationType);
           let selectedIndex = 0xffffffff;
           if (hoverValue !== undefined) {
@@ -971,7 +1070,11 @@ const PerspectiveViewAnnotationLayerBase = AnnotationRenderLayer(
 
 export class PerspectiveViewAnnotationLayer extends NonSpatiallyIndexedAnnotationRenderLayer(
   PerspectiveViewAnnotationLayerBase,
-) {}
+) {
+  get supportsGlobe() {
+    return true;
+  }
+}
 
 const SpatiallyIndexedAnnotationLayer = <
   TBase extends AnyConstructor<AnnotationRenderLayer>,

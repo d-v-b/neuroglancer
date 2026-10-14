@@ -114,9 +114,54 @@ export class ViewerSettingsPanel extends SidePanel {
       );
       labelElement.appendChild(checkbox.element);
       scroll.appendChild(labelElement);
+      return labelElement;
     };
     addCheckbox("Show axis lines", viewer.showAxisLines);
     addCheckbox("Show scale bar", viewer.showScaleBar);
+    {
+      const { geoView } = viewer;
+      const graticuleElement = addCheckbox(
+        "Show graticule (geospatial data)",
+        geoView.showGraticule,
+      );
+      const globeElement = addCheckbox(
+        "Show 3-d globe (geospatial data)",
+        geoView.showGlobe,
+      );
+      const lockNorthElement = addCheckbox(
+        "Keep north up when panning the globe",
+        geoView.lockGlobeNorth,
+      );
+      const terrainElement = addCheckbox(
+        "Show terrain on the globe",
+        geoView.showGlobeTerrain,
+      );
+      const exaggerationWidget = this.registerDisposer(
+        new NumberInputWidget(geoView.globeTerrainExaggeration, {
+          label: "Terrain exaggeration",
+        }),
+      );
+      exaggerationWidget.element.classList.add(
+        "neuroglancer-settings-limit-widget",
+      );
+      scroll.appendChild(exaggerationWidget.element);
+      // Only relevant for geospatial displays.
+      const updateVisibility = () => {
+        const { displayCrs } = geoView;
+        // The `hidden` attribute is overridden by the `display` style of the labels.
+        const display =
+          displayCrs.numGeoSources === 0 && displayCrs.value === undefined
+            ? "none"
+            : "";
+        graticuleElement.style.display = display;
+        globeElement.style.display = display;
+        lockNorthElement.style.display = display;
+        terrainElement.style.display = display;
+        exaggerationWidget.element.style.display = display;
+      };
+      this.registerDisposer(geoView.changed.add(updateVisibility));
+      updateVisibility();
+    }
     addCheckbox("Show cross sections in 3-d", viewer.showPerspectiveSliceViews);
     addCheckbox(
       "Hide sections background 3-d",

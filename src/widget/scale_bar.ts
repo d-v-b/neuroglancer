@@ -126,6 +126,12 @@ export class ScaleBarDimensions {
   physicalLength: number;
   physicalUnit: string;
 
+  /**
+   * If specified, SI prefixes are limited to "k" (e.g. for ground distances, which are
+   * conventionally expressed in km rather than Mm).
+   */
+  maxPrefixExponent: number | undefined;
+
   prevPhysicalSizePerPixel = 0;
   prevTargetLengthInPixels = 0;
   prevPhysicalUnit = "\0";
@@ -169,7 +175,12 @@ export class ScaleBarDimensions {
     }
 
     const physicalSize = bestSignificand * tenToThePowerExponent;
-    const siPrefix = pickSiPrefix(physicalSize);
+    let siPrefix = pickSiPrefix(physicalSize);
+    if (this.maxPrefixExponent !== undefined) {
+      if (siPrefix.exponent > this.maxPrefixExponent) {
+        siPrefix = { prefix: "k", exponent: 3 };
+      }
+    }
     this.lengthInPixels = Math.round(physicalSize / physicalSizePerPixel);
     this.physicalUnit = `${siPrefix.prefix}${this.physicalBaseUnit}`;
     this.physicalLength =
@@ -282,17 +293,27 @@ export class MultipleScaleBarTextures extends RefCounted {
       OffscreenCopyHelper.get(this.gl),
     );
 
-    for (let i = 0; i < 3; ++i) {
+    for (let i = 0; i < 4; ++i) {
       this.scaleBars.push(this.registerDisposer(new ScaleBarTexture(gl)));
     }
   }
 
+  /**
+   * @param geo If specified, the display dimensions corresponding to `geo.globalDimensions` are
+   *     represented by scale bars of ground distance, given the ground distance per pixel along the
+   *     screen x and y axes.  If these differ significantly (as for non-conformal projections),
+   *     separate scale bars are shown for each axis.
+   */
   draw(
     viewport: RenderViewport,
     displayDimensionRenderInfo: DisplayDimensionRenderInfo,
     relativeDisplayScales: RelativeDisplayScales,
     effectiveZoom: number,
     options: ScaleBarOptions,
+    geo?: {
+      globalDimensions: readonly number[];
+      groundMetersPerPixel: readonly [number | undefined, number | undefined];
+    },
   ) {
     const { scaleBars } = this;
     const {
@@ -313,8 +334,39 @@ export class MultipleScaleBarTextures extends RefCounted {
 
     let numScaleBars = 0;
 
+    if (geo !== undefined) {
+      const [horizontal, vertical] = geo.groundMetersPerPixel;
+      let bars: [string, number][];
+      if (horizontal === undefined || vertical === undefined) {
+        bars = [];
+        if (horizontal !== undefined) bars.push(["\u2194 ", horizontal]);
+        if (vertical !== undefined) bars.push(["\u2195 ", vertical]);
+      } else if (
+        Math.abs(horizontal - vertical) <=
+        0.02 * Math.max(horizontal, vertical)
+      ) {
+        bars = [["", horizontal]];
+      } else {
+        bars = [
+          ["\u2194 ", horizontal],
+          ["\u2195 ", vertical],
+        ];
+      }
+      for (const [label, metersPerPixel] of bars) {
+        const scaleBar = scaleBars[numScaleBars++];
+        scaleBar.label = label;
+        scaleBar.factor = Number.NaN;
+        const scaleBarDimensions = scaleBar.dimensions;
+        scaleBarDimensions.physicalBaseUnit = "m";
+        scaleBarDimensions.maxPrefixExponent = 3;
+        scaleBarDimensions.targetLengthInPixels = targetLengthInPixels;
+        scaleBarDimensions.physicalSizePerPixel = metersPerPixel;
+      }
+    }
+
     for (let i = 0; i < displayRank; ++i) {
       const dim = displayDimensionIndices[i];
+      if (geo !== undefined && geo.globalDimensions.includes(dim)) continue;
       const unit = displayDimensionUnits[i];
       const factor = factors[dim];
       let barIndex;
@@ -337,6 +389,7 @@ export class MultipleScaleBarTextures extends RefCounted {
         scaleBarDimensions = scaleBar.dimensions;
         scaleBar.factor = factor;
         scaleBarDimensions.physicalBaseUnit = unit;
+        scaleBarDimensions.maxPrefixExponent = undefined;
         scaleBarDimensions.targetLengthInPixels = targetLengthInPixels;
         scaleBarDimensions.physicalSizePerPixel =
           (displayDimensionScales[i] * effectiveZoom) /
@@ -350,7 +403,9 @@ export class MultipleScaleBarTextures extends RefCounted {
     let bottomPixelOffset = options.bottomPixelOffset * options.scaleFactor;
     for (let barIndex = numScaleBars - 1; barIndex >= 0; --barIndex) {
       const scaleBar = scaleBars[barIndex];
-      if (numScaleBars === 1) {
+      if (Number.isNaN(scaleBar.factor)) {
+        // Ground distance scale bar: label already set.
+      } else if (numScaleBars === 1) {
         scaleBar.label = "";
       } else {
         scaleBar.label += ": ";

@@ -38,6 +38,7 @@ import type {
 } from "#src/datasource/index.js";
 import { makeEmptyDataSourceSpecification } from "#src/datasource/index.js";
 import type { DisplayContext, RenderedPanel } from "#src/display_context.js";
+import { TrackableDisplayCrs } from "#src/geo/display_crs.js";
 import type { LoadedDataSubsource } from "#src/layer/layer_data_source.js";
 import {
   LayerDataSource,
@@ -63,6 +64,7 @@ import type {
   RenderLayerRole,
   VisibilityTrackedRenderLayer,
 } from "#src/renderlayer.js";
+import type { SliceView } from "#src/sliceview/frontend.js";
 import type { VolumeType } from "#src/sliceview/volume/base.js";
 import { StatusMessage } from "#src/status.js";
 import { TrackableBoolean } from "#src/trackable_boolean.js";
@@ -596,7 +598,7 @@ export class UserLayer extends RefCounted {
       if (result != null) return result;
     }
     for (const layer of renderLayers) {
-      result = layer.getValueAt(position);
+      result = layer.getValueAt(position, pickState);
       if (result != null) {
         break;
       }
@@ -1117,6 +1119,11 @@ export class LayerManager extends RefCounted {
 
 export interface PickState {
   pickedRenderLayer: RenderLayer | null;
+  /**
+   * Slice view in which the position was picked, if any.  Render layers may use it to ignore
+   * sources that are not shown in that view.
+   */
+  pickedSliceView?: SliceView;
   pickedValue: bigint;
   pickedOffset: number;
   pickedAnnotationLayer: AnnotationLayerState | undefined;
@@ -1138,6 +1145,7 @@ export class MouseSelectionState implements PickState {
   active = false;
   displayDimensions: DisplayDimensions | undefined = undefined;
   pickedRenderLayer: RenderLayer | null = null;
+  pickedSliceView: SliceView | undefined = undefined;
   pickedValue = 0n;
   pickedOffset = 0;
   pickedAnnotationLayer: AnnotationLayerState | undefined = undefined;
@@ -2156,6 +2164,11 @@ export class TopLevelLayerListSpecification extends LayerListSpecification {
   coordinateSpaceCombiner: CoordinateSpaceCombiner;
   subsets = new Set<LayerSubsetSpecification>();
   layerSelectedValues: LayerSelectedValues;
+
+  /**
+   * Display CRS into which georeferenced data sources are reprojected.
+   */
+  displayCrs = new TrackableDisplayCrs();
 
   constructor(
     public display: DisplayContext,

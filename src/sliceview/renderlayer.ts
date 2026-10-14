@@ -17,6 +17,7 @@
 import type { ChunkManager } from "#src/chunk_manager/frontend.js";
 import { ChunkRenderLayerFrontend } from "#src/chunk_manager/frontend.js";
 import type { CoordinateSpace } from "#src/coordinate_transform.js";
+import type { ChunkGeoWarp } from "#src/geo/source_warp.js";
 import type { VisibleLayerInfo } from "#src/layer/index.js";
 import type {
   ChunkTransformParameters,
@@ -76,6 +77,7 @@ export interface VisibleSourceInfo<Source extends SliceViewChunkSource> {
   source: Borrowed<Source>;
   refCount: number;
   chunkTransform: ChunkTransformParameters;
+  geoWarp?: ChunkGeoWarp;
 }
 
 export interface SliceViewRenderContext {
@@ -131,14 +133,21 @@ export abstract class SliceViewRenderLayer<
   addSource(
     source: Borrowed<Source>,
     chunkTransform: ChunkTransformParameters,
+    geoWarp?: ChunkGeoWarp,
   ) {
     const { visibleSources } = this;
     const info = visibleSources.get(source);
     if (info !== undefined) {
       ++info.refCount;
       info.chunkTransform = chunkTransform;
+      info.geoWarp = geoWarp;
     } else {
-      visibleSources.set(source, { source, refCount: 1, chunkTransform });
+      visibleSources.set(source, {
+        source,
+        refCount: 1,
+        chunkTransform,
+        geoWarp,
+      });
       this.visibleSourcesList_.length = 0;
     }
   }

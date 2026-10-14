@@ -95,6 +95,7 @@
     "msgpackr": "^1.11.5",
     "nifti-reader-js": "^0.8.0",
     "numcodecs": "^0.3.2",
+    "proj4": "^2.22.0",
     "valibot": "^1.1.0"
   },
   "overrides": {
@@ -227,6 +228,30 @@
       "neuroglancer/datasource:none_by_default": "./src/util/false.ts",
       "neuroglancer/datasource/dvid:disabled": "./src/util/false.ts",
       "default": "./src/datasource/dvid/register_credentials_provider.ts"
+    },
+    "#datasource/geojson/register_default": {
+      "neuroglancer/datasource/geojson:enabled": "./src/datasource/geojson/register_default.ts",
+      "neuroglancer/datasource:none_by_default": "./src/util/false.ts",
+      "neuroglancer/datasource/geojson:disabled": "./src/util/false.ts",
+      "default": "./src/datasource/geojson/register_default.ts"
+    },
+    "#datasource/geotiff/backend": {
+      "neuroglancer/datasource/geotiff:enabled": "./src/datasource/geotiff/backend.ts",
+      "neuroglancer/datasource:none_by_default": "./src/util/false.ts",
+      "neuroglancer/datasource/geotiff:disabled": "./src/util/false.ts",
+      "default": "./src/datasource/geotiff/backend.ts"
+    },
+    "#datasource/geotiff/async_computation": {
+      "neuroglancer/datasource/geotiff:enabled": "./src/datasource/geotiff/async_computation.ts",
+      "neuroglancer/datasource:none_by_default": "./src/util/false.ts",
+      "neuroglancer/datasource/geotiff:disabled": "./src/util/false.ts",
+      "default": "./src/datasource/geotiff/async_computation.ts"
+    },
+    "#datasource/geotiff/register_default": {
+      "neuroglancer/datasource/geotiff:enabled": "./src/datasource/geotiff/register_default.ts",
+      "neuroglancer/datasource:none_by_default": "./src/util/false.ts",
+      "neuroglancer/datasource/geotiff:disabled": "./src/util/false.ts",
+      "default": "./src/datasource/geotiff/register_default.ts"
     },
     "#datasource/graphene/backend": {
       "neuroglancer/datasource/graphene:enabled": "./src/datasource/graphene/backend.ts",
@@ -361,6 +386,18 @@
       "neuroglancer/datasource:none_by_default": "./src/util/false.ts",
       "neuroglancer/datasource/vtk:disabled": "./src/util/false.ts",
       "default": "./src/datasource/vtk/register_default.ts"
+    },
+    "#datasource/xyz/backend": {
+      "neuroglancer/datasource/xyz:enabled": "./src/datasource/xyz/backend.ts",
+      "neuroglancer/datasource:none_by_default": "./src/util/false.ts",
+      "neuroglancer/datasource/xyz:disabled": "./src/util/false.ts",
+      "default": "./src/datasource/xyz/backend.ts"
+    },
+    "#datasource/xyz/register_default": {
+      "neuroglancer/datasource/xyz:enabled": "./src/datasource/xyz/register_default.ts",
+      "neuroglancer/datasource:none_by_default": "./src/util/false.ts",
+      "neuroglancer/datasource/xyz:disabled": "./src/util/false.ts",
+      "default": "./src/datasource/xyz/register_default.ts"
     },
     "#datasource/zarr/backend": {
       "neuroglancer/datasource/zarr:enabled": "./src/datasource/zarr/backend.ts",

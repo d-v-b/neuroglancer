@@ -25,6 +25,7 @@ import type {
 import type { SharedCredentialsManager } from "#src/credentials_provider/shared.js";
 import { getKvStoreCompletions } from "#src/datasource/kvstore_completions.js";
 import type { LocalDataSource } from "#src/datasource/local.js";
+import type { Warp2d } from "#src/geo/warp_mesh.js";
 import {
   AutoDetectRegistry,
   autoDetectFormat,
@@ -126,7 +127,15 @@ export interface ConvertLegacyUrlOptions extends ConvertLegacyUrlOptionsBase {
 export interface DataSubsource {
   volume?: MultiscaleVolumeChunkSource;
   mesh?: MeshSource | MultiscaleMeshSource | SkeletonSource;
-  annotation?: MultiscaleAnnotationSource;
+  annotation?: MultiscaleAnnotationSource | AnnotationSource;
+  /**
+   * Georeferenced annotations that are reprojected into the display CRS, replacing `annotation`.
+   * The warp maps the georeferenced model dimensions (in the input coordinate space of the model
+   * transform) to the coordinates of the reprojected data source.
+   */
+  geoAnnotations?: {
+    reproject(warp: Warp2d & { isIdentity?: boolean }): AnnotationSource;
+  };
   staticAnnotations?: AnnotationSource;
   local?: LocalDataSource;
   singleMesh?: SingleMeshSource;
@@ -189,6 +198,33 @@ export interface SingleChannelMetadata {
   coefficient?: number;
 }
 
+/**
+ * Specifies that two model space dimensions are coordinates in a geospatial coordinate reference
+ * system.
+ */
+export interface GeoReference {
+  /**
+   * CRS specification, e.g. `"EPSG:32633"`, as accepted by `getCrs`.
+   */
+  crs: string;
+
+  /**
+   * Indices of the model (output) dimensions corresponding to the CRS x (easting/longitude) and y
+   * (northing/latitude) axes.
+   */
+  modelDimensions: [number, number];
+
+  /**
+   * Vertical model dimensions, if any, specified by the elevation (in meters, positive up) of the
+   * center of each level.  Level `i` is centered at model coordinate `i + 0.5`.
+   *
+   * The scales of vertical dimensions (which are unitless) are interpreted relative to the units
+   * of the CRS, and are converted when the source is reprojected, such that the vertical
+   * exaggeration is preserved.
+   */
+  verticalDimensions?: { modelDimension: number; elevations: number[] }[];
+}
+
 export interface DataSource {
   subsources: DataSubsourceEntry[];
   modelTransform: CoordinateSpaceTransform;
@@ -196,6 +232,12 @@ export interface DataSource {
   state?: Trackable;
   canonicalUrl?: string;
   channelMetadata?: ChannelMetadata;
+
+  /**
+   * Georeferencing of the model space.  Georeferenced sources are reprojected into the display CRS
+   * of the viewer.
+   */
+  geoReference?: GeoReference;
 }
 
 export interface DataSourceRedirect {

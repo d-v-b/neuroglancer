@@ -23,6 +23,7 @@ import { debounce } from "lodash-es";
 import type { InputEventBindings as DataPanelInputEventBindings } from "#src/data_panel_layout.js";
 import { DataPanelLayoutContainer } from "#src/data_panel_layout.js";
 import type { DisplayContext } from "#src/display_context.js";
+import type { GeoViewState } from "#src/geo/geo_view.js";
 import type {
   LayerListSpecification,
   MouseSelectionState,
@@ -105,6 +106,7 @@ export interface LayerGroupViewerState {
   perspectiveViewBackgroundColor: TrackableRGB;
   hideCrossSectionBackground3D: TrackableBoolean;
   pickRadius: TrackableValue<number>;
+  geoView?: GeoViewState;
 }
 
 export interface LayerGroupViewerOptions {
@@ -391,6 +393,9 @@ export class LayerGroupViewer extends RefCounted {
   get scaleBarOptions() {
     return this.viewerState.scaleBarOptions;
   }
+  get geoView() {
+    return this.viewerState.geoView;
+  }
   layerPanel: LayerBar | undefined;
   layout: DataPanelLayoutContainer;
   toolBinder: LocalToolBinder<this>;
@@ -437,6 +442,24 @@ export class LayerGroupViewer extends RefCounted {
         );
       }, this.viewerNavigationState.position.link),
     );
+    const { geoView } = viewerState;
+    if (geoView !== undefined) {
+      // Unlinked navigation state is not converted along with that of the viewer when the display
+      // CRS changes.
+      const navigation = this.viewerNavigationState;
+      const unlinked = (link: { value: NavigationLinkType }) =>
+        link.value === NavigationLinkType.UNLINKED;
+      this.registerDisposer(
+        geoView.registerNavigationTarget(() => ({
+          position: unlinked(navigation.position.link)
+            ? navigation.position.value
+            : undefined,
+          zooms: [navigation.crossSectionScale, navigation.projectionScale]
+            .filter((zoom) => unlinked(zoom.link))
+            .map((zoom) => zoom.value),
+        })),
+      );
+    }
     if (!(this.layerSpecification instanceof LayerSubsetSpecification)) {
       this.state.add("layers", {
         changed: this.layerSpecification.changed,

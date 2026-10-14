@@ -22,6 +22,8 @@ import type {
 } from "#src/chunk_manager/frontend.js";
 import { Chunk, ChunkSource } from "#src/chunk_manager/frontend.js";
 import { applyRenderViewportToProjectionMatrix } from "#src/display_context.js";
+import type { GeoViewState } from "#src/geo/geo_view.js";
+import type { GeoWarpSpec } from "#src/geo/source_warp.js";
 import type { LayerManager } from "#src/layer/index.js";
 import type {
   DisplayDimensionRenderInfo,
@@ -61,6 +63,11 @@ import {
   SliceViewProjectionParameters,
 } from "#src/sliceview/base.js";
 import { ChunkLayout } from "#src/sliceview/chunk_layout.js";
+import {
+  disposeGeoMeshCache,
+  makeGeoTransformedSourceInfo,
+  serializeGeoTransformedSourceInfo,
+} from "#src/sliceview/geo.js";
 import type { SliceViewerState } from "#src/sliceview/panel.js";
 import { SliceViewRenderLayer } from "#src/sliceview/renderlayer.js";
 import type { WatchableValueInterface } from "#src/trackable_value.js";
@@ -139,6 +146,7 @@ function serializeTransformedSource(
     combinedGlobalLocalToChunkTransform:
       tsource.combinedGlobalLocalToChunkTransform,
     chunkLayout: tsource.chunkLayout.toObject(),
+    geo: serializeGeoTransformedSourceInfo(tsource.geo),
   };
 }
 
@@ -153,7 +161,9 @@ function disposeTransformedSources(
   allSources: TransformedSource<SliceViewRenderLayer, SliceViewChunkSource>[][],
 ) {
   for (const scales of allSources) {
-    for (const { source } of scales) {
+    for (const tsource of scales) {
+      const { source } = tsource;
+      disposeGeoMeshCache(tsource);
       layer.removeSource(source);
       source.dispose();
     }
@@ -215,6 +225,7 @@ export class SliceView extends Base {
     public layerManager: LayerManager,
     public navigationState: Owned<NavigationState>,
     public wireFrame: WatchableValueInterface<boolean>,
+    public geoView?: GeoViewState,
   ) {
     super(
       new DerivedProjectionParameters({
@@ -235,19 +246,34 @@ export class SliceView extends Base {
             viewportNormalInGlobalCoordinates,
             viewportNormalInCanonicalCoordinates,
           } = out;
+          const setDepthRange = (depthRange: number) => {
+            mat4.ortho(
+              projectionMat,
+              -logicalWidth / 2,
+              logicalWidth / 2,
+              logicalHeight / 2,
+              -logicalHeight / 2,
+              -depthRange,
+              depthRange,
+            );
+            applyRenderViewportToProjectionMatrix(out, projectionMat);
+            updateProjectionParametersFromInverseViewAndProjection(out);
+          };
           const { relativeDepthRange } = navigationState;
-          mat4.ortho(
-            projectionMat,
-            -logicalWidth / 2,
-            logicalWidth / 2,
-            logicalHeight / 2,
-            -logicalHeight / 2,
-            -relativeDepthRange,
-            relativeDepthRange,
-          );
-          applyRenderViewportToProjectionMatrix(out, projectionMat);
-          updateProjectionParametersFromInverseViewAndProjection(out);
+          setDepthRange(relativeDepthRange);
           const { viewMatrix } = out;
+          // Geospatial map views span all depths.
+          const mapDepthRange = geoView?.getMapViewDepthRange(
+            viewMatrix,
+            out.displayDimensionRenderInfo.displayDimensionIndices,
+            out.globalPosition,
+          );
+          if (
+            mapDepthRange !== undefined &&
+            mapDepthRange > relativeDepthRange
+          ) {
+            setDepthRange(mapDepthRange);
+          }
           for (let i = 0; i < 3; ++i) {
             const x = (viewportNormalInGlobalCoordinates[i] =
               viewMatrix[i * 4 + 2]);
@@ -287,6 +313,11 @@ export class SliceView extends Base {
 
     this.registerDisposer(navigationState);
     this.registerDisposer(this.projectionParameters);
+    if (geoView !== undefined) {
+      this.registerDisposer(
+        geoView.changed.add(() => this.projectionParameters.update()),
+      );
+    }
     this.registerDisposer(
       this.projectionParameters.changed.add((oldValue, newValue) => {
         if (
@@ -594,7 +625,11 @@ export class SliceView extends Base {
     );
     for (const scales of transformedSources) {
       for (const tsource of scales) {
-        layer.addSource(tsource.source, tsource.chunkTransform);
+        layer.addSource(
+          tsource.source,
+          tsource.chunkTransform,
+          tsource.geo?.warp,
+        );
       }
     }
     return transformedSources;
@@ -894,6 +929,12 @@ export interface SliceViewSingleResolutionSource<
    * to `chunkSource.spec.upperVoxelBound`.
    */
   upperClipBound?: Float32Array;
+
+  /**
+   * Nonlinear geospatial warp from the multiscale coordinate space to the (affine) coordinate
+   * space seen by the rest of Neuroglancer.  See `src/geo/source_warp.ts`.
+   */
+  geoWarp?: GeoWarpSpec;
 }
 
 export abstract class MultiscaleSliceViewChunkSource<
@@ -957,11 +998,16 @@ export function getVolumetricTransformedSources(
         factor;
     }
   }
-  const allSources = getSources({
-    displayRank: displayRank,
-    multiscaleToViewTransform: multiscaleToViewTransform,
-    modelChannelDimensionIndices: transform.channelToRenderLayerDimensions,
-  });
+  let allSources: SliceViewSingleResolutionSource<SliceViewChunkSource>[][];
+  try {
+    allSources = getSources({
+      displayRank: displayRank,
+      multiscaleToViewTransform: multiscaleToViewTransform,
+      modelChannelDimensionIndices: transform.channelToRenderLayerDimensions,
+    });
+  } catch (e) {
+    return returnError((e as Error).message);
+  }
   const { voxelPhysicalScales: globalScales } = displayDimensionRenderInfo;
   try {
     const getTransformedSource = (
@@ -1072,6 +1118,16 @@ export function getVolumetricTransformedSources(
         effectiveVoxelSize[i] = effectiveVoxelSizeValues[i];
       }
       effectiveVoxelSize.fill(1, displayRank);
+      const { geoWarp } = singleResolutionSource;
+      const geo =
+        geoWarp === undefined
+          ? undefined
+          : makeGeoTransformedSourceInfo(
+              geoWarp,
+              singleResolutionSource.chunkToMultiscaleTransform,
+              spec.rank,
+              chunkDisplayDimensionIndices,
+            );
       return {
         layerRank,
         lowerClipBound,
@@ -1094,6 +1150,7 @@ export function getVolumetricTransformedSources(
         fixedPositionWithinChunk: new Uint32Array(chunkRank),
         chunkTransform,
         chunkDisplayTransform,
+        geo,
       };
     };
     return allSources.map((scales) =>

@@ -30,6 +30,17 @@ import type {
   FrontendTransformedSource,
   SliceView,
 } from "#src/sliceview/frontend.js";
+import type { GeoChunkMesh } from "#src/sliceview/geo.js";
+import {
+  beginGeoMeshFrame,
+  GEO_MESH_BUILD_BUDGET_MS,
+  correctGeoChunkPosition,
+  getGeoChunkMesh,
+  getGeoChunkMeshCopies,
+  GeoRenderingMode,
+  getGeoRenderingMode,
+  getGeoViewParameters,
+} from "#src/sliceview/geo.js";
 import type {
   SliceViewRenderContext,
   SliceViewRenderLayerOptions,
@@ -39,6 +50,7 @@ import type { VolumeSourceOptions } from "#src/sliceview/volume/base.js";
 import type {
   ChunkFormat,
   MultiscaleVolumeChunkSource,
+  VolumeChunk,
   VolumeChunkSource,
 } from "#src/sliceview/volume/frontend.js";
 import { defineChunkDataShaderAccess } from "#src/sliceview/volume/frontend.js";
@@ -49,6 +61,7 @@ import {
 } from "#src/trackable_value.js";
 import { mat4, vec3 } from "#src/util/geom.js";
 import { getObjectId } from "#src/util/object_id.js";
+import { GLBuffer } from "#src/webgl/buffer.js";
 import type { GL } from "#src/webgl/context.js";
 import type {
   ParameterizedContextDependentShaderGetter,
@@ -90,7 +103,205 @@ const CHUNK_POSITION_EPSILON = 1e-3;
 
 const tempMat4 = mat4.create();
 
-function defineVolumeShader(builder: ShaderBuilder, wireFrame: boolean) {
+/**
+ * GPU buffers of the mesh of a tile on the globe (see `computeGlobeTileMesh`).
+ */
+export interface GlobeTileGpuMesh {
+  /**
+   * ECEF coordinates of the origin of the mesh.
+   */
+  origin: Float64Array;
+  positionHigh: GLBuffer;
+  positionLow: GLBuffer;
+  chunkPosition: GLBuffer;
+  indices: GLBuffer;
+  numIndices: number;
+}
+
+/**
+ * A tile to draw with `SliceViewVolumeRenderLayer.drawGlobeTiles`.
+ */
+export interface GlobeTileDrawInfo {
+  tsource: FrontendTransformedSource;
+  chunk: VolumeChunk;
+  mesh: GlobeTileGpuMesh;
+}
+
+/**
+ * Attribute locations used for rendering georeferenced sources.  Location 0 is reserved for the
+ * dummy vertex id attribute (see `vertex_id.ts`).
+ */
+const GEO_POSITION_ATTRIBUTE_LOCATION = 1;
+const GEO_POSITION_LOW_ATTRIBUTE_LOCATION = 2;
+const GEO_CHUNK_POSITION_ATTRIBUTE_LOCATION = 3;
+
+/**
+ * Defines the vertex shader for rendering georeferenced sources, which are drawn as triangle meshes
+ * computed on the CPU (see `src/sliceview/geo.ts`) rather than as box-plane intersections.
+ */
+function defineGeoVolumeShader(
+  builder: ShaderBuilder,
+  wireFrame: boolean,
+  globe = false,
+) {
+  // Display position of the vertex relative to the origin of the chunk mesh, split into high and
+  // low parts (each representable in single precision) to preserve precision for meshes far from
+  // the center of the view.
+  builder.addAttribute(
+    "highp vec3",
+    "aGeoPosition",
+    GEO_POSITION_ATTRIBUTE_LOCATION,
+  );
+  builder.addAttribute(
+    "highp vec3",
+    "aGeoPositionLow",
+    GEO_POSITION_LOW_ATTRIBUTE_LOCATION,
+  );
+  // Position within the chunk along the two georeferenced chunk dimensions.
+  builder.addAttribute(
+    "highp vec2",
+    "aGeoChunkPosition",
+    GEO_CHUNK_POSITION_ATTRIBUTE_LOCATION,
+  );
+  builder.addUniform("highp mat4", "uProjectionMatrix");
+  // Display offset of the mesh origin relative to the center of the view (including the offset of
+  // the current world copy), split into high and low parts.
+  builder.addUniform("highp vec3", "uGeoOffset");
+  builder.addUniform("highp vec3", "uGeoOffsetLow");
+  builder.addUniform("highp vec3", "uGeoChunkAxisX");
+  builder.addUniform("highp vec3", "uGeoChunkAxisY");
+  builder.addUniform("highp vec3", "uGeoChunkBase");
+  builder.addUniform("highp vec3", "uChunkDataSize");
+  if (wireFrame) {
+    builder.setVertexMain(`
+gl_Position = uProjectionMatrix * vec4(
+    (aGeoPosition + uGeoOffset) + (aGeoPositionLow + uGeoOffsetLow), 1.0);
+gl_Position.z = 0.0;
+`);
+    builder.setFragmentMain(`
+emit(vec4(1.0, 1.0, 1.0, 0.5));
+`);
+    return;
+  }
+  builder.addVarying("highp vec3", "vChunkPosition");
+  // On the globe, the depth is retained for picking.
+  builder.setVertexMain(`
+gl_Position = uProjectionMatrix * vec4(
+    (aGeoPosition + uGeoOffset) + (aGeoPositionLow + uGeoOffsetLow), 1.0);
+${globe ? "" : "gl_Position.z = 0.0;"}
+vChunkPosition = uGeoChunkBase + aGeoChunkPosition.x * uGeoChunkAxisX +
+    aGeoChunkPosition.y * uGeoChunkAxisY;
+`);
+}
+
+/**
+ * GPU buffers for a georeferenced chunk mesh.  Vertex positions are stored in display
+ * coordinates relative to the mesh origin, such that they are small enough for single precision.
+ */
+class GeoChunkGpuMesh {
+  position: GLBuffer;
+  positionLow: GLBuffer;
+  chunkPosition: GLBuffer;
+  triangles: GLBuffer;
+  private lines: GLBuffer | undefined;
+  numTriangleIndices: number;
+  numLineIndices: number;
+  originX: number;
+  originY: number;
+
+  constructor(
+    private gl: GL,
+    private mesh: GeoChunkMesh,
+    transform: mat4,
+    si: number,
+    sj: number,
+  ) {
+    const { numVertices, warped, warpedLower, indices } = mesh;
+    const originX = (this.originX = warpedLower[0]);
+    const originY = (this.originY = warpedLower[1]);
+    const positions = new Float32Array(numVertices * 3);
+    const positionsLow = new Float32Array(numVertices * 3);
+    for (let v = 0; v < numVertices; ++v) {
+      const wx = warped[2 * v] - originX;
+      const wy = warped[2 * v + 1] - originY;
+      for (let i = 0; i < 3; ++i) {
+        const d = transform[si * 4 + i] * wx + transform[sj * 4 + i] * wy;
+        const high = Math.fround(d);
+        positions[3 * v + i] = high;
+        positionsLow[3 * v + i] = d - high;
+      }
+    }
+    this.position = GLBuffer.fromData(gl, positions);
+    this.positionLow = GLBuffer.fromData(gl, positionsLow);
+    this.chunkPosition = GLBuffer.fromData(gl, mesh.positionWithinChunk);
+    this.triangles = GLBuffer.fromData(
+      gl,
+      indices,
+      WebGL2RenderingContext.ELEMENT_ARRAY_BUFFER,
+    );
+    this.numTriangleIndices = indices.length;
+    this.numLineIndices = indices.length * 2;
+  }
+
+  getLines() {
+    let { lines } = this;
+    if (lines === undefined) {
+      const { indices } = this.mesh;
+      const lineIndices = new Uint32Array(indices.length * 2);
+      for (let t = 0, o = 0; t < indices.length; t += 3) {
+        const a = indices[t];
+        const b = indices[t + 1];
+        const c = indices[t + 2];
+        lineIndices[o++] = a;
+        lineIndices[o++] = b;
+        lineIndices[o++] = b;
+        lineIndices[o++] = c;
+        lineIndices[o++] = c;
+        lineIndices[o++] = a;
+      }
+      lines = this.lines = GLBuffer.fromData(
+        this.gl,
+        lineIndices,
+        WebGL2RenderingContext.ELEMENT_ARRAY_BUFFER,
+      );
+    }
+    return lines;
+  }
+
+  dispose() {
+    this.position.dispose();
+    this.positionLow.dispose();
+    this.chunkPosition.dispose();
+    this.triangles.dispose();
+    this.lines?.dispose();
+  }
+}
+
+function getGeoChunkGpuMesh(
+  gl: GL,
+  mesh: GeoChunkMesh,
+  transform: mat4,
+  si: number,
+  sj: number,
+): GeoChunkGpuMesh {
+  let gpuMesh = mesh.gpuMesh as GeoChunkGpuMesh | undefined;
+  if (gpuMesh === undefined) {
+    gpuMesh = new GeoChunkGpuMesh(gl, mesh, transform, si, sj);
+    mesh.gpuMesh = gpuMesh;
+  }
+  return gpuMesh;
+}
+
+function defineVolumeShader(
+  builder: ShaderBuilder,
+  wireFrame: boolean,
+  geo: boolean,
+  globe: boolean,
+) {
+  if (geo) {
+    defineGeoVolumeShader(builder, wireFrame, globe);
+    return;
+  }
   defineVertexId(builder);
   defineBoundingBoxCrossSectionShader(builder);
 
@@ -335,7 +546,12 @@ export abstract class SliceViewVolumeRenderLayer<
 > extends SliceViewRenderLayer<VolumeChunkSource, VolumeSourceOptions> {
   declare multiscaleSource: MultiscaleVolumeChunkSource;
   protected shaderGetter: ParameterizedContextDependentShaderGetter<
-    { chunkFormat: ChunkFormat | null; dataHistogramsEnabled: boolean },
+    {
+      chunkFormat: ChunkFormat | null;
+      dataHistogramsEnabled: boolean;
+      geo: boolean;
+      globe: boolean;
+    },
     ShaderParameters,
     ShaderContext
   >;
@@ -392,20 +608,38 @@ export abstract class SliceViewVolumeRenderLayer<
         context: {
           chunkFormat: ChunkFormat | null;
           dataHistogramsEnabled: boolean;
+          geo: boolean;
+          globe: boolean;
         },
         parameters: ShaderParameters,
         extraParameters: ShaderContext,
       ) => {
-        const { chunkFormat, dataHistogramsEnabled } = context;
+        const { chunkFormat, dataHistogramsEnabled, geo, globe } = context;
         const { dataHistogramChannelSpecifications, numChannelDimensions } =
           extraParameters;
-        defineVolumeShader(builder, chunkFormat === null);
-        builder.addOutputBuffer("vec4", "v4f_fragData0", 0);
-        builder.addFragmentCode(`
+        defineVolumeShader(builder, chunkFormat === null, geo, globe);
+        if (globe) {
+          // Drawn directly into the offscreen framebuffer of the perspective panel (see
+          // `perspectivePanelEmit`).  The pick buffer is left unchanged by blending.
+          builder.addOutputBuffer("vec4", "out_color", 0);
+          builder.addOutputBuffer("highp vec4", "out_z", 1);
+          builder.addOutputBuffer("highp vec4", "out_pickId", 2);
+          builder.addFragmentCode(`
+void emit(vec4 color) {
+  out_color = color;
+  float zValue = 1.0 - gl_FragCoord.z;
+  out_z = vec4(zValue, zValue, zValue, color.a > 0.0 ? 1.0 : 0.0);
+  out_pickId = vec4(0.0);
+}
+`);
+        } else {
+          builder.addOutputBuffer("vec4", "v4f_fragData0", 0);
+          builder.addFragmentCode(`
 void emit(vec4 color) {
   v4f_fragData0 = color;
 }
 `);
+        }
         if (chunkFormat === null) {
           return;
         }
@@ -416,7 +650,7 @@ void emit(vec4 color) {
           "vChunkPosition",
         );
         const numHistograms = dataHistogramChannelSpecifications.length;
-        if (dataHistogramsEnabled && numHistograms > 0) {
+        if (dataHistogramsEnabled && numHistograms > 0 && !globe) {
           let histogramCollectionCode = "";
           const { dataType } = chunkFormat;
           for (let i = 0; i < numHistograms; ++i) {
@@ -456,7 +690,7 @@ void main() {
         this.defineShader(builder, parameters);
       },
       getContextKey: (context) =>
-        `${context.chunkFormat?.shaderKey}/${context.dataHistogramsEnabled}`,
+        `${context.chunkFormat?.shaderKey}/${context.dataHistogramsEnabled}/${context.geo}/${context.globe}`,
     });
     this.tempChunkPosition = new Float32Array(multiscaleSource.rank);
     this.initializeCounterpart();
@@ -466,9 +700,46 @@ void main() {
     return this.multiscaleSource.dataType;
   }
 
-  getValueAt(globalPosition: Float32Array) {
+  /**
+   * Returns the georeferenced sources that are not shown (`GeoRenderingMode.HIDDEN`) in
+   * `sliceView`, e.g. 2-d map tiles in a vertical section.
+   */
+  private getHiddenGeoSources(
+    sliceView: SliceView | undefined,
+  ): Set<unknown> | undefined {
+    if (sliceView === undefined) return undefined;
+    const layerInfo = sliceView.visibleLayers.get(this);
+    if (layerInfo === undefined) return undefined;
+    const projectionParameters = sliceView.projectionParameters.value;
+    let hidden: Set<unknown> | undefined;
+    for (const scales of layerInfo.allSources) {
+      for (const tsource of scales) {
+        if (tsource.geo === undefined) continue;
+        const mode = getGeoRenderingMode(
+          tsource,
+          projectionParameters,
+          getNormalizedChunkLayout(projectionParameters, tsource.chunkLayout),
+        );
+        if (mode === GeoRenderingMode.HIDDEN) {
+          (hidden ??= new Set()).add(tsource.source);
+        }
+      }
+    }
+    return hidden;
+  }
+
+  /**
+   * @param pickState If it specifies the slice view in which `globalPosition` was picked, sources
+   *     that are not shown in that view are skipped.
+   */
+  getValueAt(
+    globalPosition: Float32Array,
+    pickState?: { pickedSliceView?: SliceView },
+  ) {
     const { tempChunkPosition } = this;
-    for (const { source, chunkTransform } of this.visibleSourcesList) {
+    const hiddenSources = this.getHiddenGeoSources(pickState?.pickedSliceView);
+    for (const { source, chunkTransform, geoWarp } of this.visibleSourcesList) {
+      if (hiddenSources?.has(source)) continue;
       if (
         !getChunkPositionFromCombinedGlobalLocalPositions(
           tempChunkPosition,
@@ -476,6 +747,17 @@ void main() {
           this.localPosition.value,
           chunkTransform.layerRank,
           chunkTransform.combinedGlobalLocalToChunkTransform,
+        )
+      ) {
+        continue;
+      }
+      if (
+        geoWarp !== undefined &&
+        !correctGeoChunkPosition(
+          geoWarp,
+          tempChunkPosition,
+          source.spec.lowerVoxelBound,
+          source.spec.upperVoxelBound,
         )
       ) {
         continue;
@@ -492,6 +774,7 @@ void main() {
     sliceView: SliceView,
     chunkFormat: ChunkFormat | null,
     projectionParameters: ProjectionParameters,
+    geo = false,
   ): ParameterizedShaderGetterResult<ShaderParameters, ShaderContext> {
     const { gl } = this;
     const dataHistogramsEnabled =
@@ -499,11 +782,15 @@ void main() {
     const shaderResult = this.shaderGetter({
       chunkFormat,
       dataHistogramsEnabled,
+      geo,
+      globe: false,
     });
     const { shader, parameters, fallback } = shaderResult;
     if (shader !== null) {
       shader.bind();
-      initializeShader(shader, projectionParameters, chunkFormat === null);
+      if (!geo) {
+        initializeShader(shader, projectionParameters, chunkFormat === null);
+      }
       if (chunkFormat !== null) {
         if (dataHistogramsEnabled) {
           const { dataHistogramChannelSpecifications } =
@@ -549,6 +836,397 @@ void main() {
     parameters;
   }
 
+  /**
+   * Draws the visible chunks of a georeferenced source as adaptive triangle meshes.
+   *
+   * @returns `[presentCount, notPresentCount]`.
+   */
+  private drawGeoSource(
+    renderContext: SliceViewRenderContext,
+    shader: ShaderProgram,
+    transformedSource: FrontendTransformedSource,
+    chunkLayout: ChunkLayout,
+    chunkFormat: ChunkFormat | null,
+  ): [number, number] {
+    const { sliceView, projectionParameters, wireFrame } = renderContext;
+    const geo = transformedSource.geo!;
+    const view = getGeoViewParameters(geo, projectionParameters, chunkLayout);
+    if (view === undefined) return [0, 0];
+    const { gl } = this;
+    const { si, sj, sk, thirdCoordinate } = view;
+    const source = transformedSource.source as VolumeChunkSource;
+    const { chunks } = source;
+    const chunkRank = source.spec.rank;
+    const {
+      chunkDisplayDimensionIndices,
+      fixedPositionWithinChunk,
+      chunkTransform: { channelToChunkDimensionIndices },
+    } = transformedSource;
+    const chunkDimX = chunkDisplayDimensionIndices[si];
+    const chunkDimY = chunkDisplayDimensionIndices[sj];
+    const chunkDimK = chunkDisplayDimensionIndices[sk];
+    // The static part of the chunk layout transform, used for the vertex positions stored in the
+    // (cached) chunk mesh buffers.
+    const staticTransform = transformedSource.chunkLayout.transform;
+    const { transform } = chunkLayout;
+    const { invViewMatrix, viewProjectionMat } = projectionParameters;
+    const center = [invViewMatrix[12], invViewMatrix[13], invViewMatrix[14]];
+
+    // Projection matrix for center-relative positions: viewProjection * translate(center).
+    {
+      const m = tempMat4;
+      mat4.copy(m, viewProjectionMat);
+      for (let i = 0; i < 4; ++i) {
+        m[12 + i] =
+          viewProjectionMat[i] * center[0] +
+          viewProjectionMat[4 + i] * center[1] +
+          viewProjectionMat[8 + i] * center[2] +
+          viewProjectionMat[12 + i];
+      }
+      gl.uniformMatrix4fv(shader.uniform("uProjectionMatrix"), false, m);
+    }
+
+    // Display displacement of one world period.
+    const worldPeriodDisplay = [0, 0, 0];
+    const { worldPeriodSubspace } = view;
+    if (worldPeriodSubspace !== undefined) {
+      for (let i = 0; i < 3; ++i) {
+        let sum = 0;
+        for (let j = 0; j < 3; ++j) {
+          sum += transform[j * 4 + i] * worldPeriodSubspace[j];
+        }
+        worldPeriodDisplay[i] = sum;
+      }
+    }
+
+    this.vertexIdHelper.disable();
+    const axisX = vec3.create();
+    const axisY = vec3.create();
+    axisX[si] = 1;
+    axisY[sj] = 1;
+    gl.uniform3fv(shader.uniform("uGeoChunkAxisX"), axisX);
+    gl.uniform3fv(shader.uniform("uGeoChunkAxisY"), axisY);
+    const chunkBase = vec3.create();
+    const chunkDataDisplaySize = vec3.create();
+    const { size } = chunkLayout;
+    for (const chunkDim of chunkDisplayDimensionIndices) {
+      fixedPositionWithinChunk[chunkDim] = 0;
+    }
+    let newSource = true;
+    const drawMode = wireFrame
+      ? WebGL2RenderingContext.LINES
+      : WebGL2RenderingContext.TRIANGLES;
+    let presentCount = 0;
+    let notPresentCount = 0;
+    beginGeoMeshFrame(transformedSource);
+    const meshDeadline = performance.now() + GEO_MESH_BUILD_BUDGET_MS;
+    let meshesDeferred = false;
+    sliceView.forEachVisibleChunk(transformedSource, chunkLayout, (key) => {
+      const chunk = chunks.get(key) as VolumeChunk | undefined;
+      if (chunk === undefined || chunk.state !== ChunkState.GPU_MEMORY) {
+        ++notPresentCount;
+        return;
+      }
+      ++presentCount;
+      // Chunks without data (e.g. missing map tiles) are not drawn, such that coarser resolutions
+      // remain visible rather than being hidden by transparent fill values.
+      if ((chunk as { data?: unknown }).data === null) return;
+      const { chunkGridPosition, chunkDataSize } = chunk;
+      const mesh = getGeoChunkMesh(
+        transformedSource,
+        chunkLayout,
+        `${chunkGridPosition[chunkDimX]},${chunkGridPosition[chunkDimY]}`,
+        chunkGridPosition[chunkDimX],
+        chunkGridPosition[chunkDimY],
+        si,
+        sj,
+        performance.now() < meshDeadline,
+      );
+      if (mesh === undefined) {
+        // Exceeded the mesh computation budget for this frame.
+        meshesDeferred = true;
+        --presentCount;
+        ++notPresentCount;
+        return;
+      }
+      if (mesh.indices.length === 0) return;
+      const gpuMesh = getGeoChunkGpuMesh(gl, mesh, staticTransform, si, sj);
+      const copies = getGeoChunkMeshCopies(mesh, view);
+      if (copies.length === 0) return;
+      for (let i = 0; i < 3; ++i) {
+        const chunkDim = chunkDisplayDimensionIndices[i];
+        chunkDataDisplaySize[i] =
+          chunkDim === -1 || chunkDim >= chunkRank
+            ? 1
+            : chunkDataSize[chunkDim];
+      }
+      gl.uniform3fv(shader.uniform("uChunkDataSize"), chunkDataDisplaySize);
+      const chunkK =
+        chunkDimK === -1 || chunkDimK >= chunkRank
+          ? 0
+          : chunkGridPosition[chunkDimK];
+      chunkBase[sk] =
+        thirdCoordinate - chunkK * size[sk] + CHUNK_POSITION_EPSILON;
+      gl.uniform3fv(shader.uniform("uGeoChunkBase"), chunkBase);
+      if (chunkFormat !== null) {
+        chunkFormat.bindChunk(
+          gl,
+          shader,
+          chunk,
+          fixedPositionWithinChunk,
+          chunkDisplayDimensionIndices,
+          channelToChunkDimensionIndices,
+          newSource,
+        );
+      }
+      newSource = false;
+      gpuMesh.position.bindToVertexAttrib(GEO_POSITION_ATTRIBUTE_LOCATION, 3);
+      gpuMesh.positionLow.bindToVertexAttrib(
+        GEO_POSITION_LOW_ATTRIBUTE_LOCATION,
+        3,
+      );
+      gpuMesh.chunkPosition.bindToVertexAttrib(
+        GEO_CHUNK_POSITION_ATTRIBUTE_LOCATION,
+        2,
+      );
+      const indexBuffer = wireFrame ? gpuMesh.getLines() : gpuMesh.triangles;
+      indexBuffer.bind();
+      const indexCount = wireFrame
+        ? gpuMesh.numLineIndices
+        : gpuMesh.numTriangleIndices;
+      // Offset of the mesh origin relative to the center of the view, computed in double
+      // precision.
+      const { originX, originY } = gpuMesh;
+      for (let c = 0; c < copies.length; c += 3) {
+        const k = copies[c];
+        const offset = [0, 0, 0];
+        for (let i = 0; i < 3; ++i) {
+          offset[i] =
+            transform[si * 4 + i] * originX +
+            transform[sj * 4 + i] * originY +
+            transform[sk * 4 + i] * thirdCoordinate +
+            transform[12 + i] -
+            center[i] +
+            k * worldPeriodDisplay[i];
+        }
+        const high0 = Math.fround(offset[0]);
+        const high1 = Math.fround(offset[1]);
+        const high2 = Math.fround(offset[2]);
+        gl.uniform3f(shader.uniform("uGeoOffset"), high0, high1, high2);
+        gl.uniform3f(
+          shader.uniform("uGeoOffsetLow"),
+          offset[0] - high0,
+          offset[1] - high1,
+          offset[2] - high2,
+        );
+        gl.drawElements(
+          drawMode,
+          indexCount,
+          WebGL2RenderingContext.UNSIGNED_INT,
+          0,
+        );
+      }
+    });
+    gl.disableVertexAttribArray(GEO_POSITION_ATTRIBUTE_LOCATION);
+    gl.disableVertexAttribArray(GEO_POSITION_LOW_ATTRIBUTE_LOCATION);
+    gl.disableVertexAttribArray(GEO_CHUNK_POSITION_ATTRIBUTE_LOCATION);
+    this.vertexIdHelper.enable();
+    if (meshesDeferred) {
+      // Draw the remaining chunks in the next frame.
+      requestAnimationFrame(() => this.redrawNeeded.dispatch());
+    }
+    return [presentCount, notPresentCount];
+  }
+
+  /**
+   * Draws tiles of georeferenced sources on the globe of the perspective panel (see
+   * `src/sliceview/globe.ts`), into the offscreen framebuffer of the panel.  The caller sets up
+   * blending, culling, and stencil state.  The `fixedPositionWithinChunk` of each transformed source
+   * must be up to date (see `updateFixedCurPositionInChunks`); its display dimensions are reset.
+   *
+   * @param viewProjectionMat Transform from render coordinates (ECEF relative to `globeTarget`) to
+   *     clip coordinates.
+   */
+  drawGlobeTiles(
+    viewProjectionMat: mat4,
+    globeTarget: Float64Array,
+    tiles: Iterable<GlobeTileDrawInfo>,
+    beforeDrawTile?: (tile: GlobeTileDrawInfo) => void,
+  ) {
+    const { gl } = this;
+    this.vertexIdHelper.disable();
+    let prevChunkFormat: ChunkFormat | undefined;
+    let prevSource: FrontendTransformedSource | undefined;
+    let shader: ShaderProgram | null = null;
+    const chunkBase = vec3.create();
+    const chunkDataDisplaySize = vec3.create();
+    const axis = vec3.create();
+    const positionsK = new Map<FrontendTransformedSource, number>();
+    for (const tile of tiles) {
+      const { tsource, chunk, mesh } = tile;
+      const source = tsource.source as VolumeChunkSource;
+      const { chunkFormat } = source;
+      const geo = tsource.geo!;
+      const [si, sj] = geo.subspaceIndices!;
+      const sk = geo.thirdSubspaceIndex;
+      const {
+        chunkDisplayDimensionIndices,
+        fixedPositionWithinChunk,
+        chunkTransform: { channelToChunkDimensionIndices },
+      } = tsource;
+      const chunkRank = source.spec.rank;
+      let newSource = false;
+      if (chunkFormat !== prevChunkFormat) {
+        prevChunkFormat = chunkFormat;
+        prevSource = undefined;
+        const {
+          shader: newShader,
+          parameters,
+          fallback,
+        } = this.shaderGetter({
+          chunkFormat,
+          dataHistogramsEnabled: false,
+          geo: true,
+          globe: true,
+        });
+        shader = newShader;
+        if (shader !== null) {
+          shader.bind();
+          // The slice view is not used by the shader initialization of image layers.
+          this.initializeShader(
+            undefined as unknown as SliceView,
+            shader,
+            parameters,
+            fallback,
+          );
+          chunkFormat.beginDrawing(gl, shader);
+          gl.uniformMatrix4fv(
+            shader.uniform("uProjectionMatrix"),
+            false,
+            viewProjectionMat,
+          );
+        }
+      }
+      if (shader === null) continue;
+      if (tsource !== prevSource) {
+        prevSource = tsource;
+        newSource = true;
+        vec3.set(axis, 0, 0, 0);
+        axis[si] = 1;
+        gl.uniform3fv(shader.uniform("uGeoChunkAxisX"), axis);
+        vec3.set(axis, 0, 0, 0);
+        axis[sj] = 1;
+        gl.uniform3fv(shader.uniform("uGeoChunkAxisY"), axis);
+        // Position within the chunk along the third display dimension, saved before the display
+        // dimensions of `fixedPositionWithinChunk` are zeroed for `bindChunk`.
+        let positionK = positionsK.get(tsource);
+        if (positionK === undefined) {
+          const chunkDimK = chunkDisplayDimensionIndices[sk];
+          positionK =
+            chunkDimK === -1 || chunkDimK >= chunkRank
+              ? 0
+              : fixedPositionWithinChunk[chunkDimK];
+          positionsK.set(tsource, positionK);
+          for (const chunkDim of chunkDisplayDimensionIndices) {
+            fixedPositionWithinChunk[chunkDim] = 0;
+          }
+        }
+        vec3.set(chunkBase, 0, 0, 0);
+        chunkBase[sk] = positionK + CHUNK_POSITION_EPSILON;
+        gl.uniform3fv(shader.uniform("uGeoChunkBase"), chunkBase);
+      }
+      beforeDrawTile?.(tile);
+      const { chunkDataSize } = chunk;
+      for (let i = 0; i < 3; ++i) {
+        const chunkDim = chunkDisplayDimensionIndices[i];
+        chunkDataDisplaySize[i] =
+          chunkDim === -1 || chunkDim >= chunkRank
+            ? 1
+            : chunkDataSize[chunkDim];
+      }
+      gl.uniform3fv(shader.uniform("uChunkDataSize"), chunkDataDisplaySize);
+      chunkFormat.bindChunk(
+        gl,
+        shader,
+        chunk,
+        fixedPositionWithinChunk,
+        chunkDisplayDimensionIndices,
+        channelToChunkDimensionIndices,
+        newSource,
+      );
+      const { origin } = mesh;
+      const ox = origin[0] - globeTarget[0];
+      const oy = origin[1] - globeTarget[1];
+      const oz = origin[2] - globeTarget[2];
+      const hx = Math.fround(ox);
+      const hy = Math.fround(oy);
+      const hz = Math.fround(oz);
+      gl.uniform3f(shader.uniform("uGeoOffset"), hx, hy, hz);
+      gl.uniform3f(shader.uniform("uGeoOffsetLow"), ox - hx, oy - hy, oz - hz);
+      mesh.positionHigh.bindToVertexAttrib(GEO_POSITION_ATTRIBUTE_LOCATION, 3);
+      mesh.positionLow.bindToVertexAttrib(
+        GEO_POSITION_LOW_ATTRIBUTE_LOCATION,
+        3,
+      );
+      mesh.chunkPosition.bindToVertexAttrib(
+        GEO_CHUNK_POSITION_ATTRIBUTE_LOCATION,
+        2,
+      );
+      mesh.indices.bind();
+      gl.drawElements(
+        WebGL2RenderingContext.TRIANGLES,
+        mesh.numIndices,
+        WebGL2RenderingContext.UNSIGNED_INT,
+        0,
+      );
+    }
+    gl.disableVertexAttribArray(GEO_POSITION_ATTRIBUTE_LOCATION);
+    gl.disableVertexAttribArray(GEO_POSITION_LOW_ATTRIBUTE_LOCATION);
+    gl.disableVertexAttribArray(GEO_CHUNK_POSITION_ATTRIBUTE_LOCATION);
+    this.vertexIdHelper.enable();
+  }
+
+  private updateRenderScaleHistogram(
+    transformedSource: FrontendTransformedSource,
+    projectionParameters: ProjectionParameters & { pixelSize: number },
+    presentCount: number,
+    notPresentCount: number,
+  ) {
+    const { renderScaleHistogram } = this;
+    if (
+      (presentCount === 0 && notPresentCount === 0) ||
+      renderScaleHistogram === undefined
+    ) {
+      return;
+    }
+    const { effectiveVoxelSize } = transformedSource;
+    // TODO(jbms): replace median hack with more accurate estimate, e.g. based on ellipsoid
+    // cross section.
+    const medianVoxelSize = medianOf3(
+      effectiveVoxelSize[0],
+      effectiveVoxelSize[1],
+      effectiveVoxelSize[2],
+    );
+    if (presentCount > 0) {
+      const medianStoredVoxelSize = this.highestResolutionLoadedVoxelSize
+        ? medianOf3(
+            this.highestResolutionLoadedVoxelSize[0],
+            this.highestResolutionLoadedVoxelSize[1],
+            this.highestResolutionLoadedVoxelSize[2],
+          )
+        : Infinity;
+      if (medianVoxelSize <= medianStoredVoxelSize) {
+        this.highestResolutionLoadedVoxelSize = vec3.clone(effectiveVoxelSize);
+      }
+    }
+    renderScaleHistogram.add(
+      medianVoxelSize,
+      medianVoxelSize / projectionParameters.pixelSize,
+      presentCount,
+      notPresentCount,
+    );
+  }
+
   draw(renderContext: SliceViewRenderContext) {
     const { sliceView } = renderContext;
     const layerInfo = sliceView.visibleLayers.get(this)!;
@@ -579,6 +1257,7 @@ void main() {
     >;
     let shader: ShaderProgram | null = null;
     let prevChunkFormat: ChunkFormat | undefined | null;
+    let prevGeo = false;
     // Size of chunk (in voxels) in the "display" subspace of the chunk coordinate space.
     const chunkDataDisplaySize = vec3.create();
 
@@ -606,17 +1285,45 @@ void main() {
         fixedPositionWithinChunk[chunkDim] = 0;
       }
       const chunkFormat = wireFrame ? null : source.chunkFormat;
-      if (chunkFormat !== prevChunkFormat) {
+      const geoMode = getGeoRenderingMode(
+        transformedSource,
+        projectionParameters,
+        chunkLayout,
+      );
+      if (geoMode === GeoRenderingMode.HIDDEN) continue;
+      const geo = geoMode === GeoRenderingMode.WARPED;
+      if (chunkFormat !== prevChunkFormat || geo !== prevGeo) {
         prevChunkFormat = chunkFormat;
+        prevGeo = geo;
         endShader();
         shaderResult = this.beginChunkFormat(
           sliceView,
           chunkFormat,
           projectionParameters,
+          geo,
         );
         shader = shaderResult.shader;
       }
       if (shader === null) continue;
+      if (geo) {
+        if (chunkFormat !== null) {
+          chunkFormat.beginSource(gl, shader);
+        }
+        const [presentCount, notPresentCount] = this.drawGeoSource(
+          renderContext,
+          shader,
+          transformedSource,
+          chunkLayout,
+          chunkFormat,
+        );
+        this.updateRenderScaleHistogram(
+          transformedSource,
+          projectionParameters,
+          presentCount,
+          notPresentCount,
+        );
+        continue;
+      }
       const chunks = source.chunks;
 
       chunkDataDisplaySize.fill(1);
@@ -681,38 +1388,12 @@ void main() {
           ++notPresentCount;
         }
       });
-
-      if (
-        (presentCount !== 0 || notPresentCount !== 0) &&
-        renderScaleHistogram !== undefined
-      ) {
-        const { effectiveVoxelSize } = transformedSource;
-        // TODO(jbms): replace median hack with more accurate estimate, e.g. based on ellipsoid
-        // cross section.
-        const medianVoxelSize = medianOf3(
-          effectiveVoxelSize[0],
-          effectiveVoxelSize[1],
-          effectiveVoxelSize[2],
-        );
-        if (presentCount > 0) {
-          const medianStoredVoxelSize = this.highestResolutionLoadedVoxelSize
-            ? medianOf3(
-                this.highestResolutionLoadedVoxelSize[0],
-                this.highestResolutionLoadedVoxelSize[1],
-                this.highestResolutionLoadedVoxelSize[2],
-              )
-            : Infinity;
-          if (medianVoxelSize <= medianStoredVoxelSize) {
-            this.highestResolutionLoadedVoxelSize = effectiveVoxelSize;
-          }
-        }
-        renderScaleHistogram.add(
-          medianVoxelSize,
-          medianVoxelSize / projectionParameters.pixelSize,
-          presentCount,
-          notPresentCount,
-        );
-      }
+      this.updateRenderScaleHistogram(
+        transformedSource,
+        projectionParameters,
+        presentCount,
+        notPresentCount,
+      );
     }
     endShader();
     this.vertexIdHelper.disable();

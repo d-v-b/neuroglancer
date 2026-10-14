@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import type { TerrainSource } from "#src/geo/terrain.js";
 import type { VisibleLayerInfo } from "#src/layer/index.js";
 import type { PerspectivePanel } from "#src/perspective_view/panel.js";
 import type {
@@ -27,6 +28,38 @@ import type { SharedObject } from "#src/worker_rpc.js";
 
 export type PerspectiveViewReadyRenderContext =
   ThreeDimensionalReadyRenderContext;
+
+/**
+ * Parameters for drawing in the globe view (see `src/geo/globe.ts`), whose render coordinates are
+ * ECEF coordinates relative to `target`.
+ */
+export interface GlobeRenderContext {
+  /**
+   * ECEF coordinates of the camera target.
+   */
+  target: Float64Array;
+  /**
+   * Converts a global position to ECEF coordinates.  Returns `false` if the position cannot be
+   * converted.
+   */
+  globalToEcef(globalPosition: ArrayLike<number>, out: Float64Array): boolean;
+  /**
+   * Changes whenever `globalToEcef` changes.
+   */
+  generation: number;
+}
+
+/**
+ * Terrain of the globe view, by which the surface is raised.
+ */
+export interface GlobeTerrainContext {
+  source: TerrainSource;
+  exaggeration: number;
+  /**
+   * Incremented when terrain tiles are loaded.
+   */
+  generation: number;
+}
 
 export interface PerspectiveViewRenderContext
   extends PerspectiveViewReadyRenderContext,
@@ -86,6 +119,19 @@ export interface PerspectiveViewRenderContext
    * Specifies how to assign the max projection emitter
    */
   maxProjectionEmit?: (builder: ShaderBuilder) => void | undefined;
+
+  /**
+   * Specified in globe mode, for layers that support it (see
+   * `PerspectiveViewRenderLayer.supportsGlobe`).
+   */
+  globe?: GlobeRenderContext;
+
+  /**
+   * For layers drawn on the globe (`PerspectiveViewRenderLayer.isGlobeLayer`), the index of the
+   * layer among them, and the terrain, if shown.
+   */
+  globeLayerIndex?: number;
+  globeTerrain?: GlobeTerrainContext;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-unsafe-declaration-merging
@@ -121,4 +167,14 @@ export interface PerspectiveViewRenderLayer<AttachmentState = unknown> {
   isAnnotation: boolean | undefined;
   backend: SharedObject | undefined;
   isVolumeRendering: boolean | undefined;
+  /**
+   * Indicates that the layer renders in the render coordinates of the globe view (see
+   * `src/geo/globe.ts`).  Such layers are drawn only in globe mode, and other layers only outside
+   * of globe mode.
+   */
+  isGlobeLayer: boolean | undefined;
+  /**
+   * Indicates that the layer is also drawn in globe mode, given `PerspectiveViewRenderContext.globe`.
+   */
+  supportsGlobe: boolean | undefined;
 }

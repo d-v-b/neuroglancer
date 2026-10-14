@@ -21,10 +21,29 @@ import type { PerspectiveViewAnnotationLayer } from "#src/annotation/renderlayer
 import { AxesLineHelper, computeAxisLineMatrix } from "#src/axes_lines.js";
 import type { DisplayContext } from "#src/display_context.js";
 import { applyRenderViewportToProjectionMatrix } from "#src/display_context.js";
+import type { GeoViewState } from "#src/geo/geo_view.js";
+import { lonLatToGlobal } from "#src/geo/geo_view.js";
+import type { GlobeCamera } from "#src/geo/globe.js";
+import {
+  clampGlobeCameraDistance,
+  computeGlobeCamera,
+  ecefToGeodetic,
+  getGlobeCameraRay,
+  getGlobePixelAngle,
+  getGlobeRotationBetween,
+  getLockedGlobeOrientation,
+  getNorthUpGlobeOrientation,
+  intersectGlobeRay,
+  panGlobeCameraLocked,
+  rotateGlobeCamera,
+} from "#src/geo/globe.js";
 import type { VisibleRenderLayerTracker } from "#src/layer/index.js";
 import { makeRenderedPanelVisibleLayerTracker } from "#src/layer/index.js";
 import { PERSPECTIVE_VIEW_RPC_ID } from "#src/perspective_view/base.js";
+import { GlobeBaseRenderer } from "#src/perspective_view/globe.js";
 import type {
+  GlobeRenderContext,
+  GlobeTerrainContext,
   PerspectiveViewReadyRenderContext,
   PerspectiveViewRenderContext,
 } from "#src/perspective_view/render_layer.js";
@@ -61,7 +80,7 @@ import {
   DownsamplingBasedOnFrameRateCalculator,
   FrameTimingMethod,
 } from "#src/util/framerate.js";
-import { kAxes, kZeroVec4, mat4, vec3, vec4 } from "#src/util/geom.js";
+import { kAxes, kZeroVec4, mat4, quat, vec3, vec4 } from "#src/util/geom.js";
 import { startRelativeMouseDrag } from "#src/util/mouse_drag.js";
 import type {
   TouchRotateInfo,
@@ -96,6 +115,20 @@ export interface PerspectiveViewerState extends RenderedDataViewerState {
   perspectiveViewBackgroundColor: TrackableRGB;
   hideCrossSectionBackground3D: TrackableBoolean;
   rpc: RPC;
+  geoView?: GeoViewState;
+}
+
+/**
+ * Minimum elevation angle (as the sine) of the globe camera above the horizon of its target.
+ */
+const GLOBE_MIN_CAMERA_ELEVATION = 0.05;
+
+/**
+ * Picking data of a frame of the globe view, which additionally records the ECEF coordinates of
+ * the origin of render coordinates.
+ */
+interface GlobePickingData extends FramePickingData {
+  globeTarget?: Float64Array;
 }
 
 export enum OffscreenTextures {
@@ -155,6 +188,67 @@ export function perspectivePanelEmit(builder: ShaderBuilder) {
   builder.addOutputBuffer("highp vec4", "out_z", OffscreenTextures.Z);
   builder.addOutputBuffer("highp vec4", "out_pickId", OffscreenTextures.PICK);
   builder.addFragmentCode(glsl_perspectivePanelEmit);
+}
+
+/**
+ * Opacity of annotations hidden by the surface of the globe (e.g. below the surface), which are
+ * drawn faded such that the Earth appears translucent to them.
+ */
+const GLOBE_XRAY_OPACITY = 0.45;
+
+/**
+ * Emitter for annotations hidden by the surface of the globe.  The depth buffer is left unchanged
+ * by blending, since the depth is computed with a different projection (see `drawGlobeLayers`).
+ */
+export function globeXrayEmit(builder: ShaderBuilder) {
+  builder.addOutputBuffer("vec4", "out_color", OffscreenTextures.COLOR);
+  builder.addOutputBuffer("highp vec4", "out_z", OffscreenTextures.Z);
+  builder.addOutputBuffer("highp vec4", "out_pickId", OffscreenTextures.PICK);
+  builder.addFragmentCode(`
+void emit(vec4 color, highp uint pickId) {
+  out_color = vec4(color.rgb, color.a * ${GLOBE_XRAY_OPACITY.toFixed(3)});
+  out_z = vec4(0.0);
+  float pickIdFloat = float(pickId);
+  out_pickId = vec4(pickIdFloat, pickIdFloat, pickIdFloat, 1.0);
+}
+`);
+}
+
+/**
+ * Returns a copy of the projection parameters of the globe view with the far plane moved to the
+ * center of the Earth, such that the parts of the Earth's interior beyond it (including the far
+ * side) are clipped.
+ */
+function getGlobeXrayProjectionParameters(
+  projectionParameters: ProjectionParameters,
+  target: Float64Array,
+): ProjectionParameters {
+  const { viewMatrix } = projectionParameters;
+  const projectionMat = mat4.clone(projectionParameters.projectionMat);
+  // View-space depth of the center of the Earth, at `-target` in render coordinates.
+  const centerDepth = -(
+    -viewMatrix[2] * target[0] -
+    viewMatrix[6] * target[1] -
+    viewMatrix[10] * target[2] +
+    viewMatrix[14]
+  );
+  const m10 = projectionMat[10];
+  const m14 = projectionMat[14];
+  const near = m14 / (m10 - 1);
+  const far = Math.max(near * 1.5, centerDepth);
+  projectionMat[10] = (far + near) / (near - far);
+  projectionMat[14] = (2 * far * near) / (near - far);
+  const result = Object.assign(
+    Object.create(Object.getPrototypeOf(projectionParameters)),
+    projectionParameters,
+  ) as ProjectionParameters;
+  result.projectionMat = projectionMat;
+  result.viewProjectionMat = mat4.multiply(
+    mat4.create(),
+    projectionMat,
+    viewMatrix,
+  );
+  return result;
 }
 
 export function perspectivePanelEmitOIT(builder: ShaderBuilder) {
@@ -324,6 +418,21 @@ export class PerspectivePanel extends RenderedDataPanel {
   );
 
   private axesLineHelper = this.registerDisposer(AxesLineHelper.get(this.gl));
+  private globeBaseRenderer = this.registerDisposer(
+    GlobeBaseRenderer.get(this.gl),
+  );
+
+  /**
+   * Camera of the globe view, if the panel is in globe mode (see `src/geo/globe.ts`).
+   */
+  globeCamera: GlobeCamera | undefined;
+
+  /**
+   * Conversion from global positions to ECEF coordinates for layers drawn on the globe, computed
+   * on demand, and its generation (see `GlobeRenderContext`).
+   */
+  private globalToEcef: GlobeRenderContext["globalToEcef"] | undefined;
+  private globalToEcefGeneration = 0;
   protected offscreenFramebuffer = this.registerDisposer(
     new FramebufferConfiguration(this.gl, {
       colorBuffers: [
@@ -420,6 +529,23 @@ export class PerspectivePanel extends RenderedDataPanel {
         update: (out: ProjectionParameters, navigationState) => {
           const { invViewMatrix, projectionMat, logicalWidth, logicalHeight } =
             out;
+          const { geoView } = this.viewer;
+          if (geoView?.globeActive) {
+            const camera = (this.globeCamera = this.computeGlobeCamera(
+              geoView,
+              out.globalPosition,
+              logicalWidth,
+              logicalHeight,
+            ));
+            out.globeTarget = camera.target;
+            mat4.copy(invViewMatrix, camera.invViewMatrix);
+            mat4.copy(projectionMat, camera.projectionMat);
+            applyRenderViewportToProjectionMatrix(out, projectionMat);
+            updateProjectionParametersFromInverseViewAndProjection(out);
+            return;
+          }
+          this.globeCamera = undefined;
+          out.globeTarget = undefined;
           const widthOverHeight = logicalWidth / logicalHeight;
           const fovy = Math.PI / 4.0;
           let { relativeDepthRange } = navigationState;
@@ -466,6 +592,39 @@ export class PerspectivePanel extends RenderedDataPanel {
       }),
     );
     this.projectionParameters.changed.add(() => this.context.scheduleRedraw());
+    const { geoView } = viewer;
+    if (geoView !== undefined) {
+      const ensureGlobeOrientation = () => {
+        if (!geoView.globeActive) return;
+        // The camera must be above the horizon of the target.
+        const back = vec3.transformQuat(
+          tempVec3,
+          kAxes[2],
+          this.navigationState.pose.orientation.orientation,
+        );
+        if (back[2] < GLOBE_MIN_CAMERA_ELEVATION) {
+          quat.identity(this.navigationState.pose.orientation.orientation);
+          this.navigationState.pose.orientation.changed.dispatch();
+        }
+      };
+      this.registerDisposer(
+        geoView.terrainChanged.add(() => {
+          if (geoView.globeActive && geoView.showGlobeTerrain.value) {
+            this.scheduleRedraw();
+          }
+        }),
+      );
+      this.registerDisposer(
+        geoView.changed.add(() => {
+          this.globalToEcef = undefined;
+          ++this.globalToEcefGeneration;
+          ensureGlobeOrientation();
+          this.projectionParameters.update();
+          this.scheduleRedraw();
+        }),
+      );
+      ensureGlobeOrientation();
+    }
 
     const sharedObject = (this.sharedObject = this.registerDisposer(
       new PerspectiveViewState(this),
@@ -500,8 +659,19 @@ export class PerspectivePanel extends RenderedDataPanel {
       element,
       "rotate-via-mouse-drag",
       (e: ActionEvent<MouseEvent>) => {
-        startRelativeMouseDrag(e.detail, (_event, deltaX, deltaY) => {
+        let grab: { point: Float64Array; overGlobe: boolean } | undefined;
+        if (this.globeCamera !== undefined) {
+          const start = this.getGlobePointAtMouse(e.detail);
+          if (start !== undefined) {
+            grab = { point: start.point, overGlobe: start.hit };
+          }
+        }
+        startRelativeMouseDrag(e.detail, (event, deltaX, deltaY) => {
           this.context.flagContinuousCameraMotion();
+          if (this.globeCamera !== undefined) {
+            if (grab !== undefined) this.panGlobe(grab, event, deltaX, deltaY);
+            return;
+          }
           this.navigationState.pose.rotateRelative(
             kAxes[1],
             ((deltaX / 4.0) * Math.PI) / 180.0,
@@ -596,7 +766,253 @@ export class PerspectivePanel extends RenderedDataPanel {
     this.sliceViews.changed.add(() => this.scheduleRedraw());
   }
 
+  /**
+   * Draws the layers that support the globe view (e.g. annotations) other than globe layers.  The
+   * layers are first drawn faded without depth testing, such that parts hidden by the surface
+   * (e.g. below it) show through, but clipped at the center of the Earth to exclude the far side;
+   * then the visible parts are drawn on top.
+   */
+  private drawGlobeLayers(
+    renderContext: PerspectiveViewRenderContext,
+    target: Float64Array,
+  ) {
+    const { visibleLayers } = this.visibleLayerTracker;
+    const layers = Array.from(visibleLayers).filter(
+      ([renderLayer]) => renderLayer.supportsGlobe && !renderLayer.isGlobeLayer,
+    );
+    if (layers.length === 0) return;
+    let { globalToEcef } = this;
+    if (globalToEcef === undefined) {
+      globalToEcef = this.globalToEcef = this.viewer.geoView?.getGlobalToEcef();
+      if (globalToEcef === undefined) return;
+    }
+    const globe: GlobeRenderContext = {
+      target,
+      globalToEcef,
+      generation: this.globalToEcefGeneration,
+    };
+    const { gl } = this;
+    gl.enable(WebGL2RenderingContext.BLEND);
+    gl.blendFunc(
+      WebGL2RenderingContext.SRC_ALPHA,
+      WebGL2RenderingContext.ONE_MINUS_SRC_ALPHA,
+    );
+    gl.disable(WebGL2RenderingContext.DEPTH_TEST);
+    const xrayContext = {
+      ...renderContext,
+      projectionParameters: getGlobeXrayProjectionParameters(
+        renderContext.projectionParameters,
+        target,
+      ),
+      emitter: globeXrayEmit,
+      globe,
+    };
+    for (const [renderLayer, attachment] of layers) {
+      renderLayer.draw(xrayContext, attachment);
+    }
+    gl.enable(WebGL2RenderingContext.DEPTH_TEST);
+    gl.depthFunc(WebGL2RenderingContext.LEQUAL);
+    const visibleContext = { ...renderContext, globe };
+    for (const [renderLayer, attachment] of layers) {
+      renderLayer.draw(visibleContext, attachment);
+    }
+    gl.depthFunc(WebGL2RenderingContext.LESS);
+    gl.disable(WebGL2RenderingContext.BLEND);
+  }
+
+  /**
+   * Computes the camera of the globe view from the navigation state.
+   */
+  private computeGlobeCamera(
+    geoView: GeoViewState,
+    globalPosition: ArrayLike<number>,
+    width: number,
+    height: number,
+  ) {
+    const [lon, lat] = geoView.getLonLat(globalPosition) ?? [0, 0];
+    return computeGlobeCamera({
+      lon,
+      lat,
+      distance:
+        this.navigationState.zoomFactor.value * geoView.getMetersPerZoomUnit(),
+      orientation: this.navigationState.pose.orientation.orientation,
+      width,
+      height,
+    });
+  }
+
+  /**
+   * Returns the point of the globe under the mouse (see `intersectGlobeRay`), using the camera of
+   * the current navigation state.
+   */
+  private getGlobePointAtMouse(event: MouseEvent) {
+    const { geoView } = this.viewer;
+    if (geoView === undefined) return undefined;
+    const { logicalWidth, logicalHeight } = this.projectionParameters.value;
+    const camera = this.computeGlobeCamera(
+      geoView,
+      this.navigationState.position.value,
+      logicalWidth,
+      logicalHeight,
+    );
+    const bounds = this.element.getBoundingClientRect();
+    const ndcX = (2 * (event.clientX - bounds.left)) / bounds.width - 1;
+    const ndcY = 1 - (2 * (event.clientY - bounds.top)) / bounds.height;
+    const aspect = logicalWidth / Math.max(1, logicalHeight);
+    const { origin, direction } = getGlobeCameraRay(camera, ndcX, ndcY, aspect);
+    return {
+      ...intersectGlobeRay(origin, direction),
+      camera,
+      ndcX,
+      ndcY,
+      aspect,
+    };
+  }
+
+  /**
+   * Pans the globe camera such that the grabbed point of the globe remains under the mouse.  With
+   * `GeoViewState.lockGlobeNorth`, the heading of the camera is kept (flipped by a half turn when
+   * passing over a pole); otherwise, the camera rotates rigidly about the center of the Earth, such
+   * that it passes smoothly over the poles, but the heading drifts (see `resetGlobeNorth`).
+   *
+   * If the drag started over the globe, the grabbed point follows the mouse also when the mouse
+   * leaves the globe (using the closest point of the silhouette, see `intersectGlobeRay`), such
+   * that the view only depends on the mouse position, and returning the mouse to a previous
+   * position restores the previous view.  If the drag started off the globe (`grab.overGlobe` is
+   * `false`), the view moves as if the center of the view were grabbed and moved by the mouse
+   * displacement.
+   */
+  private panGlobe(
+    grab: { point: Float64Array; overGlobe: boolean },
+    event: MouseEvent,
+    deltaX: number,
+    deltaY: number,
+  ) {
+    const { geoView } = this.viewer;
+    if (geoView === undefined) return;
+    const lonLat = geoView.getLonLat(this.navigationState.position.value);
+    const current = this.getGlobePointAtMouse(event);
+    if (lonLat === undefined || current === undefined) return;
+    let from: ArrayLike<number> = current.point;
+    let to: ArrayLike<number> = grab.point;
+    if (!grab.overGlobe) {
+      const { camera } = current;
+      const m = camera.invViewMatrix;
+      const distance = Math.hypot(m[12], m[13], m[14]);
+      const metersPerPixel =
+        distance *
+        getGlobePixelAngle(this.projectionParameters.value.logicalHeight);
+      // The point now under the center of the view displaced by the mouse motion.
+      to = camera.target;
+      from = [0, 1, 2].map(
+        (i) =>
+          camera.target[i] +
+          (m[i] * deltaX - m[4 + i] * deltaY) * metersPerPixel,
+      );
+    }
+    const orientationState = this.navigationState.pose.orientation;
+    const { orientation } = orientationState;
+    let result: { lon: number; lat: number; orientation: quat };
+    if (!geoView.lockGlobeNorth.value) {
+      result = rotateGlobeCamera(
+        lonLat[0],
+        lonLat[1],
+        orientation,
+        getGlobeRotationBetween(from, to),
+      );
+    } else if (grab.overGlobe) {
+      result = panGlobeCameraLocked({
+        lon: lonLat[0],
+        lat: lonLat[1],
+        orientation,
+        distance: clampGlobeCameraDistance(
+          this.navigationState.zoomFactor.value *
+            geoView.getMetersPerZoomUnit(),
+        ),
+        aspect: current.aspect,
+        ndcX: current.ndcX,
+        ndcY: current.ndcY,
+        grabbed: grab.point,
+      });
+    } else {
+      const rigid = rotateGlobeCamera(
+        lonLat[0],
+        lonLat[1],
+        orientation,
+        getGlobeRotationBetween(from, to),
+      );
+      result = {
+        lon: rigid.lon,
+        lat: rigid.lat,
+        orientation: getLockedGlobeOrientation(orientation, rigid.orientation),
+      };
+    }
+    // The target is limited to the latitudes representable in the display CRS (e.g. Web
+    // Mercator).
+    const maxLatitude = geoView.info?.crs.maxLatitude ?? 90;
+    const lat = Math.max(-maxLatitude, Math.min(maxLatitude, result.lat));
+    const lon = ((((result.lon + 180) % 360) + 360) % 360) - 180;
+    quat.copy(orientationState.orientation, result.orientation);
+    orientationState.changed.dispatch();
+    geoView.setLonLat(lon, lat);
+  }
+
+  /**
+   * Orients the globe camera north, keeping its tilt.
+   */
+  private resetGlobeNorth() {
+    const orientationState = this.navigationState.pose.orientation;
+    quat.copy(
+      orientationState.orientation,
+      getNorthUpGlobeOrientation(orientationState.orientation),
+    );
+    orientationState.changed.dispatch();
+  }
+
+  protected snapOrientation() {
+    if (this.globeCamera !== undefined) {
+      this.resetGlobeNorth();
+      return;
+    }
+    super.snapOrientation();
+  }
+
+  /**
+   * Rotates the globe camera about the vertical at the target (horizontal mouse motion) and tilts
+   * it (vertical mouse motion), keeping it above the horizon.
+   */
+  private orbitGlobe(deltaX: number, deltaY: number) {
+    const orientationState = this.navigationState.pose.orientation;
+    const { orientation } = orientationState;
+    const degrees = Math.PI / 180;
+    const heading = quat.setAxisAngle(
+      quat.create(),
+      kAxes[2],
+      (-deltaX / 4) * degrees,
+    );
+    const tilt = quat.setAxisAngle(
+      quat.create(),
+      kAxes[0],
+      (-deltaY / 4) * degrees,
+    );
+    const newOrientation = quat.multiply(quat.create(), heading, orientation);
+    quat.multiply(newOrientation, newOrientation, tilt);
+    quat.normalize(newOrientation, newOrientation);
+    const back = vec3.transformQuat(vec3.create(), kAxes[2], newOrientation);
+    if (back[2] < GLOBE_MIN_CAMERA_ELEVATION) {
+      // Only apply the heading change.
+      quat.multiply(newOrientation, heading, orientation);
+      quat.normalize(newOrientation, newOrientation);
+    }
+    quat.copy(orientation, newOrientation);
+    orientationState.changed.dispatch();
+  }
+
   translateByViewportPixels(deltaX: number, deltaY: number): void {
+    if (this.globeCamera !== undefined) {
+      this.orbitGlobe(deltaX, deltaY);
+      return;
+    }
     const temp = tempVec3;
     const {
       viewProjectionMat,
@@ -718,6 +1134,7 @@ export class PerspectivePanel extends RenderedDataPanel {
   ) {
     const { mouseState } = this.viewer;
     mouseState.pickedRenderLayer = null;
+    mouseState.pickedSliceView = undefined;
     const pickDiameter = getPickDiameter(pickRadius);
     const pickOffsetSequence = getPickOffsetSequence(pickRadius);
     const resolvedPick = resolveNearestPanelPickSample(
@@ -744,6 +1161,16 @@ export class PerspectivePanel extends RenderedDataPanel {
       1.0;
     tempVec3[2] = 2.0 * glWindowZ - 1.0;
     vec3.transformMat4(tempVec3, tempVec3, pickingData.invTransform);
+    const { globeTarget } = pickingData as GlobePickingData;
+    if (globeTarget !== undefined) {
+      this.completeGlobePickRequest(
+        globeTarget,
+        tempVec3,
+        pickingData,
+        resolvedPick.pickValue,
+      );
+      return;
+    }
     let { position: mousePosition, unsnappedPosition } = mouseState;
     const { value: voxelCoordinates } = this.navigationState.position;
     const rank = voxelCoordinates.length;
@@ -767,6 +1194,50 @@ export class PerspectivePanel extends RenderedDataPanel {
     unsnappedPosition.set(mousePosition);
     pickingData.pickIDs.setMouseState(mouseState, resolvedPick.pickValue);
     mouseState.displayDimensions = displayDimensions;
+    mouseState.setActive(true);
+  }
+
+  /**
+   * Sets the mouse position from the render coordinates of a picked point of the globe view.
+   */
+  private completeGlobePickRequest(
+    globeTarget: Float64Array,
+    renderPosition: vec3,
+    pickingData: FramePickingData,
+    pickValue: number,
+  ) {
+    const { mouseState, geoView } = this.viewer;
+    const info = geoView?.info;
+    if (info === undefined) {
+      mouseState.setActive(false);
+      return;
+    }
+    const geodetic = ecefToGeodetic(
+      renderPosition[0] + globeTarget[0],
+      renderPosition[1] + globeTarget[1],
+      renderPosition[2] + globeTarget[2],
+      new Float64Array(3),
+    );
+    const { value: voxelCoordinates } = this.navigationState.position;
+    const rank = voxelCoordinates.length;
+    const position = Float64Array.from(voxelCoordinates);
+    if (!lonLatToGlobal(info, geodetic[0], geodetic[1], position)) {
+      mouseState.setActive(false);
+      return;
+    }
+    let { position: mousePosition, unsnappedPosition } = mouseState;
+    if (mousePosition.length !== rank) {
+      mousePosition = mouseState.position = new Float32Array(rank);
+    }
+    if (unsnappedPosition.length !== rank) {
+      unsnappedPosition = mouseState.unsnappedPosition = new Float32Array(rank);
+    }
+    mousePosition.set(position);
+    unsnappedPosition.set(position);
+    mouseState.coordinateSpace = this.navigationState.coordinateSpace.value;
+    pickingData.pickIDs.setMouseState(mouseState, pickValue);
+    mouseState.displayDimensions =
+      this.navigationState.pose.displayDimensions.value;
     mouseState.setActive(true);
   }
 
@@ -1016,6 +1487,46 @@ export class PerspectivePanel extends RenderedDataPanel {
 
     const { visibleLayers } = this.visibleLayerTracker;
 
+    const { globeCamera } = this;
+    (pickingData as GlobePickingData).globeTarget = globeCamera?.target;
+    if (globeCamera !== undefined) {
+      const { invViewMatrix } = globeCamera;
+      this.globeBaseRenderer.draw(
+        perspectivePanelEmit,
+        globeCamera.target,
+        [invViewMatrix[12], invViewMatrix[13], invViewMatrix[14]],
+        projectionParameters.viewProjectionMat,
+      );
+      const geoView = this.viewer.geoView!;
+      const globeTerrain: GlobeTerrainContext | undefined = geoView
+        .showGlobeTerrain.value
+        ? {
+            source: geoView.terrain,
+            exaggeration: geoView.globeTerrainExaggeration.value,
+            generation: geoView.terrainGeneration,
+          }
+        : undefined;
+      let globeLayerIndex = 0;
+      for (const [renderLayer, attachment] of visibleLayers) {
+        if (renderLayer.isGlobeLayer) {
+          renderLayer.draw(
+            { ...renderContext, globeLayerIndex, globeTerrain },
+            attachment,
+          );
+          ++globeLayerIndex;
+        }
+      }
+      this.drawGlobeLayers(renderContext, globeCamera.target);
+      gl.disable(WebGL2RenderingContext.STENCIL_TEST);
+      gl.disable(WebGL2RenderingContext.DEPTH_TEST);
+      this.offscreenFramebuffer.unbind();
+      this.setGLClippedViewport();
+      this.offscreenCopyHelper.draw(
+        this.offscreenFramebuffer.colorBuffers[OffscreenTextures.COLOR].texture,
+      );
+      return true;
+    }
+
     let hasTransparent = false;
     let hasVolumeRenderingPick = false;
     let hasAnnotation = false;
@@ -1023,6 +1534,7 @@ export class PerspectivePanel extends RenderedDataPanel {
 
     // Draw fully-opaque layers first.
     for (const [renderLayer, attachment] of visibleLayers) {
+      if (renderLayer.isGlobeLayer) continue;
       if (!renderLayer.isTransparent) {
         if (!renderLayer.isAnnotation) {
           renderLayer.draw(renderContext, attachment);

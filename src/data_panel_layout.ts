@@ -19,6 +19,7 @@ import "#src/data_panel_layout.css";
 import { debounce } from "lodash-es";
 import type { ChunkManager } from "#src/chunk_manager/frontend.js";
 import type { DisplayContext } from "#src/display_context.js";
+import type { GeoViewState } from "#src/geo/geo_view.js";
 import type {
   LayerManager,
   MouseSelectionState,
@@ -75,6 +76,7 @@ export interface SliceViewViewerState {
   navigationState: NavigationState;
   layerManager: LayerManager;
   wireFrame: WatchableValueInterface<boolean>;
+  geoView?: GeoViewState;
 }
 
 export class InputEventBindings {
@@ -102,6 +104,7 @@ export interface ViewerUIState
   perspectiveViewBackgroundColor: TrackableRGB;
   hideCrossSectionBackground3D: TrackableBoolean;
   pickRadius: TrackableValue<number>;
+  geoView?: GeoViewState;
 }
 
 export interface DataDisplayLayout extends RefCounted {
@@ -128,37 +131,62 @@ const LAYOUT_SYMBOLS = new Map<string, string>([
 export function makeSliceView(
   viewerState: SliceViewViewerState,
   baseToSelf?: quat,
+  geoVerticalSection = false,
 ) {
   let navigationState: NavigationState;
+  let orientation: ReturnType<typeof OrientationState.makeRelative> | undefined;
   if (baseToSelf === undefined) {
     navigationState = viewerState.navigationState.addRef();
   } else {
+    orientation = OrientationState.makeRelative(
+      viewerState.navigationState.pose.orientation,
+      baseToSelf,
+    );
     navigationState = new NavigationState(
       new DisplayPose(
         viewerState.navigationState.pose.position.addRef(),
         viewerState.navigationState.pose.displayDimensionRenderInfo.addRef(),
-        OrientationState.makeRelative(
-          viewerState.navigationState.pose.orientation,
-          baseToSelf,
-        ),
+        orientation,
       ),
       viewerState.navigationState.zoomFactor.addRef(),
       viewerState.navigationState.depthRange.addRef(),
     );
   }
-  return new SliceView(
+  const sliceView = new SliceView(
     viewerState.chunkManager,
     viewerState.layerManager,
     navigationState,
     viewerState.wireFrame,
+    viewerState.geoView,
   );
+  const { geoView } = viewerState;
+  if (
+    orientation !== undefined &&
+    geoVerticalSection &&
+    geoView !== undefined
+  ) {
+    // For geospatial displays, orient the section with north to the right and the vertical
+    // dimension upward.
+    const updateOrientation = () => {
+      orientation.setPeerToSelf(
+        geoView.getYzRelativeOrientation() ?? baseToSelf!,
+      );
+    };
+    sliceView.registerDisposer(geoView.changed.add(updateOrientation));
+    updateOrientation();
+  }
+  return sliceView;
 }
 
 export function makeNamedSliceView(
   viewerState: SliceViewViewerState,
   axes: NamedAxes,
 ) {
-  return makeSliceView(viewerState, AXES_RELATIVE_ORIENTATION.get(axes)!);
+  return makeSliceView(
+    viewerState,
+    AXES_RELATIVE_ORIENTATION.get(axes)!,
+    axes === "yz",
+  );
 }
 
 export function makeOrthogonalSliceViews(viewerState: SliceViewViewerState) {
@@ -185,6 +213,7 @@ export function getCommonViewerState(viewer: ViewerUIState) {
     scaleBarOptions: viewer.scaleBarOptions,
     hideCrossSectionBackground3D: viewer.hideCrossSectionBackground3D,
     pickRadius: viewer.pickRadius,
+    geoView: viewer.geoView,
   };
 }
 
@@ -273,6 +302,7 @@ function makeSliceViewFromSpecification(
     viewer.layerManager,
     specification.navigationState.addRef(),
     viewer.wireFrame,
+    viewer.geoView,
   );
   const updateViewportSize = () => {
     const {

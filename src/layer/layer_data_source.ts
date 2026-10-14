@@ -33,6 +33,10 @@ import type {
   DataSubsourceSpecification,
 } from "#src/datasource/index.js";
 import { makeEmptyDataSourceSpecification } from "#src/datasource/index.js";
+import {
+  GEO_DIMENSION_NAMES,
+  stripDisplayCrsDimensionsFromTransformSpecification,
+} from "#src/geo/display_crs.js";
 import type { UserLayer } from "#src/layer/index.js";
 import { getWatchableRenderLayerTransform } from "#src/render_coordinate_transform.js";
 import type { RenderLayer } from "#src/renderlayer.js";
@@ -368,6 +372,35 @@ export class LayerDataSource extends RefCounted {
     return this.loadState_;
   }
 
+  /**
+   * Returns the custom transform to apply when the data source is reloaded to reproject it into a
+   * different display CRS: the current custom transform without the dimensions that depend on the
+   * display CRS.
+   */
+  private getTransformForReprojection(verticalModelDimensions: number[]) {
+    const { loadState } = this;
+    const transformSpec = this.spec.transform;
+    if (
+      transformSpec === undefined ||
+      loadState === undefined ||
+      loadState.error !== undefined ||
+      loadState.transform.mutableSourceRank
+    ) {
+      return undefined;
+    }
+    const { defaultTransform } = loadState.transform;
+    const modelDimensions = [...verticalModelDimensions];
+    for (const name of GEO_DIMENSION_NAMES) {
+      const dim = defaultTransform.outputSpace.names.indexOf(name);
+      if (dim !== -1) modelDimensions.push(dim);
+    }
+    return stripDisplayCrsDimensionsFromTransformSpecification(
+      transformSpec,
+      defaultTransform,
+      modelDimensions,
+    );
+  }
+
   set spec(spec: DataSourceSpecification) {
     const { layer } = this;
     this.messages.clearMessages();
@@ -411,11 +444,93 @@ export class LayerDataSource extends RefCounted {
         state: spec.state,
         progressListener: this.progressListener,
       })
-      .then((source: DataSourceWithRedirectInfo) => {
+      .then(async (source: DataSourceWithRedirectInfo) => {
+        // The reprojection module depends on rendering code, so it is only loaded when needed.
+        const reproject =
+          source.geoReference === undefined
+            ? undefined
+            : (await import("#src/geo/reproject_data_source.js"))
+                .reprojectDataSource;
+        return { source, reproject };
+      })
+      .then(({ source, reproject }) => {
         if (refCounted.wasDisposed) return;
         this.messages.clearMessages();
+        let effectiveSource: DataSource = source;
+        const { geoReference } = source;
+        if (geoReference !== undefined) {
+          const { displayCrs } = layer.manager.root;
+          const targetCrs = displayCrs.getOrAdopt(geoReference.crs);
+          // Reload the data source when the display CRS changes, to reproject it into the new
+          // display CRS (also if reprojection into the current display CRS fails below).
+          // Customizations of the transform are preserved, except for the dimensions that depend
+          // on the display CRS, since they are expressed in the units of the previous CRS.
+          refCounted.registerDisposer(
+            displayCrs.changed.add(() => {
+              const { value } = displayCrs;
+              // An adopted display CRS is cleared when no georeferenced data source remains
+              // loaded (e.g. this one is archived); keep this one as is.
+              if (value === undefined || value === targetCrs.id) return;
+              Promise.resolve().then(() => {
+                if (refCounted.wasDisposed) return;
+                this.spec = {
+                  ...this.spec,
+                  transform: this.getTransformForReprojection(
+                    geoReference.verticalDimensions?.map(
+                      (d) => d.modelDimension,
+                    ) ?? [],
+                  ),
+                };
+                layer.specificationChanged.dispatch();
+              });
+            }),
+          );
+          const reprojectedSource = reproject!(source, targetCrs);
+          effectiveSource = reprojectedSource;
+          const { droppedSubsources } = reprojectedSource.reprojection;
+          if (droppedSubsources.length > 0) {
+            this.messages.addMessage({
+              severity: MessageSeverity.warning,
+              message:
+                `Subsources ${droppedSubsources.join(", ")} cannot be reprojected from ` +
+                `${geoReference.crs} to ${targetCrs.id} and are not shown`,
+            });
+          }
+          const { names } = effectiveSource.modelTransform.outputSpace;
+          for (const {
+            modelDimension,
+            elevations,
+          } of geoReference.verticalDimensions ?? []) {
+            refCounted.registerDisposer(
+              displayCrs.registerVerticalAxis(
+                names[modelDimension],
+                elevations,
+              ),
+            );
+          }
+          // Archived layers do not count as loaded georeferenced data sources.
+          const { managedLayer } = layer;
+          let releaseGeoSource: (() => void) | undefined;
+          const updateGeoSourceRetained = () => {
+            const retain = !managedLayer.archived;
+            if (retain === (releaseGeoSource !== undefined)) return;
+            if (retain) {
+              // The display CRS may have been cleared while archived.
+              displayCrs.getOrAdopt(targetCrs.id);
+              releaseGeoSource = displayCrs.retainGeoSource();
+            } else {
+              releaseGeoSource!();
+              releaseGeoSource = undefined;
+            }
+          };
+          refCounted.registerDisposer(
+            managedLayer.layerChanged.add(updateGeoSourceRetained),
+          );
+          updateGeoSourceRetained();
+          refCounted.registerDisposer(() => releaseGeoSource?.());
+        }
         const loaded = refCounted.registerDisposer(
-          new LoadedLayerDataSource(this, source, spec),
+          new LoadedLayerDataSource(this, effectiveSource, spec),
         );
         loaded.registerDisposer(
           layer.addCoordinateSpace(loaded.transform.outputSpace),

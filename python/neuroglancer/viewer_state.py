@@ -622,6 +622,9 @@ class ImageLayer(Layer, _AnnotationLayerOptions):
     cross_section_render_scale = crossSectionRenderScale = wrapped_property(
         "crossSectionRenderScale", optional(float, 1)
     )
+    stack_sources = stackSources = wrapped_property(
+        "stackSources", optional(bool, False)
+    )
 
     @staticmethod
     def interpolate(a, b, t):
@@ -1888,6 +1891,10 @@ class ViewerState(JsonObjectWrapper):
     __slots__ = ()
     title = wrapped_property("title", optional(str))
     dimensions = wrapped_property("dimensions", CoordinateSpace)
+    crs = wrapped_property("crs", optional(str))
+    """Display coordinate reference system for georeferenced data sources, e.g.
+    ``"EPSG:4326"``.  If unspecified, the CRS of the first georeferenced data source
+    is used."""
     relative_display_scales = relativeDisplayScales = wrapped_property(
         "relativeDisplayScales", optional(typed_map(str, float))
     )
@@ -1933,6 +1940,9 @@ class ViewerState(JsonObjectWrapper):
     )
     show_scale_bar = showScaleBar = wrapped_property(
         "showScaleBar", optional(bool, True)
+    )
+    show_graticule = showGraticule = wrapped_property(
+        "showGraticule", optional(bool, True)
     )
     show_default_annotations = showDefaultAnnotations = wrapped_property(
         "showDefaultAnnotations", optional(bool, True)

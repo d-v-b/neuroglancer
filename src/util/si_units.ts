@@ -68,6 +68,14 @@ for (const { prefix, exponent } of siPrefixesWithAlternatives) {
   }
 }
 
+/**
+ * Units that are not combined with SI prefixes.
+ */
+export const unprefixedUnits = new Set(["deg"]);
+for (const unit of unprefixedUnits) {
+  supportedUnits.set(unit, { unit, exponent: 0 });
+}
+
 export function pickSiPrefix(x: number): SiPrefix {
   const exponent = Math.log10(x);
   const numPrefixes = preferredSiPrefixes.length;
@@ -92,7 +100,7 @@ export function formatScaleWithUnit(
   const { precision = 6, elide1 = true } = options;
   let adjustedScale = scale;
   let prefix = "";
-  if (unit !== "") {
+  if (unit !== "" && !unprefixedUnits.has(unit)) {
     const result = pickSiPrefix(scale);
     prefix = result.prefix;
     adjustedScale = scaleByExp10(scale, -result.exponent);

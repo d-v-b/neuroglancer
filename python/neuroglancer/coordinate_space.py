@@ -61,6 +61,12 @@ si_units_with_prefixes = {
 
 si_units_with_prefixes[""] = ("", 0)
 
+# Units that are not combined with SI prefixes.
+unprefixed_units = ["deg"]
+
+for unit in unprefixed_units:
+    si_units_with_prefixes[unit] = (unit, 0)
+
 
 def parse_unit(scale, unit):
     unit, exponent = si_units_with_prefixes[unit]
