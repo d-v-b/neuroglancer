@@ -98,6 +98,8 @@ Supported codecs:
   and JP2 files; a chunk's shape must end in ``[height, width]``, or
   ``[height, width, components]`` for multi-component images, with all other
   dimensions 1)
+- imagecodecs_lzw (TIFF LZW streams, as the tiles and strips of LZW-compressed
+  TIFF files are stored)
 - imagecodecs_jpegxr (decoding of JPEG XR files of gray, RGB, BGR, RGBA and
   BGRA pixels of ``uint8``, ``uint16`` or ``float32`` samples, as jxrlib
   decodes them, color in R, G, B (A) order; the chunk shape is as for
