@@ -23,23 +23,44 @@
  * holds no more than its own pictures and the decoder's reference pictures.
  * The three planes are decoded together and shared (`SharedPlanes`), so that
  * reading a picture's Y, U and V decodes it once.
+ *
+ * Browsers differ in what their decoder gives. Chrome gives the decoder's own
+ * Y, U and V (I420), exactly the stream's. WebKit gives them in full range
+ * for a limited-range stream, and Firefox converts them to RGB (BGRX): those
+ * are converted back, by the stream's range and matrix from its SPS (H.264
+ * E.1), and a warning says once that the values are not exact (a value the
+ * browser rounded or clipped comes back a few levels off).
  */
 
 import { registerCodec } from "#src/datasource/zarr/codec/decode.js";
 import type { CodecArrayInfo } from "#src/datasource/zarr/codec/index.js";
 import { CodecKind } from "#src/datasource/zarr/codec/index.js";
 import type { Configuration } from "#src/datasource/zarr/codec/refkv_stream/resolve.js";
-import type { ChunkPlanes } from "#src/util/refkv_stream.js";
+import type { ChunkPlanes, StreamColor } from "#src/util/refkv_stream.js";
 import {
   avcCodecString,
   copyPicture,
+  isExactFormat,
+  narrowRange,
   newChunkPlanes,
   parseStreamChunk,
   SharedPlanes,
+  streamColor,
 } from "#src/util/refkv_stream.js";
 
 // 64 MiB: the two planes not asked for of at least one chunk of 32 MiB of luma
 const SHARED = new SharedPlanes(1 << 26);
+
+let warned = false;
+
+/** Says once that this browser's pictures are converted, not the decoder's. */
+function warnConverted(what: string) {
+  if (warned) return;
+  warned = true;
+  console.warn(
+    `refkv.stream: this browser's VideoDecoder gives H.264 pictures as ${what}; the planes are converted back and may differ from the stream's by a few levels`,
+  );
+}
 
 function base64Bytes(s: string): Uint8Array<ArrayBuffer> {
   const b = atob(s);
@@ -60,6 +81,12 @@ export async function decodeH264(
   }
   const { units, positions } = parseStreamChunk(encoded);
   const avcc = base64Bytes(setup);
+  let color: StreamColor;
+  try {
+    color = streamColor(avcc);
+  } catch {
+    color = { fullRange: false };
+  }
   let planes: ChunkPlanes | undefined;
   let failure: unknown;
   const copies: Promise<void>[] = [];
@@ -78,7 +105,23 @@ export async function decodeH264(
             planes ??= newChunkPlanes(frames, rect.width, rect.height);
             const buffer = new Uint8Array(frame.allocationSize({ rect }));
             const layout = await frame.copyTo(buffer, { rect });
-            copyPicture(frame.format ?? "", buffer, layout, planes, position);
+            const format = frame.format ?? "";
+            const range = frame.colorSpace?.fullRange;
+            if (!isExactFormat(format)) {
+              // RGB (Firefox): back to the stream's range, by its matrix
+              warnConverted(format);
+              copyPicture(format, buffer, layout, planes, position, {
+                matrix: color.matrix ?? frame.colorSpace?.matrix,
+                fullRange: color.fullRange,
+              });
+            } else {
+              copyPicture(format, buffer, layout, planes, position);
+              if (range === true && !color.fullRange) {
+                // a limited-range stream given in full range (WebKit)
+                warnConverted("full-range Y, U and V");
+                narrowRange(planes, position);
+              }
+            }
           } catch (e) {
             failure ??= e;
           } finally {
