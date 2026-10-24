@@ -31,16 +31,14 @@ import {
 const node = (globalThis as { process?: { versions?: { node?: string } } })
   .process?.versions?.node;
 if (node !== undefined && import.meta.url.startsWith("file:")) {
-  // the file beside this module, named so that a bundler does not take it
-  // for an asset (vite, for the tests, would serve it over http instead)
-  const path = decodeURIComponent(new URL(import.meta.url).pathname).replace(
-    /[^/]*$/,
-    "refkv_ir.wasm",
-  );
+  // the file beside this module, as a file: URL (which Node reads on every
+  // system), built so that a bundler does not take it for an asset (vite, for
+  // the tests, would serve it over http instead)
+  const file = new URL(import.meta.url.replace(/[^/]*$/, "refkv_ir.wasm"));
   const fs = "node:fs";
   setIrWasmModule(
     import(/* webpackIgnore: true */ fs).then((m) =>
-      WebAssembly.compile(m.readFileSync(path)),
+      WebAssembly.compile(m.readFileSync(file)),
     ),
   );
 } else {
