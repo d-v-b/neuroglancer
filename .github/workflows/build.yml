@@ -26,7 +26,7 @@ jobs:
     strategy:
       matrix:
         os:
-          - "ubuntu-latest"
+          - "ubuntu-24.04"
           - "windows-2025-vs2026"
           - "macos-latest"
     runs-on: ${{ matrix.os }}
@@ -94,7 +94,7 @@ jobs:
           path: python/neuroglancer/static/client
         if: ${{ runner.os == 'Linux' }}
   example-project-test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - name: Install pnpm
@@ -126,7 +126,7 @@ jobs:
 
   # Builds Python package and runs Python tests
   #
-  # On ubuntu-latest, this also runs browser-based tests.  On Mac OS and
+  # On ubuntu-24.04, this also runs browser-based tests.  On Mac OS and
   # Windows, this only runs tests that do not require a browser, since a working
   # headless WebGL2 implementation is not available on Github actions.
   python-tests:
@@ -136,7 +136,7 @@ jobs:
           - "3.11"
           - "3.13"
         os:
-          - "ubuntu-latest"
+          - "ubuntu-24.04"
           - "windows-2025-vs2026"
           - "macos-latest"
     runs-on: ${{ matrix.os }}
@@ -173,7 +173,7 @@ jobs:
     strategy:
       matrix:
         include:
-          - os: "ubuntu-latest"
+          - os: "ubuntu-24.04"
             cibw_build: "*"
             wheel_identifier: "linux"
           - os: "windows-2025-vs2026"
@@ -235,7 +235,7 @@ jobs:
             dist/*.tar.gz
 
   docs:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
@@ -257,7 +257,7 @@ jobs:
   publish:
     # Only publish package on push to tag.
     if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs:
       - "client"
       - "python-build-package"
@@ -291,7 +291,7 @@ jobs:
   deploy:
     # Only deploy on push to master branch.
     if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs:
       - "client"
       - "docs"
@@ -380,7 +380,7 @@ jobs:
     strategy:
       matrix:
         os:
-          - ubuntu-latest
+          - ubuntu-24.04
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -396,7 +396,7 @@ jobs:
     strategy:
       matrix:
         os:
-          - ubuntu-latest
+          - ubuntu-24.04
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
