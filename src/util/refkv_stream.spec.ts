@@ -19,14 +19,29 @@ import type { ChunkPlanes } from "#src/util/refkv_stream.js";
 import {
   avcCodecString,
   copyPicture,
+  narrowRange,
   newChunkPlanes,
   parseStreamChunk,
   SharedPlanes,
+  streamColor,
 } from "#src/util/refkv_stream.js";
 
 // A chunk of three frames of 2, 200 and 3 bytes at positions -1, 1 and 0 (the
 // header refkv writes: count, then each size and zigzag position delta), as
 // refkv's Python parser reads it.
+const fromBase64 = (b: string) =>
+  Uint8Array.from(atob(b), (c) => c.charCodeAt(0));
+
+// avcC payloads: SLEAP's test video (Main profile; its VUI says limited range
+// and the BT.601 matrix, H.273 code 6), and refkv's mp4_h264_bframes.mp4 (High
+// profile, no colour description)
+const SLEAP_AVCC = fromBase64(
+  "AU1AH//hAB9nTUAf7KDAY3/gF+AXrUGAQZAAAAMAEAAr8gDxgxlgAQAEaO+E8g==",
+);
+const BFRAMES_AVCC = fromBase64(
+  "AWQACv/hABhnZAAKrNlEewEQAAADABAAAAMBQPEiWWABAAZo6+PLIsD9+PgA",
+);
+
 function chunk(): Uint8Array<ArrayBuffer> {
   const frames = [
     Uint8Array.from([0x61, 0x62]),
@@ -90,6 +105,48 @@ describe("refkv.stream", () => {
       expect(Array.from(planes.data.v!)).toEqual([0, 0, 9, 10]);
     }
 
+    // RGB pictures (Firefox's VideoDecoder gives BGRX) converted back by
+    // their color space, the chroma of each 2 x 2 block its pixels' mean: red,
+    // green, blue and gray in BT.601 (no matrix given) and limited range; red
+    // as RGBX in BT.709 and full range
+    const rgb = newChunkPlanes(2, 2, 2);
+    copyPicture(
+      "BGRX",
+      Uint8Array.from([
+        0, 0, 255, 0, 0, 255, 0, 0, 255, 0, 0, 0, 128, 128, 128, 0,
+      ]),
+      [{ offset: 0, stride: 8 }],
+      rgb,
+      0,
+    );
+    copyPicture(
+      "RGBX",
+      Uint8Array.from([255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0]),
+      [{ offset: 0, stride: 8 }],
+      rgb,
+      1,
+      { matrix: "bt709", fullRange: true },
+    );
+    expect(Array.from(rgb.data.y!)).toEqual([81, 145, 41, 126, 54, 54, 54, 54]);
+    expect(Array.from(rgb.data.u!)).toEqual([128, 99]);
+    expect(Array.from(rgb.data.v!)).toEqual([128, 255]);
+
+    // the stream's colour signalling, from its SPS's VUI
+    expect(streamColor(SLEAP_AVCC)).toEqual({
+      fullRange: false,
+      matrix: "smpte170m",
+    });
+    expect(streamColor(BFRAMES_AVCC)).toEqual({ fullRange: false });
+
+    // full-range planes (WebKit's, for a limited-range stream) narrowed back
+    const wide = newChunkPlanes(1, 2, 2);
+    wide.data.y!.set([0, 255, 128, 16]);
+    wide.data.u!.set([0]);
+    wide.data.v!.set([255]);
+    narrowRange(wide, 0);
+    expect(Array.from(wide.data.y!)).toEqual([16, 235, 126, 30]);
+    expect([wide.data.u![0], wide.data.v![0]]).toEqual([16, 240]);
+
     // the planes not asked for are kept, given once each, within the limit
     const shared = new SharedPlanes(16);
     let runs = 0;
@@ -146,7 +203,7 @@ describe("refkv.stream", () => {
   test("rejects a picture that is not 8-bit 4:2:0", () => {
     expect(() =>
       copyPicture("I444", new Uint8Array(18), [], newChunkPlanes(1, 3, 2), 0),
-    ).toThrow("decodes to I444, not 8-bit 4:2:0");
+    ).toThrow("decodes to I444, not 8-bit 4:2:0 or RGB");
   });
 
   test("rejects a picture outside the chunk", () => {

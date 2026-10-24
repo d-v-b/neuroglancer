@@ -83,6 +83,139 @@ export function avcCodecString(avcc: Uint8Array): string {
   return `avc1.${hex(avcc[1])}${hex(avcc[2])}${hex(avcc[3])}`;
 }
 
+/** The H.273 matrix codes a VideoColorSpace names. */
+const MATRICES: Record<number, string> = {
+  1: "bt709",
+  5: "bt470bg",
+  6: "smpte170m",
+  9: "bt2020-ncl",
+};
+
+/** An H.264 stream's color signaling, from its first SPS's VUI (H.264 E.1):
+ * full range or not (limited when the VUI does not say), and its matrix, if it
+ * names one this reader knows. */
+export interface StreamColor {
+  fullRange: boolean;
+  matrix?: string;
+}
+
+class Bits {
+  private at = 0;
+  constructor(private b: Uint8Array) {}
+  bit() {
+    if (this.at >= this.b.length * 8) {
+      throw new Error("refkv.stream: the SPS ends early");
+    }
+    const v = (this.b[this.at >> 3] >> (7 - (this.at & 7))) & 1;
+    ++this.at;
+    return v;
+  }
+  bits(n: number) {
+    let v = 0;
+    for (let i = 0; i < n; ++i) v = v * 2 + this.bit();
+    return v;
+  }
+  ue() {
+    let zeros = 0;
+    while (this.bit() === 0) {
+      if (++zeros > 31)
+        throw new Error("refkv.stream: an SPS code is too long");
+    }
+    return 2 ** zeros - 1 + this.bits(zeros);
+  }
+  se() {
+    const k = this.ue();
+    return k % 2 === 1 ? (k + 1) / 2 : -k / 2;
+  }
+}
+
+/** The color signaling of the stream whose avcC payload is `avcc`. */
+export function streamColor(avcc: Uint8Array): StreamColor {
+  const limited: StreamColor = { fullRange: false };
+  if (avcc.length < 8 || (avcc[5] & 0x1f) === 0) return limited;
+  const length = (avcc[6] << 8) | avcc[7];
+  const nal = avcc.subarray(8, 8 + length);
+  // the RBSP: the NAL unit's payload without its emulation prevention bytes
+  const rbsp: number[] = [];
+  for (let i = 1; i < nal.length; ++i) {
+    if (i >= 3 && nal[i] === 3 && nal[i - 1] === 0 && nal[i - 2] === 0) {
+      continue;
+    }
+    rbsp.push(nal[i]);
+  }
+  const r = new Bits(Uint8Array.from(rbsp));
+  const profile = r.bits(8);
+  r.bits(16); // constraint flags and level
+  r.ue(); // seq_parameter_set_id
+  if (
+    [100, 110, 122, 244, 44, 83, 86, 118, 128, 138, 139, 134, 135].includes(
+      profile,
+    )
+  ) {
+    const chroma = r.ue();
+    if (chroma === 3) r.bit();
+    r.ue();
+    r.ue();
+    r.bit();
+    if (r.bit()) {
+      for (let i = 0; i < (chroma === 3 ? 12 : 8); ++i) {
+        if (!r.bit()) continue;
+        let last = 8;
+        let next = 8;
+        for (let j = 0; j < (i < 6 ? 16 : 64) && next !== 0; ++j) {
+          next = (last + r.se() + 256) % 256;
+          if (next !== 0) last = next;
+        }
+      }
+    }
+  }
+  r.ue(); // log2_max_frame_num_minus4
+  const poc = r.ue();
+  if (poc === 0) r.ue();
+  else if (poc === 1) {
+    r.bit();
+    r.se();
+    r.se();
+    const n = r.ue();
+    for (let i = 0; i < n; ++i) r.se();
+  }
+  r.ue(); // max_num_ref_frames
+  r.bit();
+  r.ue();
+  r.ue();
+  if (!r.bit()) r.bit(); // frame_mbs_only_flag, mb_adaptive_frame_field_flag
+  r.bit();
+  if (r.bit()) for (let i = 0; i < 4; ++i) r.ue(); // frame cropping
+  if (!r.bit()) return limited; // vui_parameters_present_flag
+  if (r.bit() && r.bits(8) === 255) r.bits(32); // aspect ratio
+  if (r.bit()) r.bit(); // overscan
+  if (!r.bit()) return limited; // video_signal_type_present_flag
+  r.bits(3);
+  const fullRange = r.bit() === 1;
+  if (!r.bit()) return { fullRange };
+  r.bits(16); // colour primaries, transfer characteristics
+  const matrix = MATRICES[r.bits(8)];
+  return matrix === undefined ? { fullRange } : { fullRange, matrix };
+}
+
+/** Converts a picture's full-range Y, U and V (a decoder's output for a
+ * limited-range stream, as WebKit's VideoDecoder gives them) back to limited
+ * range, in place, at `position` of the chunk: not exactly, since the
+ * expansion rounded and clipped. */
+export function narrowRange(out: ChunkPlanes, position: number) {
+  const { y, u, v } = out.data as Record<Plane, Uint8Array>;
+  const [h, w] = out.shapes.y;
+  const [ch, cw] = out.shapes.u;
+  for (let i = position * h * w, e = i + h * w; i < e; ++i) {
+    y[i] = Math.round(16 + (y[i] * 219) / 255);
+  }
+  for (const c of [u, v]) {
+    for (let i = position * ch * cw, e = i + ch * cw; i < e; ++i) {
+      c[i] = Math.round(128 + ((c[i] - 128) * 224) / 255);
+    }
+  }
+}
+
 export const PLANES = ["y", "u", "v"] as const;
 export type Plane = (typeof PLANES)[number];
 
@@ -116,15 +249,97 @@ export interface PlaneLayoutLike {
   stride: number;
 }
 
+/** A decoded picture's color space, as a VideoFrame gives it. */
+export interface ColorLike {
+  matrix?: string | null;
+  fullRange?: boolean | null;
+}
+
+/** The pixel formats of a picture a decoder has converted to RGB (Firefox's
+ * VideoDecoder gives BGRX), with each one's red, green and blue byte. */
+const RGB_FORMATS: Record<string, [number, number, number]> = {
+  BGRX: [2, 1, 0],
+  BGRA: [2, 1, 0],
+  RGBX: [0, 1, 2],
+  RGBA: [0, 1, 2],
+};
+
+/** Kr and Kb of a matrix (H.273), BT.601's for an unknown one. */
+function lumaWeights(matrix: string | null | undefined): [number, number] {
+  switch (matrix) {
+    case "bt709":
+      return [0.2126, 0.0722];
+    case "bt2020-ncl":
+      return [0.2627, 0.0593];
+    default:
+      return [0.299, 0.114];
+  }
+}
+
+/** Whether a picture in `format` holds its decoder's Y, U and V exactly
+ * (8-bit 4:2:0), rather than RGB converted from them. */
+export function isExactFormat(format: string) {
+  return format === "I420" || format === "I420A" || format === "NV12";
+}
+
+/** Converts an RGB picture back to Y, U and V by its color space (BT.601 and
+ * limited range when it gives none), the chroma of each 2 x 2 block the mean
+ * of its pixels'. The decoder's own values are not recoverable: a value that
+ * the conversion to RGB clipped (luma below 16 in limited range) or rounded
+ * comes back a few levels off. */
+function convertRgb(
+  [ri, gi, bi]: [number, number, number],
+  src: Uint8Array,
+  { offset, stride }: PlaneLayoutLike,
+  out: ChunkPlanes,
+  position: number,
+  color: ColorLike,
+) {
+  const [kr, kb] = lumaWeights(color.matrix);
+  const kg = 1 - kr - kb;
+  const full = color.fullRange === true;
+  const [yScale, yOffset, cScale] = full ? [255, 0, 255] : [219, 16, 224];
+  const [h, w] = out.shapes.y;
+  const [ch, cw] = out.shapes.u;
+  const { y, u, v } = out.data as Record<Plane, Uint8Array>;
+  const cb = new Float64Array(ch * cw);
+  const cr = new Float64Array(ch * cw);
+  const n = new Float64Array(ch * cw);
+  const clamp = (x: number) => Math.min(255, Math.max(0, Math.round(x)));
+  const yBase = position * h * w;
+  for (let r = 0; r < h; ++r) {
+    const row = offset + r * stride;
+    for (let c = 0; c < w; ++c) {
+      const p = row + 4 * c;
+      const R = src[p + ri] / 255;
+      const G = src[p + gi] / 255;
+      const B = src[p + bi] / 255;
+      const luma = kr * R + kg * G + kb * B;
+      y[yBase + r * w + c] = clamp(yOffset + yScale * luma);
+      const k = (r >> 1) * cw + (c >> 1);
+      cb[k] += (B - luma) / (2 * (1 - kb));
+      cr[k] += (R - luma) / (2 * (1 - kr));
+      n[k] += 1;
+    }
+  }
+  const cBase = position * ch * cw;
+  for (let k = 0; k < ch * cw; ++k) {
+    u[cBase + k] = clamp(128 + (cScale * cb[k]) / n[k]);
+    v[cBase + k] = clamp(128 + (cScale * cr[k]) / n[k]);
+  }
+}
+
 /** Copies a decoded picture, `src` with the plane layouts `layout` in the
- * pixel format `format` ("I420", "I420A" or "NV12": 8-bit 4:2:0), into the
- * chunk's planes at `position`. */
+ * pixel format `format`, into the chunk's planes at `position`: 8-bit 4:2:0
+ * ("I420", "I420A" or "NV12") as it is, and RGB ("BGRX", "BGRA", "RGBX",
+ * "RGBA") converted back by its color space `color` (see `convertRgb`). */
 export function copyPicture(
   format: string,
   src: Uint8Array,
   layout: readonly PlaneLayoutLike[],
   out: ChunkPlanes,
   position: number,
+  color: ColorLike = {},
 ) {
   if (position < 0 || position >= out.frames) {
     throw new Error(
@@ -160,9 +375,11 @@ export function copyPicture(
         v[d] = src[s + 1];
       }
     }
+  } else if (format in RGB_FORMATS) {
+    convertRgb(RGB_FORMATS[format], src, layout[0], out, position, color);
   } else {
     throw new Error(
-      `refkv.stream: an H.264 picture decodes to ${format}, not 8-bit 4:2:0`,
+      `refkv.stream: an H.264 picture decodes to ${format}, not 8-bit 4:2:0 or RGB`,
     );
   }
 }
