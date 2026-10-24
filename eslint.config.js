@@ -12,6 +12,7 @@ export default tseslint.config(
       "**/python",
       "templates/neuroglancer/sliceview",
       "src/third_party/jpgjs/jpg.js",
+      "src/third_party/refkv/refkv_embed.js",
       "**/templates",
       "**/build",
       "**/.tox",
