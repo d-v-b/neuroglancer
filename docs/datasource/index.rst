@@ -86,6 +86,8 @@ kvstore<root-kvstores>` with zero or more other
    :maxdepth: 1
 
    zip/index
+   vzip/index
+   refkv/index
    ocdbt/index
    icechunk/index
    gzip/index
