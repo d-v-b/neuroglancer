@@ -410,8 +410,21 @@ describe("decodeTiffLzw", () => {
     expect(decodeTiffLzw(fromBase64(TILE))).toEqual(fromBase64(TILE_PIXELS));
   });
 
-  test("grows the output past its size hint", () => {
-    expect(decodeTiffLzw(fromBase64(ENCODED[5000]), 16)).toEqual(pattern(5000));
+  test("stops at the expected size, whatever follows", () => {
+    // the 5000-byte stream with its end code replaced by junk: read to 5000 bytes
+    const e = fromBase64(ENCODED[5000]);
+    const junk = new Uint8Array(e.length + 2);
+    junk.set(e.subarray(0, e.length - 2));
+    junk.fill(0xff, e.length - 2);
+    expect(decodeTiffLzw(junk, 5000)).toEqual(pattern(5000));
+    // a stream of two copies, read as one
+    expect(decodeTiffLzw(fromBase64(ENCODED[5000]), 300)).toEqual(
+      pattern(5000).subarray(0, 300),
+    );
+  });
+
+  test("decodes the whole stream without a size", () => {
+    expect(decodeTiffLzw(fromBase64(ENCODED[5000]))).toEqual(pattern(5000));
   });
 
   test("rejects a code the table does not hold", () => {

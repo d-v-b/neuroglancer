@@ -23,8 +23,7 @@ registerCodec({
   name: "imagecodecs_lzw",
   kind: CodecKind.bytesToBytes,
   async decode(configuration: Configuration, encoded, signal: AbortSignal) {
-    configuration;
     signal.throwIfAborted();
-    return decodeTiffLzw(encoded);
+    return decodeTiffLzw(encoded, configuration.decodedSize);
   },
 });

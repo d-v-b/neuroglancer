@@ -18,20 +18,28 @@
  * @file The `imagecodecs_lzw` bytes-to-bytes codec: each chunk is one TIFF LZW
  * stream (TIFF 6.0 section 13), as imagecodecs' `lzw_encode` writes it and as
  * the tiles and strips of LZW-compressed TIFF files (Akoya QPTIFF slides among
- * them) are stored. The codec has no configuration.
+ * them) are stored. The codec has no configuration of its own; the resolved
+ * configuration carries the decoded size, when the chain knows it, so that the
+ * decoder stops there: some scanners write a tile's final code one bit too
+ * narrow, and a decoder that reads the whole stream then overruns the tile.
  */
 
 import { CodecKind } from "#src/datasource/zarr/codec/index.js";
 import { registerCodec } from "#src/datasource/zarr/codec/resolve.js";
 import { verifyObject } from "#src/util/json.js";
 
-export type Configuration = Record<string, never>;
+export interface Configuration {
+  decodedSize?: number;
+}
 
 registerCodec({
   name: "imagecodecs_lzw",
   kind: CodecKind.bytesToBytes,
-  resolve(configuration: unknown): { configuration: Configuration } {
+  resolve(
+    configuration: unknown,
+    decodedSize: number | undefined,
+  ): { configuration: Configuration } {
     if (configuration !== undefined) verifyObject(configuration);
-    return { configuration: {} };
+    return { configuration: { decodedSize } };
   },
 });

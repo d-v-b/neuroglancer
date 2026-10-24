@@ -29,13 +29,17 @@ const FIRST = 258;
 const MAX_CODE = 4096;
 
 /**
- * Decodes one TIFF LZW stream. `sizeHint` is the expected decoded size when
- * known (the output grows as needed otherwise).
+ * Decodes one TIFF LZW stream. With `size`, the decoded size the stream is
+ * expected to have, decoding stops once the output reaches it, whatever
+ * follows: some scanners write the final code one bit too narrow, so that a
+ * decoder reading on sees one more table entry, or an invalid code. Without
+ * it, the whole stream is decoded (the output grows as needed).
  */
 export function decodeTiffLzw(
   encoded: Uint8Array,
-  sizeHint: number = encoded.length * 4,
+  size?: number,
 ): Uint8Array<ArrayBuffer> {
+  const sizeHint = size ?? encoded.length * 4;
   // The string table: each entry is its prefix entry plus one byte; a root
   // entry (a single byte) has prefix -1.
   const prefix = new Int32Array(MAX_CODE);
@@ -82,6 +86,7 @@ export function decodeTiffLzw(
       bits = ((bits << 8) | encoded[pos++]) >>> 0;
       bitCount += 8;
     }
+    if (size !== undefined && outLength >= size) break;
     const code = (bits >>> (bitCount - width)) & ((1 << width) - 1);
     bitCount -= width;
     bits &= (1 << bitCount) - 1;
@@ -117,5 +122,6 @@ export function decodeTiffLzw(
     }
     prev = code;
   }
+  if (size !== undefined && outLength > size) outLength = size;
   return out.subarray(0, outLength).slice();
 }
