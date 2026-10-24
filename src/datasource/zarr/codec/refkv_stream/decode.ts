@@ -30,6 +30,11 @@
  * are converted back, by the stream's range and matrix from its SPS (H.264
  * E.1), and a warning says once that the values are not exact (a value the
  * browser rounded or clipped comes back a few levels off).
+ *
+ * Chunks of MP3 audio are decoded with AudioDecoder in the same way: frame
+ * `k` is given the timestamp of its start, `k` frames of the stream on, and
+ * the samples the decoder gives for that timestamp are copied to the chunk's
+ * rows from frame `k`'s position, those of a lead-in frame dropped.
  */
 
 import { registerCodec } from "#src/datasource/zarr/codec/decode.js";
@@ -41,6 +46,7 @@ import {
   avcCodecString,
   copyPicture,
   isExactFormat,
+  mp3Stream,
   narrowRange,
   newChunkPlanes,
   parseStreamChunk,
@@ -166,6 +172,90 @@ export async function decodeH264(
   return planes ?? newChunkPlanes(frames, 0, 0);
 }
 
+/** The chunk's `[samples, channels]` samples, interleaved by channel. */
+export async function decodeMp3(
+  encoded: Uint8Array<ArrayBuffer>,
+  samples: number,
+  channels: number,
+  signal: AbortSignal,
+): Promise<Float32Array<ArrayBuffer>> {
+  const out = new Float32Array(samples * channels);
+  const { units, positions } = parseStreamChunk(encoded);
+  if (units.length === 0) return out;
+  if (typeof AudioDecoder === "undefined") {
+    throw new Error("refkv.stream: this browser has no WebCodecs AudioDecoder");
+  }
+  const stream = mp3Stream(units[0]);
+  if (stream.channels !== channels) {
+    throw new Error(
+      `refkv.stream: the mp3 stream has ${stream.channels} channels, not the chunk's ${channels}`,
+    );
+  }
+  // a frame's duration, in the microseconds of a timestamp
+  const frameTime = (stream.samplesPerFrame * 1e6) / stream.sampleRate;
+  const plane = new Float32Array(stream.samplesPerFrame);
+  let failure: unknown;
+  const decoder = new AudioDecoder({
+    output(data) {
+      try {
+        const position = positions[Math.round(data.timestamp / frameTime)];
+        if (position === undefined || position < 0 || failure !== undefined) {
+          return;
+        }
+        const n = data.numberOfFrames;
+        if (position + n > samples) {
+          throw new Error(
+            `refkv.stream: an mp3 frame's ${n} samples at ${position} do not fit the chunk's ${samples}`,
+          );
+        }
+        const buffer = n > plane.length ? new Float32Array(n) : plane;
+        for (let c = 0; c < channels; ++c) {
+          data.copyTo(buffer, { planeIndex: c, format: "f32-planar" });
+          for (let i = 0; i < n; ++i) {
+            out[(position + i) * channels + c] = buffer[i];
+          }
+        }
+      } catch (e) {
+        failure ??= e;
+      } finally {
+        data.close();
+      }
+    },
+    error(e) {
+      failure ??= e;
+    },
+  });
+  const abort = () => {
+    failure ??= signal.reason;
+    if (decoder.state !== "closed") decoder.close();
+  };
+  signal.addEventListener("abort", abort, { once: true });
+  try {
+    decoder.configure({
+      codec: "mp3",
+      sampleRate: stream.sampleRate,
+      numberOfChannels: channels,
+    });
+    units.forEach((data, k) => {
+      decoder.decode(
+        new EncodedAudioChunk({
+          type: "key",
+          timestamp: Math.round(k * frameTime),
+          data,
+        }),
+      );
+    });
+    await decoder.flush();
+  } catch (e) {
+    failure ??= e;
+  } finally {
+    signal.removeEventListener("abort", abort);
+    if (decoder.state !== "closed") decoder.close();
+  }
+  if (failure !== undefined) throw failure;
+  return out;
+}
+
 registerCodec({
   name: "refkv.stream",
   kind: CodecKind.arrayToBytes,
@@ -175,6 +265,10 @@ registerCodec({
     encoded,
     signal: AbortSignal,
   ) {
+    if (configuration.format === "mp3") {
+      const [samples, channels] = decodedArrayInfo.chunkShape;
+      return decodeMp3(encoded, samples, channels, signal);
+    }
     const [frames, height, width] = decodedArrayInfo.chunkShape;
     const data = await SHARED.take(
       configuration.setup,
