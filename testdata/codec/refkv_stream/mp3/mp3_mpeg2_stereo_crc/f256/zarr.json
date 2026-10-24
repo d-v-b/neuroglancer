@@ -1,0 +1,1 @@
+{"zarr_format":3,"node_type":"array","shape":[14400,2],"data_type":"float32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[147456,2]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"refkv.stream","configuration":{"format":"mp3"}}],"dimension_names":["time","channel"],"attributes":{}}

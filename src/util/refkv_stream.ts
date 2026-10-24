@@ -83,6 +83,54 @@ export function avcCodecString(avcc: Uint8Array): string {
   return `avc1.${hex(avcc[1])}${hex(avcc[2])}${hex(avcc[3])}`;
 }
 
+/** What an AudioDecoder needs to know of an MP3 stream, from a frame's
+ * header: its sample rate, its channels, and the samples a frame decodes to
+ * for each channel. */
+export interface Mp3Stream {
+  sampleRate: number;
+  channels: number;
+  samplesPerFrame: number;
+}
+
+// by the header's version bits (00 MPEG-2.5, 10 MPEG-2, 11 MPEG-1; 01 is
+// reserved), then its sample rate index (3 is invalid)
+const MP3_SAMPLE_RATES: Record<number, number[]> = {
+  0: [11025, 12000, 8000],
+  2: [22050, 24000, 16000],
+  3: [44100, 48000, 32000],
+};
+
+/** The stream of a Layer III frame, from its 4-byte header (refkv's
+ * spec/virtualize/mp3.md, section 2
+ * <https://github.com/d-v-b/refkv/blob/main/spec/virtualize/mp3.md#2-frames>). */
+export function mp3Stream(frame: Uint8Array): Mp3Stream {
+  if (frame.length < 4 || frame[0] !== 0xff || (frame[1] & 0xe0) !== 0xe0) {
+    throw new Error("refkv.stream: an mp3 frame does not start with a sync");
+  }
+  const version = (frame[1] >> 3) & 3;
+  const layer = (frame[1] >> 1) & 3;
+  const rateIndex = (frame[2] >> 2) & 3;
+  const rates = MP3_SAMPLE_RATES[version];
+  if (rates === undefined) {
+    throw new Error("refkv.stream: an mp3 frame's version is reserved");
+  }
+  if (layer !== 1) {
+    throw new Error(
+      `refkv.stream: an mp3 frame is ${layer === 0 ? "of a reserved layer" : `Layer ${"I".repeat(4 - layer)}`}, not Layer III`,
+    );
+  }
+  if (rateIndex === 3) {
+    throw new Error(
+      "refkv.stream: an mp3 frame's sample rate index is invalid",
+    );
+  }
+  return {
+    sampleRate: rates[rateIndex],
+    channels: frame[3] >> 6 === 3 ? 1 : 2,
+    samplesPerFrame: version === 3 ? 1152 : 576,
+  };
+}
+
 /** The H.273 matrix codes a VideoColorSpace names. */
 const MATRICES: Record<number, string> = {
   1: "bt709",
