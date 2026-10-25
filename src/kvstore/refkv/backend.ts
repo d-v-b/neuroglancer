@@ -59,8 +59,7 @@ function reader(handle: FileHandle, signal: AbortSignal | undefined) {
  * `/` (refkv lists and reads it, over http(s) only), else a file read through
  * its kvstore. The archive has no pins: it is written from the responses just
  * read and kept in memory, so a pin would check nothing, and the vzip kvstore
- * refuses a pin it cannot check (a size whose Content-Range a cross-origin
- * server hides, or any pin of a scheme other than http(s)). */
+ * refuses any pin of a scheme other than http(s). */
 async function virtualize(
   source: KvStoreFileHandle<string>,
   options: Partial<ProgressOptions>,

@@ -32,9 +32,9 @@ Sources and pins
 ----------------
 
 The archive has no pins: it is written from the responses just read, and
-kept in memory, so a pin would check nothing. (The vzip adapter refuses a pin
-it cannot check, such as a size whose ``Content-Range`` header a cross-origin
-server does not expose.)
+kept in memory, so a pin would check nothing. (The vzip adapter also refuses
+any pin of a source read through a base key-value store other than
+``http:`` or ``https:``.)
 
 Capabilities
 ------------

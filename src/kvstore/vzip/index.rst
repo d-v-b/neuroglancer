@@ -38,11 +38,17 @@ Sources and pins
 
 ``url`` sources with the ``http:`` or ``https:`` scheme are read with
 ``Range`` requests. Pins (``size``, ``etag``, ``modified_not_after``) are
-checked against each response; for cross-origin sources the server must
-expose ``ETag``, ``Last-Modified`` and ``Content-Range`` through
-``Access-Control-Expose-Headers`` and allow ``If-Match`` and
-``If-Unmodified-Since`` in ``Access-Control-Allow-Headers``. A pin that
-cannot be checked is an error. Unpinned sources only need ``Range`` to be
-allowed: if ``Content-Range`` is not exposed, a ``206`` response is accepted
-when its body has exactly the requested length. Other schemes (``gs:``, ``s3:``, ...) are read
+checked against each response: ``size`` by ``Content-Range``, ``etag`` by
+``ETag`` and ``If-Match``, ``modified_not_after`` by ``Last-Modified`` and
+``If-Unmodified-Since``. A cross-origin response shows those headers only
+if the server lists them in ``Access-Control-Expose-Headers``, which most
+servers that allow range requests do not. A pin whose header the response
+hides is skipped (the exception of `refkv's reader policy, rule 7
+<https://github.com/d-v-b/refkv/blob/main/spec/refkv.md#67-reader-policy>`__);
+a pin whose header the response shows is checked, and fails as an error.
+A pinned ``etag`` or ``modified_not_after`` also needs the server to allow
+``If-Match`` or ``If-Unmodified-Since`` in ``Access-Control-Allow-Headers``,
+or the browser refuses the request. If ``Content-Range`` is not exposed, a
+``206`` response is accepted when its body has exactly the requested
+length. Other schemes (``gs:``, ``s3:``, ...) are read
 through Neuroglancer's own key-value stores, without pins.

@@ -99,6 +99,81 @@ describe("pins over HTTP", () => {
   });
 });
 
+// Response headers a cross-origin response shows without the server exposing
+// them (the CORS-safelisted response headers).
+const SAFELISTED = [
+  "cache-control",
+  "content-language",
+  "content-length",
+  "content-type",
+  "expires",
+  "pragma",
+];
+
+/**
+ * Makes the test server's responses for files.blob look like a browser's
+ * cross-origin ones, from a server that exposes only the headers `expose`
+ * (sending `ETag` and `Last-Modified` that fail every pin) and ignores the
+ * conditional request headers.
+ */
+function crossOrigin(expose: string[]) {
+  const networkFetch = globalThis.fetch;
+  return vi
+    .spyOn(globalThis, "fetch")
+    .mockImplementation(async (input, init) => {
+      const url = String(input instanceof Request ? input.url : input);
+      if (!url.endsWith("/files.blob")) return networkFetch(input, init);
+      const headers = new Headers(init?.headers);
+      headers.delete("If-Match");
+      headers.delete("If-Unmodified-Since");
+      const r = await networkFetch(input, { ...init, headers });
+      const sent = new Headers(r.headers);
+      sent.set("ETag", '"changed"');
+      sent.set("Last-Modified", "Fri, 01 Jan 2100 00:00:00 GMT");
+      const shown = new Headers();
+      for (const [name, value] of sent) {
+        if (SAFELISTED.includes(name) || expose.includes(name)) {
+          shown.set(name, value);
+        }
+      }
+      const response = new Response(r.body, {
+        status: r.status,
+        headers: shown,
+      });
+      Object.defineProperty(response, "type", { value: "cors" });
+      return response;
+    });
+}
+
+describe("pins a cross-origin response hides", () => {
+  test("are skipped", async () => {
+    const b = (await getTestFiles()).get("b")!.toString();
+    const spy = crossOrigin([]);
+    try {
+      for (const key of ["size_wrong", "mtime_too_early", "etag_wrong"]) {
+        expect(await read("pins.vzip", key)).toEqual(b);
+      }
+    } finally {
+      spy.mockRestore();
+    }
+  });
+  test.for([
+    ["size_wrong", "content-range", /resolution error.*size pin/],
+    ["mtime_too_early", "last-modified", /resolution error.*Last-Modified/],
+    ["etag_wrong", "etag", /resolution error.*ETag/],
+  ] as const)(
+    "%s fails when the server exposes %s",
+    async ([key, header, error]) => {
+      const spy = crossOrigin([header]);
+      try {
+        await expect(read("pins.vzip", key)).rejects.toThrow(error);
+      } finally {
+        spy.mockRestore();
+      }
+    },
+  );
+});
+
 test("nearby ranges of a url source are fetched in one request", async () => {
   const blob = fs.readFileSync(path.join(TEST_DATA_DIR, "vzip", "files.blob"));
   const expected = Buffer.concat(
