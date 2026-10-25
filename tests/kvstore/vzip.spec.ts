@@ -114,9 +114,9 @@ const SAFELISTED = [
  * Makes the test server's responses for files.blob look like a browser's
  * cross-origin ones, from a server that exposes only the headers `expose`
  * (sending `ETag` and `Last-Modified` that fail every pin) and ignores the
- * conditional request headers.
+ * conditional request headers, and with `ignoreRange` the `Range` header too.
  */
-function crossOrigin(expose: string[]) {
+function crossOrigin(expose: string[], ignoreRange = false) {
   const networkFetch = globalThis.fetch;
   return vi
     .spyOn(globalThis, "fetch")
@@ -126,6 +126,7 @@ function crossOrigin(expose: string[]) {
       const headers = new Headers(init?.headers);
       headers.delete("If-Match");
       headers.delete("If-Unmodified-Since");
+      if (ignoreRange) headers.delete("Range");
       const r = await networkFetch(input, { ...init, headers });
       const sent = new Headers(r.headers);
       sent.set("ETag", '"changed"');
@@ -172,6 +173,16 @@ describe("pins a cross-origin response hides", () => {
       }
     },
   );
+  test("a size pin fails on a 200, which gives the size by its body", async () => {
+    const spy = crossOrigin([], /*ignoreRange=*/ true);
+    try {
+      await expect(read("pins.vzip", "size_wrong")).rejects.toThrow(
+        /resolution error.*size pin/,
+      );
+    } finally {
+      spy.mockRestore();
+    }
+  });
 });
 
 test("nearby ranges of a url source are fetched in one request", async () => {

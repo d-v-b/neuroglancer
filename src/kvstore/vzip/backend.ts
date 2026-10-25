@@ -374,7 +374,7 @@ export class VzipKvStore implements KvStore {
         // response hides (refkv's reader policy rule 7): most servers that
         // allow range requests expose none of them. A pin the response lets
         // it check is still checked.
-        const { data, size, hidden } = await readHttpRange(
+        const { data, size, sizeHidden } = await readHttpRange(
           url,
           start,
           end,
@@ -384,7 +384,7 @@ export class VzipKvStore implements KvStore {
         );
         if (
           source.pins.size !== undefined &&
-          !hidden &&
+          !sizeHidden &&
           BigInt(size ?? -1) !== source.pins.size
         ) {
           resolution(`size pin ${source.pins.size} != ${size ?? "unknown"}`);

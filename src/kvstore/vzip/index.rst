@@ -46,6 +46,11 @@ servers that allow range requests do not. A pin whose header the response
 hides is skipped (the exception of `refkv's reader policy, rule 7
 <https://github.com/d-v-b/refkv/blob/main/spec/refkv.md#67-reader-policy>`__);
 a pin whose header the response shows is checked, and fails as an error.
+A script cannot tell a hidden header from one the server exposes but does
+not send, so a cross-origin response without the header skips the pin
+either way (a same-origin one fails it). A ``200`` response, from a server
+that ignores ``Range``, gives the size by its body, so a ``size`` pin is
+checked.
 A pinned ``etag`` or ``modified_not_after`` also needs the server to allow
 ``If-Match`` or ``If-Unmodified-Since`` in ``Access-Control-Allow-Headers``,
 or the browser refuses the request. If ``Content-Range`` is not exposed, a

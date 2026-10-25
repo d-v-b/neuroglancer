@@ -55,8 +55,8 @@ function single(headers: Headers, name: string): string | null {
 
 /**
  * Bytes `[start, end)` of the object at `url`, and its total size if known;
- * `hidden` when a cross-origin response hid `Content-Range`, so that the size
- * is unknown. With `unverifiablePins`, an `etag` or `modified_not_after` pin
+ * `sizeHidden` when a cross-origin response hid `Content-Range`, so that the
+ * size is unknown. With `unverifiablePins`, an `etag` or `modified_not_after` pin
  * whose header a cross-origin response hides is skipped; one whose header is
  * visible is still checked.
  */
@@ -70,7 +70,7 @@ export async function readHttpRange(
 ): Promise<{
   data: Uint8Array<ArrayBuffer>;
   size: number | undefined;
-  hidden?: boolean;
+  sizeHidden?: boolean;
 }> {
   try {
     checkHttpUrl(url);
@@ -129,7 +129,10 @@ export async function readHttpRange(
   }
   // Pins are checked against the response itself: servers may ignore the
   // conditional headers (spec §6.2). A cross-origin response hides headers
-  // the server does not expose; the caller may allow skipping those pins.
+  // the server does not expose; the caller may allow skipping those pins. A
+  // script cannot tell a hidden header from one the server exposes but does
+  // not send, so a cross-origin response without the header skips the pin
+  // either way, where a same-origin one fails it.
   const skip = (header: string | null) =>
     header === null && response.type === "cors" && unverifiablePins;
   if (pins.etag !== undefined && etag !== pins.etag && !skip(etag)) {
@@ -161,7 +164,7 @@ export async function readHttpRange(
     if (body.length !== end - start) {
       fail(`206 of ${body.length} bytes for [${start}, ${end})`);
     }
-    return { data: body, size: undefined, hidden: true };
+    return { data: body, size: undefined, sizeHidden: true };
   }
   if (contentRange === null) fail("206 without Content-Range");
   const m = contentRange!.trim().match(/^bytes (\d+)-(\d+)\/(\d+|\*)$/i);
