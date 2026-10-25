@@ -19,6 +19,7 @@ import type { ChunkPlanes } from "#src/util/refkv_stream.js";
 import {
   avcCodecString,
   copyPicture,
+  mp3Stream,
   narrowRange,
   newChunkPlanes,
   parseStreamChunk,
@@ -210,5 +211,66 @@ describe("refkv.stream", () => {
     expect(() =>
       copyPicture("I420", new Uint8Array(14), [], newChunkPlanes(1, 3, 2), 1),
     ).toThrow("a picture at 1 is outside the chunk's 1");
+  });
+
+  test("reads an mp3 stream from a Layer III frame's header", () => {
+    // the version, sample rate and channel mode bits of each version
+    for (const [header, stream] of [
+      // MPEG-1, 44100 Hz, stereo
+      [
+        [0xff, 0xfb, 0x90, 0x00],
+        [44100, 2, 1152],
+      ],
+      // MPEG-1, 32000 Hz, mono, with a CRC
+      [
+        [0xff, 0xfa, 0x98, 0xc0],
+        [32000, 1, 1152],
+      ],
+      // MPEG-2, 16000 Hz, joint stereo
+      [
+        [0xff, 0xf3, 0x48, 0x40],
+        [16000, 2, 576],
+      ],
+      // MPEG-2.5, 8000 Hz, mono
+      [
+        [0xff, 0xe3, 0x18, 0xc0],
+        [8000, 1, 576],
+      ],
+    ] as const) {
+      const { sampleRate, channels, samplesPerFrame } = mp3Stream(
+        Uint8Array.from(header),
+      );
+      expect([sampleRate, channels, samplesPerFrame]).toEqual(stream);
+    }
+  });
+
+  test("rejects an mp3 frame without a sync", () => {
+    expect(() => mp3Stream(Uint8Array.from([0xff, 0x1b, 0x90, 0]))).toThrow(
+      "does not start with a sync",
+    );
+  });
+
+  test("rejects an mp3 frame of the reserved version", () => {
+    expect(() => mp3Stream(Uint8Array.from([0xff, 0xeb, 0x90, 0]))).toThrow(
+      "version is reserved",
+    );
+  });
+
+  test("rejects an mp3 frame that is not Layer III", () => {
+    expect(() => mp3Stream(Uint8Array.from([0xff, 0xfd, 0x90, 0]))).toThrow(
+      "is Layer II, not Layer III",
+    );
+  });
+
+  test("rejects an mp3 frame of the reserved layer", () => {
+    expect(() => mp3Stream(Uint8Array.from([0xff, 0xf9, 0x90, 0]))).toThrow(
+      "is of a reserved layer, not Layer III",
+    );
+  });
+
+  test("rejects an mp3 frame of the invalid sample rate index", () => {
+    expect(() => mp3Stream(Uint8Array.from([0xff, 0xfb, 0x9c, 0]))).toThrow(
+      "sample rate index is invalid",
+    );
   });
 });

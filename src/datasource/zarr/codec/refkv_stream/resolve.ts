@@ -18,11 +18,13 @@
  * @file The `refkv.stream` array-to-bytes codec: a chunk is a run of coded
  * frames of a stream whose frames depend on earlier ones, as refkv writes the
  * video planes of an MP4 file's H.264 tracks (refkv's spec/conventions.md,
- * section 10, and spec/virtualize/mp4.md, section 4.1). The configuration is
- * the stream's `format` ("h264": audio streams, "mp3" and "aac", are not
- * displayed), its `setup` (base64 of the avcC box's payload) and the
- * `plane` the array holds ("y", "u" or "v"). A chunk's shape is
- * `[pictures, height, width]`, of `uint8`.
+ * section 10, and spec/virtualize/mp4.md, section 4.1), and the samples of
+ * an MP3 file (spec/virtualize/mp3.md, section 4.1). The configuration is the
+ * stream's `format`, "h264" or "mp3" ("aac" streams are not decoded). For
+ * "h264", it also has the stream's `setup` (base64 of the avcC box's payload)
+ * and the `plane` the array holds ("y", "u" or "v"), and a chunk's shape is
+ * `[pictures, height, width]`, of `uint8`. For "mp3", a chunk's shape is
+ * `[samples, channels]`, of `float32`.
  */
 
 import type {
@@ -41,11 +43,9 @@ import {
 import type { Plane } from "#src/util/refkv_stream.js";
 import { PLANES } from "#src/util/refkv_stream.js";
 
-export interface Configuration {
-  format: "h264";
-  setup: string;
-  plane: Plane;
-}
+export type Configuration =
+  | { format: "h264"; setup: string; plane: Plane }
+  | { format: "mp3" };
 
 registerCodec({
   name: "refkv.stream",
@@ -56,9 +56,22 @@ registerCodec({
   ): { configuration: Configuration } {
     verifyObject(configuration);
     const format = verifyObjectProperty(configuration, "format", verifyString);
+    if (format === "mp3") {
+      if (decodedArrayInfo.dataType !== DataType.FLOAT32) {
+        throw new Error(
+          `refkv.stream: mp3 samples are float32, not ${DataType[decodedArrayInfo.dataType].toLowerCase()}`,
+        );
+      }
+      if (decodedArrayInfo.chunkShape.length !== 2) {
+        throw new Error(
+          `refkv.stream: an mp3 chunk is [samples, channels], not ${JSON.stringify(decodedArrayInfo.chunkShape)}`,
+        );
+      }
+      return { configuration: { format } };
+    }
     if (format !== "h264") {
       throw new Error(
-        `refkv.stream: ${format} streams are not displayed, only h264 video`,
+        `refkv.stream: ${format} streams are not decoded, only h264 video and mp3 audio`,
       );
     }
     const setup = verifyObjectProperty(configuration, "setup", verifyString);
