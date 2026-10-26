@@ -370,15 +370,21 @@ export class VzipKvStore implements KvStore {
     const scheme = getScheme(url);
     if (scheme === "http" || scheme === "https") {
       try {
-        const { data, size } = await readHttpRange(
+        // Neuroglancer allows skipping a pin whose header a cross-origin
+        // response hides (refkv's reader policy rule 7): most servers that
+        // allow range requests expose none of them. A pin the response lets
+        // it check is still checked.
+        const { data, size, sizeHidden } = await readHttpRange(
           url,
           start,
           end,
           source.pins,
           options.signal,
+          /*unverifiablePins=*/ true,
         );
         if (
           source.pins.size !== undefined &&
+          !sizeHidden &&
           BigInt(size ?? -1) !== source.pins.size
         ) {
           resolution(`size pin ${source.pins.size} != ${size ?? "unknown"}`);

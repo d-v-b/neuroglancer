@@ -29,7 +29,10 @@
  * - Cross-origin, `ETag`, `Last-Modified` and `Content-Range` are visible
  *   only if the server lists them in `Access-Control-Expose-Headers`, and
  *   `If-Match` / `If-Unmodified-Since` need a CORS preflight. Without them,
- *   pins cannot be checked, which is a resolution error (pins fail closed).
+ *   pins cannot be checked, which is a resolution error (pins fail closed),
+ *   unless the caller allows skipping a pin whose header the response hides
+ *   (`unverifiablePins`, refkv's reader policy rule 7:
+ *   https://github.com/d-v-b/refkv/blob/main/spec/refkv.md#67-reader-policy).
  *   A cross-origin 206 without a visible `Content-Range` is accepted if its
  *   body has exactly the requested length (a deviation from §6.2).
  */
@@ -51,7 +54,11 @@ function single(headers: Headers, name: string): string | null {
 }
 
 /**
- * Bytes `[start, end)` of the object at `url`, and its total size if known.
+ * Bytes `[start, end)` of the object at `url`, and its total size if known;
+ * `sizeHidden` when a cross-origin response hid `Content-Range`, so that the
+ * size is unknown. With `unverifiablePins`, an `etag` or `modified_not_after` pin
+ * whose header a cross-origin response hides is skipped; one whose header is
+ * visible is still checked.
  */
 export async function readHttpRange(
   url: string,
@@ -59,7 +66,12 @@ export async function readHttpRange(
   end: number,
   pins: VzipPins,
   signal?: AbortSignal,
-): Promise<{ data: Uint8Array<ArrayBuffer>; size: number | undefined }> {
+  unverifiablePins = false,
+): Promise<{
+  data: Uint8Array<ArrayBuffer>;
+  size: number | undefined;
+  sizeHidden?: boolean;
+}> {
   try {
     checkHttpUrl(url);
   } catch (e) {
@@ -116,11 +128,17 @@ export async function readHttpRange(
     fail("more than one Last-Modified field");
   }
   // Pins are checked against the response itself: servers may ignore the
-  // conditional headers (spec §6.2).
-  if (pins.etag !== undefined && etag !== pins.etag) {
+  // conditional headers (spec §6.2). A cross-origin response hides headers
+  // the server does not expose; the caller may allow skipping those pins. A
+  // script cannot tell a hidden header from one the server exposes but does
+  // not send, so a cross-origin response without the header skips the pin
+  // either way, where a same-origin one fails it.
+  const skip = (header: string | null) =>
+    header === null && response.type === "cors" && unverifiablePins;
+  if (pins.etag !== undefined && etag !== pins.etag && !skip(etag)) {
     fail(`ETag ${JSON.stringify(etag)} does not match the pin`);
   }
-  if (pins.modifiedNotAfter !== undefined) {
+  if (pins.modifiedNotAfter !== undefined && !skip(lastModified)) {
     const t = parseImfFixdate(lastModified);
     if (t === undefined) {
       fail(
@@ -141,11 +159,12 @@ export async function readHttpRange(
     // Deviation from spec §6.2: a cross-origin response hides
     // `Content-Range` unless the server exposes it, and many servers that
     // allow range requests do not. Only the body length can be checked, and
-    // the object's size is unknown, so a `size` pin fails (spec §6.1).
+    // the object's size is unknown, so a `size` pin fails (spec §6.1)
+    // unless the caller skips it.
     if (body.length !== end - start) {
       fail(`206 of ${body.length} bytes for [${start}, ${end})`);
     }
-    return { data: body, size: undefined };
+    return { data: body, size: undefined, sizeHidden: true };
   }
   if (contentRange === null) fail("206 without Content-Range");
   const m = contentRange!.trim().match(/^bytes (\d+)-(\d+)\/(\d+|\*)$/i);
