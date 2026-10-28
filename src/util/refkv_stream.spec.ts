@@ -150,14 +150,6 @@ describe("refkv.stream", () => {
       ]);
       expect(Array.from(planes.data.u!)).toEqual([0, 0, 7, 8]);
       expect(Array.from(planes.data.v!)).toEqual([0, 0, 9, 10]);
-      // into 10-bit planes, scaled (a decoder that gave 8 bits of 10)
-      const wide = newChunkPlanes(2, 3, 2, 10);
-      copyPicture(format, src, layout, wide, 1);
-      expect(wide.data.y).toBeInstanceOf(Uint16Array);
-      expect(Array.from(wide.data.y!.subarray(6))).toEqual([
-        4, 8, 12, 16, 20, 24,
-      ]);
-      expect(Array.from(wide.data.v!)).toEqual([0, 0, 36, 40]);
     }
 
     // a 10-bit picture (I420P10: little-endian 16-bit samples, 0 to 1023)
@@ -180,6 +172,7 @@ describe("refkv.stream", () => {
       ten,
       0,
     );
+    expect(ten.data.y).toBeInstanceOf(Uint16Array);
     expect(Array.from(ten.data.y!)).toEqual([1, 1023, 512, 64, 940, 300]);
     expect(Array.from(ten.data.u!)).toEqual([5, 6]);
     expect(Array.from(ten.data.v!)).toEqual([7, 8]);
@@ -238,13 +231,6 @@ describe("refkv.stream", () => {
     narrowRange(wide, 0);
     expect(Array.from(wide.data.y!)).toEqual([16, 235, 126, 30]);
     expect([wide.data.u![0], wide.data.v![0]]).toEqual([16, 240]);
-    const wide10 = newChunkPlanes(1, 2, 2, 10);
-    wide10.data.y!.set([0, 1023, 512, 64]);
-    wide10.data.u!.set([0]);
-    wide10.data.v!.set([1023]);
-    narrowRange(wide10, 0);
-    expect(Array.from(wide10.data.y!)).toEqual([64, 940, 502, 119]);
-    expect([wide10.data.u![0], wide10.data.v![0]]).toEqual([64, 960]);
 
     // the planes not asked for are kept, given once each, within the limit
     const shared = new SharedPlanes(16);
@@ -306,10 +292,10 @@ describe("refkv.stream", () => {
     );
   });
 
-  test("rejects a picture that is not 4:2:0 or RGB", () => {
+  test("rejects a picture that is not 8-bit 4:2:0 or RGB", () => {
     expect(() =>
       copyPicture("I444", new Uint8Array(18), [], newChunkPlanes(1, 3, 2), 0),
-    ).toThrow("decodes to I444, not 4:2:0 of 8 bits or RGB");
+    ).toThrow("decodes to I444, not 8-bit 4:2:0 or RGB");
   });
 
   test("rejects a 10-bit picture for 8-bit planes", () => {
@@ -321,7 +307,19 @@ describe("refkv.stream", () => {
         newChunkPlanes(1, 3, 2),
         0,
       ),
-    ).toThrow("decodes to I420P10, not 4:2:0 of 8 bits or RGB");
+    ).toThrow("decodes to I420P10, not 8-bit 4:2:0 or RGB");
+  });
+
+  test("rejects an 8-bit picture for 10-bit planes", () => {
+    expect(() =>
+      copyPicture(
+        "NV12",
+        new Uint8Array(12),
+        [],
+        newChunkPlanes(1, 3, 2, 10),
+        0,
+      ),
+    ).toThrow("decodes to NV12, not 4:2:0 of 10 bits");
   });
 
   test("rejects a picture outside the chunk", () => {

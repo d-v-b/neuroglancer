@@ -378,17 +378,15 @@ export function hevcStreamColor(hvcc: Uint8Array): StreamColor {
  * range, in place, at `position` of the chunk: not exactly, since the
  * expansion rounded and clipped. */
 export function narrowRange(out: ChunkPlanes, position: number) {
-  const { y, u, v } = out.data as Record<Plane, SampleArray>;
+  const { y, u, v } = out.data as Record<Plane, Uint8Array>;
   const [h, w] = out.shapes.y;
   const [ch, cw] = out.shapes.u;
-  const m = 2 ** (out.depth - 8);
-  const top = 2 ** out.depth - 1;
   for (let i = position * h * w, e = i + h * w; i < e; ++i) {
-    y[i] = Math.round(16 * m + (y[i] * 219 * m) / top);
+    y[i] = Math.round(16 + (y[i] * 219) / 255);
   }
   for (const c of [u, v]) {
     for (let i = position * ch * cw, e = i + ch * cw; i < e; ++i) {
-      c[i] = Math.round(128 * m + ((c[i] - 128 * m) * 224 * m) / top);
+      c[i] = Math.round(128 + ((c[i] - 128) * 224) / 255);
     }
   }
 }
@@ -495,18 +493,14 @@ function convertRgb(
   const [kr, kb] = lumaWeights(color.matrix);
   const kg = 1 - kr - kb;
   const full = color.fullRange === true;
-  const m = 2 ** (out.depth - 8);
-  const top = 2 ** out.depth - 1;
-  const [yScale, yOffset, cScale] = full
-    ? [top, 0, top]
-    : [219 * m, 16 * m, 224 * m];
+  const [yScale, yOffset, cScale] = full ? [255, 0, 255] : [219, 16, 224];
   const [h, w] = out.shapes.y;
   const [ch, cw] = out.shapes.u;
-  const { y, u, v } = out.data as Record<Plane, SampleArray>;
+  const { y, u, v } = out.data as Record<Plane, Uint8Array>;
   const cb = new Float64Array(ch * cw);
   const cr = new Float64Array(ch * cw);
   const n = new Float64Array(ch * cw);
-  const clamp = (x: number) => Math.min(top, Math.max(0, Math.round(x)));
+  const clamp = (x: number) => Math.min(255, Math.max(0, Math.round(x)));
   const yBase = position * h * w;
   for (let r = 0; r < h; ++r) {
     const row = offset + r * stride;
@@ -525,17 +519,16 @@ function convertRgb(
   }
   const cBase = position * ch * cw;
   for (let k = 0; k < ch * cw; ++k) {
-    u[cBase + k] = clamp(128 * m + (cScale * cb[k]) / n[k]);
-    v[cBase + k] = clamp(128 * m + (cScale * cr[k]) / n[k]);
+    u[cBase + k] = clamp(128 + (cScale * cb[k]) / n[k]);
+    v[cBase + k] = clamp(128 + (cScale * cr[k]) / n[k]);
   }
 }
 
 /** Copies a decoded picture, `src` with the plane layouts `layout` in the
  * pixel format `format`, into the chunk's planes at `position`: 4:2:0 of the
  * chunk's depth ("I420", "I420A" or "NV12" of 8 bits, "I420P10" or "I420AP10"
- * of 10) as it is, 8-bit 4:2:0 into 10-bit planes scaled (a decoder that
- * dropped the low bits), and RGB ("BGRX", "BGRA", "RGBX", "RGBA") converted
- * back by its color space `color` (see `convertRgb`). */
+ * of 10) as it is, and, into 8-bit planes, RGB ("BGRX", "BGRA", "RGBX",
+ * "RGBA") converted back by its color space `color` (see `convertRgb`). */
 export function copyPicture(
   format: string,
   src: Uint8Array,
@@ -549,37 +542,43 @@ export function copyPicture(
       `refkv.stream: a picture at ${position} is outside the chunk's ${out.frames}`,
     );
   }
-  // an 8-bit sample's value in the chunk's depth
-  const scale = 2 ** (out.depth - 8);
+  if (out.depth > 8) {
+    if (!TEN_BIT.includes(format)) {
+      throw new Error(
+        `refkv.stream: a picture decodes to ${format}, not 4:2:0 of ${out.depth} bits`,
+      );
+    }
+    // little-endian 16-bit samples
+    const copyWideRows = (
+      from: PlaneLayoutLike,
+      to: SampleArray,
+      [h, w]: [number, number],
+    ) => {
+      const base = position * h * w;
+      for (let r = 0; r < h; ++r) {
+        const s = from.offset + r * from.stride;
+        for (let c = 0; c < w; ++c) {
+          to[base + r * w + c] = src[s + 2 * c] | (src[s + 2 * c + 1] << 8);
+        }
+      }
+    };
+    copyWideRows(layout[0], out.data.y!, out.shapes.y);
+    copyWideRows(layout[1], out.data.u!, out.shapes.u);
+    copyWideRows(layout[2], out.data.v!, out.shapes.v);
+    return;
+  }
   const copyRows = (
     from: PlaneLayoutLike,
-    to: SampleArray,
+    to: Uint8Array,
     [h, w]: [number, number],
   ) => {
     const base = position * h * w;
     for (let r = 0; r < h; ++r) {
       const s = from.offset + r * from.stride;
-      if (scale === 1) {
-        to.set(src.subarray(s, s + w), base + r * w);
-      } else {
-        for (let c = 0; c < w; ++c) to[base + r * w + c] = src[s + c] * scale;
-      }
+      to.set(src.subarray(s, s + w), base + r * w);
     }
   };
-  const copyWideRows = (
-    from: PlaneLayoutLike,
-    to: SampleArray,
-    [h, w]: [number, number],
-  ) => {
-    const base = position * h * w;
-    for (let r = 0; r < h; ++r) {
-      const s = from.offset + r * from.stride;
-      for (let c = 0; c < w; ++c) {
-        to[base + r * w + c] = src[s + 2 * c] | (src[s + 2 * c + 1] << 8);
-      }
-    }
-  };
-  const { y, u, v } = out.data as Record<Plane, SampleArray>;
+  const { y, u, v } = out.data as Record<Plane, Uint8Array>;
   if (format === "I420" || format === "I420A") {
     copyRows(layout[0], y, out.shapes.y);
     copyRows(layout[1], u, out.shapes.u);
@@ -593,19 +592,15 @@ export function copyPicture(
       let s = offset + r * stride;
       let d = base + r * w;
       for (let c = 0; c < w; ++c, s += 2, ++d) {
-        u[d] = src[s] * scale;
-        v[d] = src[s + 1] * scale;
+        u[d] = src[s];
+        v[d] = src[s + 1];
       }
     }
-  } else if (TEN_BIT.includes(format) && out.depth > 8) {
-    copyWideRows(layout[0], y, out.shapes.y);
-    copyWideRows(layout[1], u, out.shapes.u);
-    copyWideRows(layout[2], v, out.shapes.v);
   } else if (format in RGB_FORMATS) {
     convertRgb(RGB_FORMATS[format], src, layout[0], out, position, color);
   } else {
     throw new Error(
-      `refkv.stream: a picture decodes to ${format}, not 4:2:0 of ${out.depth} bits or RGB`,
+      `refkv.stream: a picture decodes to ${format}, not 8-bit 4:2:0 or RGB`,
     );
   }
 }

@@ -25,24 +25,29 @@
  * reading a picture's Y, U and V decodes it once.
  *
  * Browsers differ in what their decoder gives. Chrome gives the decoder's own
- * Y, U and V (I420 or NV12; I420P10 for 10-bit HEVC, where it can), exactly
- * the stream's. WebKit gives them in full range for a limited-range stream,
- * and Firefox converts them to RGB (BGRX): those are converted back, by the
- * stream's range and matrix from its SPS (H.264 E.1, H.265 E.2), and a
- * warning says once that the values are not exact (a value the browser
- * rounded or clipped comes back a few levels off).
+ * Y, U and V (I420 or NV12), exactly the stream's. Of H.264, WebKit gives them
+ * in full range for a limited-range stream, and Firefox converts them to RGB
+ * (BGRX): those are converted back, by the stream's range and matrix from its
+ * SPS (H.264 E.1), and a warning says once that the values are not exact (a
+ * value the browser rounded or clipped comes back a few levels off).
  *
- * WebCodecs decodes HEVC only where the platform has a decoder for it (Chrome
- * and Edge with a hardware decoder, Safari on Apple's platforms; not
- * Firefox), so a stream's configuration is checked with
- * `VideoDecoder.isConfigSupported` first, and one this browser cannot decode
- * fails with an error that says so. Measured against ffmpeg's decoding of
- * refkv's HEVC fixtures: Chrome 148 on macOS gives 8-bit pictures exactly,
- * and 10-bit ones in GPU memory, of no format, which WebCodecs cannot copy
- * (an error); WebKit 26 gives 8-bit NV12 in full range for both (a 10-bit
- * picture's scaled to 10 bits), whose luma comes back within a level or two
- * but whose chroma differs from the stream's by up to 70 levels of 8 bits,
- * no range conversion undoing it, which the warning says.
+ * HEVC is shown only as the decoder gives it: 4:2:0 of the stream's bit depth
+ * (I420P10 for 10 bits) in the stream's range, by its SPS (H.265 E.2), or not
+ * at all. A browser's range conversion of HEVC is not invertible: measured
+ * against ffmpeg's decoding of refkv's fixtures and of VideoToolbox's
+ * streams, on macOS, WebKit 26 widens a limited-range stream and Chrome 148
+ * narrows a full-range one, and either's chroma then differs from the
+ * stream's by up to 70 levels, while each gives the stream's own range
+ * exactly. WebCodecs decodes HEVC only where the platform has a decoder for it
+ * (Chrome and Edge with a hardware decoder, Safari on Apple's platforms; not
+ * Firefox), so the configuration is checked with
+ * `VideoDecoder.isConfigSupported` first; a browser that cannot decode it, or
+ * that converts its pictures (WebKit gives 10-bit pictures as 8-bit NV12, and
+ * Chrome 10-bit ones in GPU memory of no format, which WebCodecs cannot copy),
+ * fails with an error that says so. One difference shows in neither the
+ * stream nor the picture: WebKit's chroma of x265's streams differs from the
+ * stream's by up to 58 levels even in the stream's own range (its luma, and
+ * VideoToolbox's streams, an iPhone's encoder, are exact).
  */
 
 import { registerCodec } from "#src/datasource/zarr/codec/decode.js";
@@ -75,13 +80,12 @@ const SHARED = new SharedPlanes(1 << 26);
 
 let warned = false;
 
-/** Says once that this browser's pictures are converted, not the decoder's,
- * and by how much they may differ from the stream's. */
-function warnConverted(what: string, by = "a few levels") {
+/** Says once that this browser's pictures are converted, not the decoder's. */
+function warnConverted(what: string) {
   if (warned) return;
   warned = true;
   console.warn(
-    `refkv.stream: this browser's VideoDecoder gives pictures as ${what}; the planes are converted back and may differ from the stream's by ${by}`,
+    `refkv.stream: this browser's VideoDecoder gives H.264 pictures as ${what}; the planes are converted back and may differ from the stream's by a few levels`,
   );
 }
 
@@ -171,12 +175,27 @@ export async function decodeVideo(
                 "refkv.stream: this browser's VideoDecoder gives pictures that WebCodecs cannot copy (of format null), as Chrome's does for 10-bit HEVC on macOS",
               );
             }
+            const range = frame.colorSpace?.fullRange;
+            if (hevc && !isExactFormat(frame.format, depth)) {
+              throw new Error(
+                `refkv.stream: this browser's VideoDecoder converts ${depth}-bit HEVC pictures to ${frame.format}; HEVC is shown only as the decoder gives it`,
+              );
+            }
+            if (
+              hevc &&
+              typeof range === "boolean" &&
+              range !== color.fullRange
+            ) {
+              const name = (full: boolean) => (full ? "full" : "limited");
+              throw new Error(
+                `refkv.stream: this browser's VideoDecoder converts HEVC pictures from ${name(color.fullRange)} range to ${name(range)}, which changes their chroma by up to tens of levels; HEVC is shown only as the decoder gives it`,
+              );
+            }
             const rect = frame.visibleRect!;
             planes ??= newChunkPlanes(frames, rect.width, rect.height, depth);
             const buffer = new Uint8Array(frame.allocationSize({ rect }));
             const layout = await frame.copyTo(buffer, { rect });
             const format = frame.format;
-            const range = frame.colorSpace?.fullRange;
             if (isRgbFormat(format)) {
               // RGB (Firefox): back to the stream's range, by its matrix
               warnConverted(format);
@@ -185,17 +204,10 @@ export async function decodeVideo(
                 fullRange: color.fullRange,
               });
             } else {
-              if (depth > 8 && isExactFormat(format)) {
-                // 10-bit pictures of 8 bits: the low bits are lost
-                warnConverted(`${format}, of 8 bits`);
-              }
               copyPicture(format, buffer, layout, planes, position);
               if (range === true && !color.fullRange) {
                 // a limited-range stream given in full range (WebKit)
-                warnConverted(
-                  "full-range Y, U and V",
-                  hevc ? "tens of levels in U and V" : undefined,
-                );
+                warnConverted("full-range Y, U and V");
                 narrowRange(planes, position);
               }
             }
