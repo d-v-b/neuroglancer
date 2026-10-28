@@ -17,12 +17,14 @@
 /**
  * @file The `refkv.stream` array-to-bytes codec: a chunk is a run of coded
  * frames of a stream whose frames depend on earlier ones, as refkv writes the
- * video planes of an MP4 file's H.264 tracks (refkv's spec/conventions.md,
- * section 10, and spec/virtualize/mp4.md, section 4.1). The configuration is
- * the stream's `format` ("h264": audio streams, "mp3" and "aac", are not
- * displayed), its `setup` (base64 of the avcC box's payload) and the
- * `plane` the array holds ("y", "u" or "v"). A chunk's shape is
- * `[pictures, height, width]`, of `uint8`.
+ * video planes of an MP4 file's H.264 and HEVC tracks (refkv's
+ * [spec/conventions.md, section 10](https://github.com/d-v-b/refkv/blob/main/spec/conventions.md#10-coded-streams),
+ * and [spec/zarrify/mp4.md](https://github.com/d-v-b/refkv/blob/main/spec/zarrify/mp4.md)).
+ * The configuration is the stream's `format` ("h264" or "hevc": audio
+ * streams, "mp3", "aac" and "flac", are not displayed), its `setup` (base64
+ * of the avcC or hvcC box's payload) and the `plane` the array holds ("y",
+ * "u" or "v"). A chunk's shape is `[pictures, height, width]`, of `uint8`
+ * for 8 bits a sample, or, for HEVC Main 10, `uint16` (values 0 to 1023).
  */
 
 import type {
@@ -42,7 +44,7 @@ import type { Plane } from "#src/util/refkv_stream.js";
 import { PLANES } from "#src/util/refkv_stream.js";
 
 export interface Configuration {
-  format: "h264";
+  format: "h264" | "hevc";
   setup: string;
   plane: Plane;
 }
@@ -56,9 +58,9 @@ registerCodec({
   ): { configuration: Configuration } {
     verifyObject(configuration);
     const format = verifyObjectProperty(configuration, "format", verifyString);
-    if (format !== "h264") {
+    if (format !== "h264" && format !== "hevc") {
       throw new Error(
-        `refkv.stream: ${format} streams are not displayed, only h264 video`,
+        `refkv.stream: ${format} streams are not displayed, only h264 and hevc video`,
       );
     }
     const setup = verifyObjectProperty(configuration, "setup", verifyString);
@@ -73,14 +75,18 @@ registerCodec({
       },
       "y",
     );
-    if (decodedArrayInfo.dataType !== DataType.UINT8) {
+    const { dataType } = decodedArrayInfo;
+    if (
+      dataType !== DataType.UINT8 &&
+      !(format === "hevc" && dataType === DataType.UINT16)
+    ) {
       throw new Error(
-        `refkv.stream: h264 planes are uint8, not ${DataType[decodedArrayInfo.dataType].toLowerCase()}`,
+        `refkv.stream: ${format} planes are ${format === "hevc" ? "uint8 or uint16" : "uint8"}, not ${DataType[dataType].toLowerCase()}`,
       );
     }
     if (decodedArrayInfo.chunkShape.length !== 3) {
       throw new Error(
-        `refkv.stream: an h264 plane's chunk is [pictures, height, width], not ${JSON.stringify(decodedArrayInfo.chunkShape)}`,
+        `refkv.stream: a ${format} plane's chunk is [pictures, height, width], not ${JSON.stringify(decodedArrayInfo.chunkShape)}`,
       );
     }
     return { configuration: { format, setup, plane } };
