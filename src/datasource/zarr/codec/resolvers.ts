@@ -31,6 +31,7 @@ import "#src/datasource/zarr/codec/lzw/resolve.js";
 import "#src/datasource/zarr/codec/n5_default/resolve.js";
 import "#src/datasource/zarr/codec/numcodecs_shuffle/resolve.js";
 import "#src/datasource/zarr/codec/refkv_fits_tiles/resolve.js";
+import "#src/datasource/zarr/codec/refkv_skip/resolve.js";
 import "#src/datasource/zarr/codec/refkv_stream/resolve.js";
 import "#src/datasource/zarr/codec/sharding_indexed/resolve.js";
 import "#src/datasource/zarr/codec/transpose/resolve.js";
