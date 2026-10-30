@@ -18,7 +18,10 @@ import { describe, expect, test } from "vitest";
 import type { ChunkPlanes } from "#src/util/refkv_stream.js";
 import {
   avcCodecString,
+  base64Bytes,
+  copyFlacSamples,
   copyPicture,
+  flacStream,
   mp3Stream,
   narrowRange,
   newChunkPlanes,
@@ -272,5 +275,145 @@ describe("refkv.stream", () => {
     expect(() => mp3Stream(Uint8Array.from([0xff, 0xfb, 0x9c, 0]))).toThrow(
       "sample rate index is invalid",
     );
+  });
+
+  test("reads a flac stream's STREAMINFO", () => {
+    // refkv's fixtures' setups, against refkv's python/tests/ir/test_flac.py
+    for (const [setup, stream] of [
+      // flac_mono_16
+      [
+        "ZkxhQ4AAACIEAAQAAAQyAAUZA+gA8AAAH0BgPGM/L5AWonufOnS9+BTZ",
+        [16000, 1, 16, 1024],
+      ],
+      // flac_bitwise_8
+      [
+        "ZkxhQ4AAACIAQABAAAAAAAAAAfQAcAAAAZAi9OiyvIHmzDLpcKt0fJDl",
+        [8000, 1, 8, 64],
+      ],
+      // flac_bitwise_32
+      [
+        "ZkxhQ4AAACIAwADAAAAAAAAACsRD8AAAAbmMwI8Da+uvgU3sy3nCGK1m",
+        [44100, 2, 32, 192],
+      ],
+      // flac_mono_24
+      [
+        "ZkxhQ4AAACIQABAAAAYpACM0F3ABcAAAEsChPpOIPDN8+CXdVCS6Z2Wd",
+        [96000, 1, 24, 4096],
+      ],
+      // flac_bitwise_uncommon
+      [
+        "ZkxhQ4AAACIAZABkAAAAAAAAArEQ8AAAAifsoSfXxRgVe4WiTAiN6a79",
+        [11025, 1, 16, 100],
+      ],
+      // flac_stereo_24
+      [
+        "ZkxhQ4AAACIEgASAABQWABQwC7gDcAAAFoDoOUnieUphG8KLMrbUOIrF",
+        [48000, 2, 24, 1152],
+      ],
+    ] as const) {
+      const { sampleRate, channels, bitsPerSample, blockSize } = flacStream(
+        base64Bytes(setup),
+      );
+      expect([sampleRate, channels, bitsPerSample, blockSize]).toEqual(stream);
+    }
+  });
+
+  test("rejects a flac setup that is not fLaC and a STREAMINFO block", () => {
+    const setup = base64Bytes(
+      "ZkxhQ4AAACIEAAQAAAQyAAUZA+gA8AAAH0BgPGM/L5AWonufOnS9+BTZ",
+    );
+    for (const bad of [
+      setup.subarray(0, 41),
+      Uint8Array.from(setup, (b, i) => (i === 0 ? 0x66 + 1 : b)),
+      Uint8Array.from(setup, (b, i) => (i === 4 ? 0x84 : b)),
+      Uint8Array.from(setup, (b, i) => (i === 7 ? 33 : b)),
+    ]) {
+      expect(() => flacStream(bad)).toThrow(
+        "a flac setup is fLaC and a STREAMINFO block, 42 bytes",
+      );
+    }
+  });
+
+  test("copies a decoder's flac samples back to the stream's integers", () => {
+    // [format, the decoder's samples (a plane a channel when planar), the
+    // stream's bits]: two rows of two channels, -3 and 5, then 7 and -1,
+    // placed at row 1 of 3
+    const cases: [string, ArrayLike<number>[], number][] = [
+      // ffmpeg's 16 bits of an 8-bit stream, interleaved
+      ["s16", [Int16Array.from([-3 << 8, 5 << 8, 7 << 8, -1 << 8])], 8],
+      // 24 bits in the top of 32, a plane a channel
+      [
+        "s32-planar",
+        [
+          Int32Array.from([-3 << 8, 7 << 8]),
+          Int32Array.from([5 << 8, -1 << 8]),
+        ],
+        24,
+      ],
+      // 32 bits, all of them
+      ["s32", [Int32Array.from([-3, 5, 7, -1])], 32],
+      // unsigned 8 bits of a 4-bit stream
+      ["u8", [Uint8Array.from([128 - 48, 128 + 80, 128 + 112, 128 - 16])], 4],
+      // floats of a 16-bit stream, scaled to [-1, 1), and of a 24-bit one
+      [
+        "f32-planar",
+        [
+          Float32Array.from([-3 / 32768, 7 / 32768]),
+          Float32Array.from([5 / 32768, -1 / 32768]),
+        ],
+        16,
+      ],
+      ["f32", [Float32Array.from([-3, 5, 7, -1].map((v) => v / 2 ** 23))], 24],
+    ];
+    for (const [format, data, bits] of cases) {
+      const out = new Int32Array(6);
+      data.forEach((d, c) =>
+        copyFlacSamples(
+          format,
+          d,
+          2,
+          out,
+          1,
+          2,
+          data.length > 1 ? c : undefined,
+          bits,
+        ),
+      );
+      expect([format, Array.from(out)]).toEqual([format, [0, 0, -3, 5, 7, -1]]);
+    }
+    // a float at full scale is clamped to the largest sample
+    const out = new Int16Array(1);
+    copyFlacSamples("f32", Float32Array.from([1]), 1, out, 0, 1, undefined, 16);
+    expect(out[0]).toBe(32767);
+  });
+
+  test("rejects samples of an audio format that is not WebCodecs'", () => {
+    expect(() =>
+      copyFlacSamples(
+        "s24",
+        Int32Array.of(0),
+        1,
+        new Int32Array(1),
+        0,
+        1,
+        undefined,
+        24,
+      ),
+    ).toThrow("an audio decoder gives s24 samples");
+  });
+
+  test("rejects integer samples narrower than the stream's", () => {
+    expect(() =>
+      copyFlacSamples(
+        "s16",
+        Int16Array.of(0),
+        1,
+        new Int32Array(1),
+        0,
+        1,
+        undefined,
+        24,
+      ),
+    ).toThrow("the flac decoder gives s16 samples of a stream of 24 bits");
   });
 });

@@ -35,16 +35,30 @@
  * `k` is given the timestamp of its start, `k` frames of the stream on, and
  * the samples the decoder gives for that timestamp are copied to the chunk's
  * rows from frame `k`'s position, those of a lead-in frame dropped.
+ *
+ * Chunks of FLAC audio, a frame each as refkv writes a FLAC file's inner
+ * chunks, are decoded so too, with the STREAMINFO block of the `setup` as the
+ * decoder's description, and give the stream's own integer samples: a decoder
+ * gives them in its own format, which `copyFlacSamples` converts back.
  */
 
 import { registerCodec } from "#src/datasource/zarr/codec/decode.js";
 import type { CodecArrayInfo } from "#src/datasource/zarr/codec/index.js";
 import { CodecKind } from "#src/datasource/zarr/codec/index.js";
 import type { Configuration } from "#src/datasource/zarr/codec/refkv_stream/resolve.js";
-import type { ChunkPlanes, StreamColor } from "#src/util/refkv_stream.js";
+import { DataType } from "#src/util/data_type.js";
+import type {
+  ChunkPlanes,
+  FlacSamples,
+  StreamColor,
+} from "#src/util/refkv_stream.js";
 import {
+  audioSampleArray,
   avcCodecString,
+  base64Bytes,
+  copyFlacSamples,
   copyPicture,
+  flacStream,
   isExactFormat,
   mp3Stream,
   narrowRange,
@@ -66,13 +80,6 @@ function warnConverted(what: string) {
   console.warn(
     `refkv.stream: this browser's VideoDecoder gives H.264 pictures as ${what}; the planes are converted back and may differ from the stream's by a few levels`,
   );
-}
-
-function base64Bytes(s: string): Uint8Array<ArrayBuffer> {
-  const b = atob(s);
-  const out = new Uint8Array(b.length);
-  for (let i = 0; i < b.length; ++i) out[i] = b.charCodeAt(i);
-  return out;
 }
 
 /** The chunk's Y, U and V planes, `frames` pictures each. */
@@ -256,6 +263,103 @@ export async function decodeMp3(
   return out;
 }
 
+/** The chunk's `[samples, channels]` integer samples of a FLAC stream,
+ * interleaved by channel, in `out`. */
+export async function decodeFlac<T extends FlacSamples>(
+  setup: string,
+  encoded: Uint8Array<ArrayBuffer>,
+  out: T,
+  channels: number,
+  signal: AbortSignal,
+): Promise<T> {
+  const samples = out.length / channels;
+  const { units, positions } = parseStreamChunk(encoded);
+  if (units.length === 0) return out;
+  if (typeof AudioDecoder === "undefined") {
+    throw new Error("refkv.stream: this browser has no WebCodecs AudioDecoder");
+  }
+  const description = base64Bytes(setup);
+  const stream = flacStream(description);
+  if (stream.channels !== channels) {
+    throw new Error(
+      `refkv.stream: the flac stream has ${stream.channels} channels, not the chunk's ${channels}`,
+    );
+  }
+  // a frame's duration, in the microseconds of a timestamp: every frame but
+  // the stream's last has the block size (refkv rejects variable block sizes)
+  const frameTime = (stream.blockSize * 1e6) / stream.sampleRate;
+  let failure: unknown;
+  const decoder = new AudioDecoder({
+    output(data) {
+      try {
+        const position = positions[Math.round(data.timestamp / frameTime)];
+        if (position === undefined || position < 0 || failure !== undefined) {
+          return;
+        }
+        const n = data.numberOfFrames;
+        if (position + n > samples) {
+          throw new Error(
+            `refkv.stream: a flac frame's ${n} samples at ${position} do not fit the chunk's ${samples}`,
+          );
+        }
+        const format = data.format!;
+        const planar = format.endsWith("-planar");
+        const buffer = audioSampleArray(format, planar ? n : n * channels);
+        for (let c = 0; c < (planar ? channels : 1); ++c) {
+          data.copyTo(buffer, { planeIndex: c });
+          copyFlacSamples(
+            format,
+            buffer,
+            n,
+            out,
+            position,
+            channels,
+            planar ? c : undefined,
+            stream.bitsPerSample,
+          );
+        }
+      } catch (e) {
+        failure ??= e;
+      } finally {
+        data.close();
+      }
+    },
+    error(e) {
+      failure ??= e;
+    },
+  });
+  const abort = () => {
+    failure ??= signal.reason;
+    if (decoder.state !== "closed") decoder.close();
+  };
+  signal.addEventListener("abort", abort, { once: true });
+  try {
+    decoder.configure({
+      codec: "flac",
+      sampleRate: stream.sampleRate,
+      numberOfChannels: channels,
+      description,
+    });
+    units.forEach((data, k) => {
+      decoder.decode(
+        new EncodedAudioChunk({
+          type: "key",
+          timestamp: Math.round(k * frameTime),
+          data,
+        }),
+      );
+    });
+    await decoder.flush();
+  } catch (e) {
+    failure ??= e;
+  } finally {
+    signal.removeEventListener("abort", abort);
+    if (decoder.state !== "closed") decoder.close();
+  }
+  if (failure !== undefined) throw failure;
+  return out;
+}
+
 registerCodec({
   name: "refkv.stream",
   kind: CodecKind.arrayToBytes,
@@ -268,6 +372,17 @@ registerCodec({
     if (configuration.format === "mp3") {
       const [samples, channels] = decodedArrayInfo.chunkShape;
       return decodeMp3(encoded, samples, channels, signal);
+    }
+    if (configuration.format === "flac") {
+      const [samples, channels] = decodedArrayInfo.chunkShape;
+      const length = samples * channels;
+      const out =
+        decodedArrayInfo.dataType === DataType.INT8
+          ? new Int8Array(length)
+          : decodedArrayInfo.dataType === DataType.INT16
+            ? new Int16Array(length)
+            : new Int32Array(length);
+      return decodeFlac(configuration.setup, encoded, out, channels, signal);
     }
     const [frames, height, width] = decodedArrayInfo.chunkShape;
     const data = await SHARED.take(

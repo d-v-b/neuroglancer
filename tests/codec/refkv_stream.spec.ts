@@ -63,5 +63,69 @@ test("rejects a stream format it does not decode", () => {
       ],
       { dataType: DataType.FLOAT32, chunkShape: [1024, 2] },
     ),
-  ).toThrow("aac streams are not decoded, only h264 video and mp3 audio");
+  ).toThrow(
+    "aac streams are not decoded, only h264 video and mp3 and flac audio",
+  );
+});
+
+// flac_mono_16's setup, 16 bits, and flac_bitwise_8's and flac_mono_24's
+const flac = (setup: string) => [
+  { name: "refkv.stream", configuration: { format: "flac", setup } },
+];
+const FLAC_16 = "ZkxhQ4AAACIEAAQAAAQyAAUZA+gA8AAAH0BgPGM/L5AWonufOnS9+BTZ";
+const FLAC_8 = "ZkxhQ4AAACIAQABAAAAAAAAAAfQAcAAAAZAi9OiyvIHmzDLpcKt0fJDl";
+const FLAC_24 = "ZkxhQ4AAACIQABAAAAYpACM0F3ABcAAAEsChPpOIPDN8+CXdVCS6Z2Wd";
+
+test("resolves a flac stream of [samples, channels] chunks of its integers", () => {
+  for (const [setup, dataType] of [
+    [FLAC_8, DataType.INT8],
+    [FLAC_16, DataType.INT16],
+    [FLAC_24, DataType.INT32],
+  ] as const) {
+    const spec = parseCodecChainSpec(flac(setup), {
+      dataType,
+      chunkShape: [1024, 1],
+    });
+    expect(spec[CodecKind.arrayToBytes]).toEqual({
+      kind: CodecKind.arrayToBytes,
+      name: "refkv.stream",
+      configuration: { format: "flac", setup },
+    });
+  }
+});
+
+test("rejects flac samples of another type than their bits'", () => {
+  expect(() =>
+    parseCodecChainSpec(flac(FLAC_24), {
+      dataType: DataType.INT16,
+      chunkShape: [1024, 1],
+    }),
+  ).toThrow("flac samples of 24 bits are int32, not int16");
+});
+
+test("rejects a flac chunk that is not [samples, channels]", () => {
+  expect(() =>
+    parseCodecChainSpec(flac(FLAC_16), {
+      dataType: DataType.INT16,
+      chunkShape: [1024],
+    }),
+  ).toThrow("a flac chunk is [samples, channels], not [1024]");
+});
+
+test("rejects a flac stream without its setup", () => {
+  expect(() =>
+    parseCodecChainSpec(
+      [{ name: "refkv.stream", configuration: { format: "flac" } }],
+      { dataType: DataType.INT16, chunkShape: [1024, 1] },
+    ),
+  ).toThrow("setup");
+});
+
+test("rejects a flac setup that is not STREAMINFO", () => {
+  expect(() =>
+    parseCodecChainSpec(flac("ZkxhQw=="), {
+      dataType: DataType.INT16,
+      chunkShape: [1024, 1],
+    }),
+  ).toThrow("a flac setup is fLaC and a STREAMINFO block, 42 bytes");
 });

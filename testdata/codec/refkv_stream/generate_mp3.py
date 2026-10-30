@@ -1,7 +1,7 @@
 """Writes the refkv.stream MP3 chunks the refkv_stream_mp3 browser test decodes.
 
 For each of refkv's MP3 fixtures that has ffmpeg's decoding stored
-(fixtures/mp3/expected), refkv virtualizes the file twice, with 256 frames a
+(fixtures/mp3/expected), refkv zarrifies the file twice, with 256 frames a
 chunk (one chunk, no lead-in) and with 4 (several chunks, each with its
 lead-in), and this writes each array's zarr.json and the chunks' bytes, with
 their references resolved, as a directory store; ffmpeg's decoding is copied
@@ -16,7 +16,7 @@ import sys
 from pathlib import Path
 
 from refkv import _core
-from refkv.ir import virtualize
+from refkv.ir import zarrify
 
 HERE = Path(__file__).parent / "mp3"
 NAMES = [
@@ -33,7 +33,7 @@ def write(path: Path, out: Path, chunk_frames: int) -> None:
     data = path.read_bytes()
     _core._set_chunk_frames(chunk_frames)
     try:
-        _, result, _ = virtualize(str(path), f"https://data.test/{path.name}")
+        _, result, _ = zarrify(str(path), f"https://data.test/{path.name}")
     finally:
         _core._set_chunk_frames(None)
     (out / "zarr.json").write_bytes(result.bytes_entries["samples/zarr.json"])

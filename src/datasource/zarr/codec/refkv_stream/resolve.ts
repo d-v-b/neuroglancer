@@ -16,15 +16,25 @@
 
 /**
  * @file The `refkv.stream` array-to-bytes codec: a chunk is a run of coded
- * frames of a stream whose frames depend on earlier ones, as refkv writes the
- * video planes of an MP4 file's H.264 tracks (refkv's spec/conventions.md,
- * section 10, and spec/virtualize/mp4.md, section 4.1), and the samples of
- * an MP3 file (spec/virtualize/mp3.md, section 4.1). The configuration is the
- * stream's `format`, "h264" or "mp3" ("aac" streams are not decoded). For
- * "h264", it also has the stream's `setup` (base64 of the avcC box's payload)
- * and the `plane` the array holds ("y", "u" or "v"), and a chunk's shape is
- * `[pictures, height, width]`, of `uint8`. For "mp3", a chunk's shape is
- * `[samples, channels]`, of `float32`.
+ * frames of a stream whose frames depend on earlier ones (refkv's
+ * spec/conventions.md, section 10
+ * <https://github.com/d-v-b/refkv/blob/main/spec/conventions.md#10-coded-streams>),
+ * as refkv writes the video planes of an MP4 file's H.264 tracks
+ * (spec/zarrify/mp4.md, section 4.1
+ * <https://github.com/d-v-b/refkv/blob/main/spec/zarrify/mp4.md#41-video-tracks>),
+ * the samples of an MP3 file (spec/zarrify/mp3.md, section 4.1
+ * <https://github.com/d-v-b/refkv/blob/main/spec/zarrify/mp3.md#41-the-array>)
+ * and the inner chunks of a FLAC file's samples (spec/zarrify/flac.md,
+ * section 4.1
+ * <https://github.com/d-v-b/refkv/blob/main/spec/zarrify/flac.md#41-the-array>).
+ * The configuration is the stream's `format`, "h264", "mp3" or "flac" ("aac"
+ * streams are not decoded). For "h264", it also has the stream's `setup`
+ * (base64 of the avcC box's payload) and the `plane` the array holds ("y", "u"
+ * or "v"), and a chunk's shape is `[pictures, height, width]`, of `uint8`. For
+ * "mp3", a chunk's shape is `[samples, channels]`, of `float32`. For "flac",
+ * the `setup` is base64 of `fLaC` and the STREAMINFO block, and a chunk's shape
+ * is `[samples, channels]`, of the signed integer type that holds the stream's
+ * bits per sample.
  */
 
 import type {
@@ -41,11 +51,12 @@ import {
   verifyString,
 } from "#src/util/json.js";
 import type { Plane } from "#src/util/refkv_stream.js";
-import { PLANES } from "#src/util/refkv_stream.js";
+import { base64Bytes, flacStream, PLANES } from "#src/util/refkv_stream.js";
 
 export type Configuration =
   | { format: "h264"; setup: string; plane: Plane }
-  | { format: "mp3" };
+  | { format: "mp3" }
+  | { format: "flac"; setup: string };
 
 registerCodec({
   name: "refkv.stream",
@@ -69,9 +80,30 @@ registerCodec({
       }
       return { configuration: { format } };
     }
+    if (format === "flac") {
+      const setup = verifyObjectProperty(configuration, "setup", verifyString);
+      const { bitsPerSample } = flacStream(base64Bytes(setup));
+      const dataType =
+        bitsPerSample <= 8
+          ? DataType.INT8
+          : bitsPerSample <= 16
+            ? DataType.INT16
+            : DataType.INT32;
+      if (decodedArrayInfo.dataType !== dataType) {
+        throw new Error(
+          `refkv.stream: flac samples of ${bitsPerSample} bits are ${DataType[dataType].toLowerCase()}, not ${DataType[decodedArrayInfo.dataType].toLowerCase()}`,
+        );
+      }
+      if (decodedArrayInfo.chunkShape.length !== 2) {
+        throw new Error(
+          `refkv.stream: a flac chunk is [samples, channels], not ${JSON.stringify(decodedArrayInfo.chunkShape)}`,
+        );
+      }
+      return { configuration: { format, setup } };
+    }
     if (format !== "h264") {
       throw new Error(
-        `refkv.stream: ${format} streams are not decoded, only h264 video and mp3 audio`,
+        `refkv.stream: ${format} streams are not decoded, only h264 video and mp3 and flac audio`,
       );
     }
     const setup = verifyObjectProperty(configuration, "setup", verifyString);
