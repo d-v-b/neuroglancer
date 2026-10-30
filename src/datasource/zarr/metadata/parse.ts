@@ -175,6 +175,13 @@ function parseFillValue(dataType: DataType, value: unknown): number | bigint {
   }
 }
 
+function parseFloat64FillValue(value: unknown): number {
+  if (typeof value === "string" && value.match(/^0x[a-fA-F0-9]{16}$/)) {
+    return new Float64Array(BigUint64Array.of(BigInt(value)).buffer)[0];
+  }
+  return parseFillValue(DataType.FLOAT32, value) as number;
+}
+
 export function parseV3Metadata(
   obj: unknown,
   expectedNodeType: NodeType | undefined,
@@ -226,9 +233,18 @@ export function parseV3Metadata(
         verifyOptionalFixedLengthArrayOfStringOrNull(names ?? undefined, rank),
     );
 
-    const dataType = verifyObjectProperty(obj, "data_type", (x) =>
-      verifyEnumString(x, DataType, /^[a-z0-9]+$/),
+    // A float64 array is shown as float32, when its array -> bytes codec
+    // decodes it so (see `parseCodecChainSpec`).
+    const float64 = verifyObjectProperty(
+      obj,
+      "data_type",
+      (x) => x === "float64",
     );
+    const dataType = float64
+      ? DataType.FLOAT32
+      : verifyObjectProperty(obj, "data_type", (x) =>
+          verifyEnumString(x, DataType, /^[a-z0-9]+$/),
+        );
 
     const { chunkShape, chunkGrid } = verifyObjectProperty(
       obj,
@@ -300,11 +316,13 @@ export function parseV3Metadata(
       );
 
     const fillValue = verifyObjectProperty(obj, "fill_value", (value) =>
-      parseFillValue(dataType, value),
+      float64
+        ? Math.fround(parseFloat64FillValue(value))
+        : parseFillValue(dataType, value),
     );
 
     const codecs = verifyObjectProperty(obj, "codecs", (value) =>
-      parseCodecChainSpec(value, { dataType, chunkShape }),
+      parseCodecChainSpec(value, { dataType, chunkShape }, float64),
     );
     if (chunkGrid !== undefined && codecs.shardingInfo !== undefined) {
       throw new Error(

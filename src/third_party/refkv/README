@@ -1,15 +1,16 @@
 refkv_embed.js and refkv_ir.wasm are built from refkv
-(https://github.com/d-v-b/refkv) commit ac77e83a, MIT OR Apache-2.0
-(LICENSE-MIT here; Apache-2.0 is Neuroglancer's own license):
+(https://github.com/d-v-b/refkv) commit 18d72f8d (branch feat/grib,
+d-v-b/refkv#166), MIT OR Apache-2.0 (LICENSE-MIT here; Apache-2.0 is
+Neuroglancer's own license):
 
     just js::wasm          # rust/refkv-ir as refkv_ir.wasm (wasm32)
     node js/build.mjs      # js/src/embed.ts bundled as refkv_embed.js
 
 and copied from refkv's js/dist/ unchanged. refkv_embed.js is refkv's
-virtualizer for a host that reads the input itself (js/src/embed.ts): it
-virtualizes a file through the host's reads, or a store at an http(s) URL, with
+zarrifier for a host that reads the input itself (js/src/embed.ts): it
+zarrifies a file through the host's reads, or a store at an http(s) URL, with
 refkv's Rust core (refkv_ir.wasm), and writes a vzip archive; and it decodes the
-refkv.fits_tiles codec's chunks with the same core. The refkv: kvstore
-(src/kvstore/refkv/) and the refkv.fits_tiles codec
-(src/datasource/zarr/codec/refkv_fits_tiles/) use it through core.ts, which
-finds the wasm module. refkv_embed.d.ts declares its API.
+refkv.fits_tiles and refkv.grib codecs' chunks with the same core. The refkv:
+kvstore (src/kvstore/refkv/) and the refkv.fits_tiles and refkv.grib codecs
+(src/datasource/zarr/codec/refkv_fits_tiles/ and refkv_grib/) use it through
+core.ts, which finds the wasm module. refkv_embed.d.ts declares its API.

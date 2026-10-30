@@ -1,16 +1,16 @@
 // <define:__REFKV_PROFILES__>
-var define_REFKV_PROFILES_default = [{ name: "czi", title: "CZI", uuid: "7a0733c7-d4be-4482-a64f-6904d9354ea5", version: 0, kind: "file", sniff: 50, suffixes: [".czi"], reference: 20, source: "Zeiss CZI", inputs: "Zeiss CZI files (ZISRAW, file version 1), with uncompressed, JPEG, JPEG XR and Zstd subblocks, mosaics and pyramids", for: "Zeiss CZI files" }, { name: "dicom", title: "DICOM", uuid: "acf17198-e5a5-48d3-8187-22ec4bb40ea5", version: 0, kind: "file", sniff: 10, suffixes: [".dcm"], reference: 25, source: "DICOM", inputs: "DICOM Part 10 files with native or JPEG-encapsulated pixel data, including whole-slide images", for: "DICOM files, including whole-slide images" }, { name: "fits", title: "FITS", uuid: "4b0d3a7e-1c52-4f6a-9b8e-2d7f0c6a1e93", version: 0, kind: "file", sniff: 110, suffixes: [".fits", ".fz"], reference: null, source: "FITS", inputs: "FITS files: images, multi-extension files, binary and ASCII tables", for: "FITS images and tables (`.fits`, `.fz`)" }, { name: "ims", title: "IMS", uuid: "5067a535-8261-4b25-a93c-1985ed333bde", version: 0, kind: "file", sniff: 70, suffixes: [".ims"], reference: 25, source: "Imaris IMS", inputs: "Imaris IMS files (HDF5)", for: "Imaris `.ims` files" }, { name: "mp3", title: "MP3", uuid: "b6cb0047-9448-4fdc-b03e-10dd3d6aa829", version: 0, kind: "file", sniff: 100, suffixes: [".mp3"], reference: null, source: "MP3 (MPEG Layer III audio)", inputs: "MPEG-1, MPEG-2 and MPEG-2.5 Layer III audio files (`.mp3`), with their ID3v2, ID3v1 and APE tags; one array of samples, not an image", for: "MP3 audio files, as an array of samples (`.mp3`)" }, { name: "mp4", title: "MP4", uuid: "bbe3f6b9-488d-4d8d-85ce-60a1649dd27e", version: 0, kind: "file", sniff: 85, suffixes: [".mp4", ".mov"], reference: null, source: "MP4 and QuickTime (H.264 video, AAC and MP3 audio)", inputs: "MP4 and QuickTime files (`.mp4`, `.m4a`, `.mov`) with H.264 video and AAC or MP3 audio tracks; a group per track, not an image", for: "MP4 and QuickTime video and audio, as arrays of planes and samples (`.mp4`, `.mov`)" }, { name: "mrc", title: "MRC", uuid: "2aacd010-2ed1-4748-bc3c-5dd5e840bbce", version: 0, kind: "file", sniff: 90, suffixes: [".mrc"], reference: null, source: "MRC2014", inputs: "MRC2014 files (CCP4 maps, image stacks, volumes and volume stacks)", for: "MRC2014 maps, image stacks, volumes and volume stacks (`.mrc`, `.map`)" }, { name: "mrc-dataset", title: "MRC dataset", uuid: "f139bf4e-7bab-4c3c-9b2d-66ba747f9b93", version: 0, kind: "layout", sniff: null, suffixes: [], reference: null, source: "MRC2014, as a dataset", inputs: "", for: "" }, { name: "n5", title: "N5", uuid: "ad5d4c39-c69e-48f7-a3ef-4cc8c607d416", version: 0, kind: "store", sniff: null, suffixes: [], reference: 25, source: "N5", inputs: "N5 containers, default-mode blocks", for: "N5 containers on S3" }, { name: "nd2", title: "ND2", uuid: "59612f14-e314-4207-ba00-8f422ba71490", version: 0, kind: "file", sniff: 20, suffixes: [".nd2"], reference: 20, source: "Nikon ND2", inputs: "Nikon ND2, format version 3 and later", for: "Nikon NIS-Elements ND2 files" }, { name: "ndpi", title: "NDPI", uuid: "6cac71ef-dbb2-4acd-b60c-00389aa4238a", version: 0, kind: "file", sniff: null, suffixes: [".ndpi"], reference: 25, source: "Hamamatsu NDPI", inputs: "Hamamatsu NDPI slides, a TIFF variant with 64-bit offsets", for: "Hamamatsu NDPI whole-slide images" }, { name: "nifti", title: "NIfTI", uuid: "06e5809d-4d54-4b72-afd0-6bf61a7b4c85", version: 0, kind: "file", sniff: 60, suffixes: [".nii"], reference: 25, source: "NIfTI-1 and NIfTI-2", inputs: "NIfTI-1 and NIfTI-2 single files (`.nii`)", for: "NIfTI-1 and NIfTI-2 volumes (`.nii`)" }, { name: "ome-zarr", title: "OME-Zarr", uuid: "b74ea302-65bb-49ae-b81f-f9bb52cd4eed", version: 0, kind: "store", sniff: null, suffixes: [], reference: 25, source: "OME-Zarr 0.4", inputs: "OME-Zarr 0.4 hierarchies on Zarr v2, migrated to OME-Zarr 0.5", for: "OME-Zarr 0.4 hierarchies, migrated to OME-Zarr 0.5 in place" }, { name: "qptiff", title: "QPTIFF", uuid: "329ea136-2f55-4c27-b6f4-8e60ca2109b8", version: 0, kind: "file", sniff: null, suffixes: [".qptiff"], reference: null, source: "Akoya QPTIFF", inputs: "Akoya (PerkinElmer) Vectra QPTIFF slides and inForm component data, a TIFF with an XML description per image, in LZW, JPEG or uncompressed tiles or strips", for: "Akoya (PerkinElmer) Vectra multiplex scans and inForm component data" }, { name: "safe", title: "Sentinel-2 SAFE", uuid: "ef81346c-19e8-42ad-93b0-a279ccaf44c1", version: 0, kind: "both", sniff: 80, suffixes: [".zip"], reference: 25, source: "Sentinel-2 SAFE (Level-1C, Level-2A)", inputs: "Sentinel-2 Level-1C and Level-2A products: a `.SAFE` directory (a store) or a `.SAFE.zip` file", for: "Sentinel-2 Level-1C and Level-2A products, as a `.SAFE` directory or a `.SAFE.zip`" }, { name: "tiff", title: "TIFF", uuid: "48e9ac4e-1156-4a62-955e-20467d9c2700", version: 0, kind: "file", sniff: 40, suffixes: [".tif"], reference: 20, source: "TIFF, OME-TIFF, Aperio SVS", inputs: "TIFF and BigTIFF, including OME-TIFF and JPEG-tiled slides such as Aperio SVS", for: "OME-TIFF, plain tiled TIFF, and JPEG-tiled slides such as Aperio SVS" }, { name: "vsi", title: "VSI", uuid: "c0a1d4e6-5b7f-4f3a-9c2d-8e1f6a7b3c45", version: 0, kind: "file", sniff: 30, suffixes: [".vsi"], reference: null, source: "Olympus VSI", inputs: "Olympus cellSens VSI slides: a `.vsi` file and the tile files beside it, probed by key (uncompressed, JPEG and JPEG 2000 tiles)", for: "Olympus cellSens whole-slide images (`.vsi` with its tile files)" }, { name: "zarr2", title: "Zarr v2", uuid: "8e792619-d671-4687-ab51-752885dd3ee6", version: 0, kind: "store", sniff: null, suffixes: [], reference: 25, source: "Zarr v2", inputs: "Zarr v2 hierarchies", for: "Zarr v2 hierarchies on S3" }];
+var define_REFKV_PROFILES_default = [{ name: "czi", title: "CZI", uuid: "7a0733c7-d4be-4482-a64f-6904d9354ea5", version: 0, kind: "file", sniff: 50, chosen_by: null, suffixes: [".czi"], reference: 20, source: "Zeiss CZI", inputs: "Zeiss CZI files (ZISRAW, file version 1), with uncompressed, JPEG, JPEG XR and Zstd subblocks, mosaics and pyramids", for: "Zeiss CZI files" }, { name: "dicom", title: "DICOM", uuid: "acf17198-e5a5-48d3-8187-22ec4bb40ea5", version: 0, kind: "file", sniff: 10, chosen_by: null, suffixes: [".dcm"], reference: 25, source: "DICOM", inputs: "DICOM Part 10 files with native, JPEG, lossless JPEG or JPEG 2000 pixel data, including whole-slide images", for: "DICOM files, including whole-slide images" }, { name: "fits", title: "FITS", uuid: "4b0d3a7e-1c52-4f6a-9b8e-2d7f0c6a1e93", version: 0, kind: "file", sniff: 110, chosen_by: null, suffixes: [".fits", ".fz"], reference: null, source: "FITS", inputs: "FITS files: images, multi-extension files, binary and ASCII tables", for: "FITS images and tables (`.fits`, `.fz`)" }, { name: "flac", title: "FLAC", uuid: "e9108d07-b24b-432f-a8ce-09d80c8073b4", version: 0, kind: "file", sniff: 95, chosen_by: null, suffixes: [".flac"], reference: null, source: "FLAC (Free Lossless Audio Codec)", inputs: "FLAC files (`.flac`) of a fixed block size, with their metadata blocks and ID3v2 and ID3v1 tags; one sharded array of integer samples, not an image", for: "FLAC audio files, as a sharded array of samples (`.flac`)" }, { name: "grib", title: "GRIB", uuid: "c9bbe039-8dfa-49f9-a655-756f822a42d6", version: 0, kind: "file", sniff: 65, chosen_by: null, suffixes: [".grib2", ".grb2"], reference: null, source: "WMO FM 92 GRIB edition 2 (WMO-No. 306, Manual on Codes, Volume I.2)", inputs: "GRIB edition 2 files of gridded fields, such as NOAA's and ECMWF's forecasts, whose regular latitude/longitude and Lambert conformal fields it presents", for: "GRIB2 files of gridded weather and climate fields (`.grib2`), as labeled arrays with CF coordinates" }, { name: "hdf5", title: "HDF5", uuid: "6c006834-424b-451b-b786-f8c502ec32af", version: 0, kind: "file", sniff: 70, chosen_by: null, suffixes: [".h5", ".nwb"], reference: null, source: "HDF5, NWB", inputs: "HDF5 files, NWB files first among them: every group, dataset, attribute, link and object reference the profile can present, in hdmf-zarr's Zarr v3 form", for: "HDF5 files (`.h5`, `.hdf5`), and NWB files (`.nwb`), which pynwb's `NWBZarrIO` opens" }, { name: "ims", title: "IMS", uuid: "5067a535-8261-4b25-a93c-1985ed333bde", version: 0, kind: "file", sniff: null, chosen_by: "hdf5", suffixes: [".ims"], reference: 25, source: "Imaris IMS", inputs: "Imaris IMS files (HDF5)", for: "Imaris `.ims` files" }, { name: "lif", title: "LIF", uuid: "b099ab1f-f9d4-4276-9006-9ff1193a34b2", version: 0, kind: "file", sniff: 55, chosen_by: null, suffixes: [".lif"], reference: null, source: "Leica LIF", inputs: "Leica LIF files (LAS X and LAS AF, versions 1 and 2): every image of the file's element tree, with interleaved or planar channels, z-stacks, time series and mosaics, uncompressed", for: "Leica LIF files (`.lif`)" }, { name: "mp3", title: "MP3", uuid: "b6cb0047-9448-4fdc-b03e-10dd3d6aa829", version: 0, kind: "file", sniff: 100, chosen_by: null, suffixes: [".mp3"], reference: null, source: "MP3 (MPEG Layer III audio)", inputs: "MPEG-1, MPEG-2 and MPEG-2.5 Layer III audio files (`.mp3`), with their ID3v2, ID3v1 and APE tags; one array of samples, not an image", for: "MP3 audio files, as an array of samples (`.mp3`)" }, { name: "mp4", title: "MP4", uuid: "bbe3f6b9-488d-4d8d-85ce-60a1649dd27e", version: 0, kind: "file", sniff: 85, chosen_by: null, suffixes: [".mp4", ".mov"], reference: null, source: "MP4 and QuickTime (H.264 and HEVC video, AAC and MP3 audio)", inputs: "MP4 and QuickTime files (`.mp4`, `.m4a`, `.mov`) with H.264 or HEVC video and AAC or MP3 audio tracks; a group per track, not an image", for: "MP4 and QuickTime video and audio, as arrays of planes and samples (`.mp4`, `.mov`)" }, { name: "mrc", title: "MRC", uuid: "2aacd010-2ed1-4748-bc3c-5dd5e840bbce", version: 0, kind: "file", sniff: 90, chosen_by: null, suffixes: [".mrc"], reference: null, source: "MRC2014", inputs: "MRC2014 files (CCP4 maps, image stacks, volumes and volume stacks)", for: "MRC2014 maps, image stacks, volumes and volume stacks (`.mrc`, `.map`)" }, { name: "mrc-dataset", title: "MRC dataset", uuid: "f139bf4e-7bab-4c3c-9b2d-66ba747f9b93", version: 0, kind: "layout", sniff: null, chosen_by: null, suffixes: [], reference: null, source: "MRC2014, as a dataset", inputs: "", for: "" }, { name: "n5", title: "N5", uuid: "ad5d4c39-c69e-48f7-a3ef-4cc8c607d416", version: 0, kind: "store", sniff: null, chosen_by: null, suffixes: [], reference: 25, source: "N5", inputs: "N5 containers, default-mode blocks", for: "N5 containers on S3" }, { name: "nd2", title: "ND2", uuid: "59612f14-e314-4207-ba00-8f422ba71490", version: 0, kind: "file", sniff: 20, chosen_by: null, suffixes: [".nd2"], reference: 20, source: "Nikon ND2", inputs: "Nikon ND2, format version 3 and later", for: "Nikon NIS-Elements ND2 files" }, { name: "ndpi", title: "NDPI", uuid: "6cac71ef-dbb2-4acd-b60c-00389aa4238a", version: 0, kind: "file", sniff: null, chosen_by: "tiff", suffixes: [".ndpi"], reference: 25, source: "Hamamatsu NDPI", inputs: "Hamamatsu NDPI slides, a TIFF variant with 64-bit offsets", for: "Hamamatsu NDPI whole-slide images" }, { name: "nifti", title: "NIfTI", uuid: "06e5809d-4d54-4b72-afd0-6bf61a7b4c85", version: 0, kind: "file", sniff: 60, chosen_by: null, suffixes: [".nii"], reference: 25, source: "NIfTI-1 and NIfTI-2", inputs: "NIfTI-1 and NIfTI-2 single files (`.nii`)", for: "NIfTI-1 and NIfTI-2 volumes (`.nii`)" }, { name: "npy", title: "NumPy", uuid: "62b1d1ba-8eb3-465c-a333-75e096fce519", version: 0, kind: "file", sniff: 75, chosen_by: null, suffixes: [".npy", ".npz"], reference: null, source: "NumPy NPY and NPZ (NEP 1)", inputs: "NumPy `.npy` files, and `.npz` archives of them (`np.savez`, `np.savez_compressed`), whose stored and deflated members it presents", for: "NumPy arrays: `.npy` files, and the arrays of `.npz` archives, stored or deflated" }, { name: "nrrd", title: "NRRD", uuid: "23e0c600-8da6-40f1-81e7-ab246e948e88", version: 0, kind: "file", sniff: 95, chosen_by: null, suffixes: [".nhdr", ".nrrd"], reference: null, source: "NRRD (Teem)", inputs: "NRRD files (`.nrrd`) and detached headers with one data file (`.nhdr`), raw or gzip-encoded", for: "NRRD volumes, attached or detached, raw or gzip (`.nrrd`, `.nhdr`)" }, { name: "ome-zarr", title: "OME-Zarr", uuid: "b74ea302-65bb-49ae-b81f-f9bb52cd4eed", version: 0, kind: "store", sniff: null, chosen_by: null, suffixes: [], reference: 25, source: "OME-Zarr 0.4", inputs: "OME-Zarr 0.4 hierarchies on Zarr v2, migrated to OME-Zarr 0.5", for: "OME-Zarr 0.4 hierarchies, migrated to OME-Zarr 0.5 in place" }, { name: "qptiff", title: "QPTIFF", uuid: "329ea136-2f55-4c27-b6f4-8e60ca2109b8", version: 0, kind: "file", sniff: null, chosen_by: "tiff", suffixes: [".qptiff"], reference: null, source: "Akoya QPTIFF", inputs: "Akoya (PerkinElmer) Vectra QPTIFF slides and inForm component data, a TIFF with an XML description per image, in LZW, JPEG or uncompressed tiles or strips", for: "Akoya (PerkinElmer) Vectra multiplex scans and inForm component data" }, { name: "safe", title: "Sentinel-2 SAFE", uuid: "ef81346c-19e8-42ad-93b0-a279ccaf44c1", version: 0, kind: "both", sniff: 80, chosen_by: null, suffixes: [".zip"], reference: 25, source: "Sentinel-2 SAFE (Level-1C, Level-2A)", inputs: "Sentinel-2 Level-1C and Level-2A products: a `.SAFE` directory (a store) or a `.SAFE.zip` file", for: "Sentinel-2 Level-1C and Level-2A products, as a `.SAFE` directory or a `.SAFE.zip`" }, { name: "tiff", title: "TIFF", uuid: "48e9ac4e-1156-4a62-955e-20467d9c2700", version: 0, kind: "file", sniff: 40, chosen_by: null, suffixes: [".tif"], reference: 20, source: "TIFF, OME-TIFF, Aperio SVS", inputs: "TIFF and BigTIFF, including OME-TIFF and JPEG-tiled slides such as Aperio SVS", for: "OME-TIFF, plain TIFF (tiled or in strips), and JPEG-tiled slides such as Aperio SVS" }, { name: "vsi", title: "VSI", uuid: "c0a1d4e6-5b7f-4f3a-9c2d-8e1f6a7b3c45", version: 0, kind: "file", sniff: 30, chosen_by: null, suffixes: [".vsi"], reference: null, source: "Olympus VSI", inputs: "Olympus cellSens VSI slides: a `.vsi` file and the tile files beside it, probed by key (uncompressed, JPEG, JPEG 2000 and lossless JPEG tiles)", for: "Olympus cellSens whole-slide images (`.vsi` with its tile files)" }, { name: "zarr2", title: "Zarr v2", uuid: "8e792619-d671-4687-ab51-752885dd3ee6", version: 0, kind: "store", sniff: null, chosen_by: null, suffixes: [], reference: 25, source: "Zarr v2", inputs: "Zarr v2 hierarchies", for: "Zarr v2 hierarchies on S3" }];
 
-// src/virtualize/profiles_bundled.ts
+// src/zarrify/profiles_bundled.ts
 var REGISTRY = define_REFKV_PROFILES_default;
 
-// src/virtualize/profiles.ts
+// src/zarrify/profiles.ts
 var REGISTRY2 = REGISTRY;
 var FILE_FORMATS = new Set(
   REGISTRY2.filter((e) => e.kind === "file" || e.kind === "both").map((e) => e.name)
 );
 
-// src/virtualize/common.ts
+// src/zarrify/common.ts
 var ImageError = class extends Error {
 };
 function blockReader(read, fileSize, blockSize = 1 << 16) {
@@ -53,7 +53,7 @@ var SMALL_PADDING = 2 ** 10;
 var MAX_TOTAL_PADDING = 2 ** 20;
 var RAGGED_CHUNK = 2 ** 20;
 
-// src/virtualize/ir/wasm_browser.ts
+// src/zarrify/ir/wasm_browser.ts
 var url;
 var given;
 function setIrWasmUrl(u) {
@@ -73,7 +73,7 @@ async function compileIr() {
   return WebAssembly.compile(await response.arrayBuffer());
 }
 
-// src/virtualize/ir/wasm.ts
+// src/zarrify/ir/wasm.ts
 var instance;
 function ir() {
   instance ??= (async () => {
@@ -93,13 +93,13 @@ function out(w, n) {
   return new Uint8Array(w.memory.buffer, w.vz_out() >>> 0, n).slice();
 }
 
-// src/virtualize/ir/run.ts
+// src/zarrify/ir/run.ts
 var utf8 = new TextEncoder();
 var text = (b) => new TextDecoder().decode(b);
 function rejection(w, r) {
   return new ImageError(text(out(w, -r)));
 }
-async function virtualizeIr(format, url2, source, options = {}) {
+async function zarrifyIr(format, url2, source, options = {}) {
   const w = await ir();
   const f = utf8.encode(format);
   const made = Number(w.vz_run_new(put(w, f), f.length, BigInt(source.size), source.remote ? 1 : 0, source.concurrency));
@@ -124,7 +124,8 @@ async function virtualizeIr(format, url2, source, options = {}) {
     }
     live = false;
     const u = utf8.encode(url2);
-    const n = Number(w.vz_run_output(p, put(w, u), u.length, options.mirror === false ? 0 : 1));
+    const flags = (options.mirror === false ? 0 : 1) | (options.checksums ? 2 : 0);
+    const n = Number(w.vz_run_output(p, put(w, u), u.length, flags));
     if (n < 0) throw rejection(w, n);
     const o = decodeOutput(out(w, n));
     return { format: o.summary.format ?? format, ...o };
@@ -347,6 +348,15 @@ function checkHttpUrl(url2) {
 // src/http.ts
 var HttpResolutionError = class extends Error {
 };
+function inBrowser() {
+  const g = globalThis;
+  return g.document !== void 0 || g.WorkerGlobalScope !== void 0;
+}
+function fetchFailed(url2, e, browser = inBrowser()) {
+  const message = `${url2}: ${e.message}`;
+  if (!browser || !(e instanceof TypeError)) return message;
+  return `${message}. A browser reports this for a server that does not allow cross-origin reads (no Access-Control-Allow-Origin header for this page) as well as for one it cannot reach`;
+}
 var STRONG_ETAG = /^"[\x21\x23-\x7e]*"$/;
 var EtagLog = class {
   seen = /* @__PURE__ */ new Set();
@@ -878,7 +888,7 @@ function checkAddress(policy, url2, address) {
 var MERGE_GAP = 1 << 16;
 var strictUtf82 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
-// src/virtualize/ir/source.ts
+// src/zarrify/ir/source.ts
 function readerSource(read, size, options = {}) {
   return {
     size,
@@ -899,6 +909,13 @@ var Transient = class extends Error {
     super(`HTTP ${status}`);
     this.status = status;
     this.retryAfter = retryAfter;
+  }
+};
+var NoResponse = class extends Error {
+  error;
+  constructor(error) {
+    super(error.message);
+    this.error = error;
   }
 };
 var isNode = typeof process !== "undefined" && process.versions?.node !== void 0;
@@ -1016,7 +1033,7 @@ var HttpSource = class {
       if (e instanceof RefkvError || e instanceof HttpResolutionError) throw e;
       if (this.refusals.has(e.message)) throw new RefkvError("resolution", e.message);
       (signal ?? this.signal)?.throwIfAborted();
-      if (e instanceof TypeError || typeof e.code === "string") throw e;
+      if (e instanceof TypeError || typeof e.code === "string") throw new NoResponse(e);
       throw new HttpResolutionError(`${this.url}: ${e.message}`);
     }
     if (response.redirected && response.url) this.at = response.url;
@@ -1053,7 +1070,10 @@ var HttpSource = class {
           if (last) throw new HttpResolutionError(`${this.url}: HTTP ${e.status} after ${this.attempts} attempts`);
           await this.wait(attempt, e.retryAfter);
         } else {
-          if (last) throw new HttpResolutionError(`${this.url}: ${e.message}${causeOf(e)}`);
+          if (last) {
+            if (e instanceof NoResponse) throw new HttpResolutionError(`${fetchFailed(this.url, e.error)}${causeOf(e.error)}`);
+            throw new HttpResolutionError(`${this.url}: ${e.message}${causeOf(e)}`);
+          }
           await this.wait(attempt, null);
         }
       }
@@ -1161,7 +1181,7 @@ function multipartParts(body, ctype) {
   }
 }
 
-// src/virtualize/store.ts
+// src/zarrify/store.ts
 var StoreError = class extends Error {
   /** The store format that refused the input, once one was chosen (the Rust core's store run:
    * `zarr2`, or `ome-zarr` once its 0.4 test passed); none for a rejection before that. */
@@ -1620,13 +1640,13 @@ function chooseProfile(store) {
 }
 var MAX_BLOCK = 2 ** 31 - 1;
 
-// src/virtualize/ir/store.ts
+// src/zarrify/ir/store.ts
 var utf85 = new TextEncoder();
 var text3 = (b) => new TextDecoder().decode(b);
 function rejection2(w, r, format) {
   return new StoreError(text3(out(w, -r)), format);
 }
-async function virtualizeStoreIr(format, store, options = {}) {
+async function zarrifyStoreIr(format, store, options = {}) {
   const w = await ir();
   await store.prefetch?.drain();
   const listing = [...store.objects].sort((a, b) => compareKeys(a[0], b[0]));
@@ -1758,19 +1778,20 @@ function storeDesc(raw, sizes) {
   return { sources, entries };
 }
 
-// src/virtualize/ir/vsi.ts
-function splitVsiUrl(url2) {
+// src/zarrify/ir/vsi.ts
+var BESIDE = { vsi: "VSI", nrrd: "NRRD", grib: "GRIB" };
+function splitVsiUrl(url2, title = "VSI") {
   const base = url2.split(/[?#]/, 1)[0];
-  if (base !== url2) throw new ImageError(`VSI input ${JSON.stringify(url2)} has a query or a fragment`);
+  if (base !== url2) throw new ImageError(`${title} input ${JSON.stringify(url2)} has a query or a fragment`);
   const k = base.lastIndexOf("/");
   const name = base.slice(k + 1);
   let key;
   try {
     key = decodeURIComponent(name);
   } catch {
-    throw new ImageError(`VSI input ${JSON.stringify(url2)}: its file name is not percent-encoded UTF-8`);
+    throw new ImageError(`${title} input ${JSON.stringify(url2)}: its file name is not percent-encoded UTF-8`);
   }
-  if (k < 0 || !key || key.includes("/")) throw new ImageError(`VSI input ${JSON.stringify(url2)} names no file`);
+  if (k < 0 || !key || key.includes("/")) throw new ImageError(`${title} input ${JSON.stringify(url2)} names no file`);
   return [base.slice(0, k + 1), key];
 }
 async function probeHttp(url2, options) {
@@ -1781,12 +1802,13 @@ async function probeHttp(url2, options) {
     throw e;
   }
 }
-function vsiFiles(url2, source, options = {}) {
-  const [dir, key] = splitVsiUrl(url2);
+function vsiFiles(url2, source, options = {}, format = "vsi") {
+  const title = BESIDE[format];
+  const [dir, key] = splitVsiUrl(url2, title);
   const sources = /* @__PURE__ */ new Map([[key, source]]);
   const open = options.open ?? ((k) => {
     if (!/^https?:\/\//.test(dir)) {
-      return Promise.reject(new ImageError(`VSI input ${JSON.stringify(url2)}: its tile files can only be opened at an http(s) URL`));
+      return Promise.reject(new ImageError(`${title} input ${JSON.stringify(url2)}: the files beside it can only be opened at an http(s) URL`));
     }
     return probeHttp(objectUrl(dir, k), options.http ?? (source instanceof HttpSource ? source.options : {}));
   });
@@ -1812,19 +1834,19 @@ function vsiFiles(url2, source, options = {}) {
     },
     async readRange(k, offset, length) {
       const s = sources.get(k);
-      if (s === void 0) throw new StoreError(`${k}: not a file of the VSI input`, "vsi");
+      if (s === void 0) throw new StoreError(`${k}: not a file of the ${title} input`, format);
       return s.read(offset, length);
     }
   };
   return store;
 }
-async function virtualizeVsi(url2, source, options = {}) {
-  const store = vsiFiles(url2, source, options);
-  const desc = await virtualizeStoreIr("vsi", store, { mirror: options.mirror ?? true, concurrency: source.concurrency });
+async function zarrifyVsi(url2, source, options = {}, format = "vsi") {
+  const store = vsiFiles(url2, source, options, format);
+  const desc = await zarrifyStoreIr(format, store, { mirror: options.mirror ?? true, concurrency: source.concurrency });
   return { ...desc, store };
 }
 
-// src/virtualize/index.ts
+// src/zarrify/index.ts
 async function addChecksums(desc, read) {
   for (const e of desc.entries) {
     if (!("ranges" in e)) continue;
@@ -1836,24 +1858,25 @@ async function addChecksums(desc, read) {
   }
 }
 var NOT_SUPPORTED = "not a file of any supported format";
-async function virtualizeSource(url2, source, pins = {}) {
+async function zarrifySource(url2, source, pins = {}) {
   const exact = (o, n) => source.read(o, n);
   const read = blockReader(exact, source.size);
   const etag = pins.etag ?? (source.etag ? () => source.etag() : void 0);
-  return virtualizeWith(url2, { read, size: source.size, exact, source }, { ...pins, ...etag ? { etag } : {} });
+  return zarrifyWith(url2, { read, size: source.size, exact, source }, { ...pins, ...etag ? { etag } : {} });
 }
-async function virtualizeWith(url2, input, pins) {
+async function zarrifyWith(url2, input, pins) {
   const format = await irFormat(await input.read(0, Math.min(552, input.size)));
   if (format === void 0) throw new ImageError(NOT_SUPPORTED);
-  if (format === "vsi") {
-    const { store, ...desc2 } = await virtualizeVsi(url2, input.source, pins.open ? { open: pins.open } : {});
+  if (format in BESIDE) {
+    const beside = format;
+    const { store, ...desc2 } = await zarrifyVsi(url2, input.source, pins.open ? { open: pins.open } : {}, beside);
     if (pins.checksums) {
       const keys = new Map([...store.objects.keys()].map((k) => [objectUrl(store.url, k), k]));
       await addChecksums(desc2, (u, o, n) => store.readRange(keys.get(u), o, n));
     }
-    return { format: "vsi", ...desc2 };
+    return { format: beside, ...desc2 };
   }
-  const desc = await virtualizeIr(format, url2, input.source);
+  const desc = await zarrifyIr(format, url2, input.source, { checksums: pins.checksums === true });
   const etag = pins.etag?.();
   desc.sources[0] = { ...desc.sources[0], size: BigInt(input.size), ...etag !== void 0 ? { etag } : {} };
   if (pins.checksums) await addChecksums(desc, (_u, o, n) => (input.exact ?? input.read)(o, n));
@@ -1864,13 +1887,13 @@ async function irFormat(head) {
   const n = Number(w.vz_sniff(put(w, head), head.length));
   return n > 0 ? new TextDecoder().decode(out(w, n)) : void 0;
 }
-async function virtualizeStore(input, options = {}) {
+async function zarrifyStore(input, options = {}) {
   if (typeof input !== "string" && (options.policy !== void 0 || options.headers !== void 0)) {
-    throw new TypeError("virtualizeStore: a policy applies to a store URL; pass it to openHttpStore for an opened store");
+    throw new TypeError("zarrifyStore: a policy applies to a store URL; pass it to openHttpStore for an opened store");
   }
   const store = typeof input === "string" ? await openHttpStore(input, { policy: options.policy ?? {}, headers: options.headers ?? {} }) : input;
   const pins = options;
-  const desc = await virtualizeStoreProfile(store);
+  const desc = await zarrifyStoreProfile(store);
   if (pins.checksums) {
     const keys = new Map([...store.objects.keys()].map((k) => [objectUrl(store.url, k), k]));
     await addChecksums(desc, async (u, o, n) => {
@@ -1880,12 +1903,12 @@ async function virtualizeStore(input, options = {}) {
   }
   return desc;
 }
-async function virtualizeStoreProfile(store) {
+async function zarrifyStoreProfile(store) {
   try {
     const chosen = chooseProfile(store);
-    if (chosen === "safe") return { format: "safe", ...await virtualizeStoreIr("safe", store) };
-    if (chosen === "n5") return { format: "n5", ...await virtualizeStoreIr("n5", store) };
-    const desc = await virtualizeStoreIr("zarr2", store);
+    if (chosen === "safe") return { format: "safe", ...await zarrifyStoreIr("safe", store) };
+    if (chosen === "n5") return { format: "n5", ...await zarrifyStoreIr("n5", store) };
+    const desc = await zarrifyStoreIr("zarr2", store);
     return { format: desc.summary.format === "ome-zarr" ? "ome-zarr" : "zarr2", ...desc };
   } finally {
     closeStore(store);
@@ -1897,14 +1920,14 @@ var READS_AT_ONCE = 8;
 function unpinned(desc) {
   desc.sources = desc.sources.map(({ size: _size, etag: _etag, modifiedNotAfter: _m, ...s }) => s);
 }
-async function virtualizeToArchive(input, options = {}) {
+async function zarrifyToArchive(input, options = {}) {
   let desc;
   if (typeof input === "string") {
-    desc = await virtualizeStore(input, { policy: options.policy ?? {} });
+    desc = await zarrifyStore(input, { policy: options.policy ?? {} });
   } else {
     const source = readerSource((o, n) => input.read(o, n), input.size, { concurrency: READS_AT_ONCE });
     const open = input.open;
-    desc = await virtualizeSource(input.url, source, open ? {
+    desc = await zarrifySource(input.url, source, open ? {
       open: async (key) => {
         const file = await open(key);
         return file && readerSource((o, n) => file.read(o, n), file.size, { concurrency: READS_AT_ONCE });
@@ -1933,9 +1956,31 @@ async function decodeFitsTiles(chunk, configuration, shape) {
     w.vz_free(ps, dims.length);
   }
 }
+async function decodeGrib(chunk, configuration, shape, dataType = "float64") {
+  const w = await ir();
+  const config = new TextEncoder().encode(JSON.stringify(configuration ?? {}));
+  const dims = new Uint8Array(shape.length * 8);
+  shape.forEach((n, i) => new DataView(dims.buffer).setBigUint64(i * 8, BigInt(n), true));
+  const pc = put(w, chunk);
+  const pg = put(w, config);
+  const ps = put(w, dims);
+  try {
+    const n = Number(w.vz_grib_decode(pc, chunk.length, pg, config.length, ps, shape.length));
+    if (n < 0) throw new Error(new TextDecoder().decode(out(w, -n)));
+    const bytes = out(w, n);
+    const values = new Float64Array(n / 8);
+    new Uint8Array(values.buffer).set(bytes);
+    return dataType === "float32" ? Float32Array.from(values) : values;
+  } finally {
+    w.vz_free(pc, chunk.length);
+    w.vz_free(pg, config.length);
+    w.vz_free(ps, dims.length);
+  }
+}
 export {
   decodeFitsTiles,
+  decodeGrib,
   setIrWasmModule,
   setIrWasmUrl,
-  virtualizeToArchive
+  zarrifyToArchive
 };

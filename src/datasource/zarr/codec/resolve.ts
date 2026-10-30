@@ -68,6 +68,10 @@ export interface ArrayToArrayCodecResolver<Configuration>
 export interface ArrayToBytesCodecResolver<Configuration>
   extends CodecResolver {
   kind: CodecKind.arrayToBytes;
+  // Whether the codec decodes a chunk of a float64 array to float32 values,
+  // so that the array is shown as float32 (Neuroglancer has no float64 data
+  // type). A float64 array of any other codec is rejected.
+  decodesFloat64AsFloat32?: boolean;
   resolve(
     configuration: unknown,
     decodedArrayInfo: CodecArrayInfo,
@@ -105,9 +109,13 @@ export function registerCodec<Configuration>(
   codecRegistry.set(resolver.name, resolver);
 }
 
+// `float64`: the array's data type is float64, and `decodedArrayInfo`'s
+// dataType is float32, as its chunks are decoded (see
+// `ArrayToBytesCodecResolver.decodesFloat64AsFloat32`).
 export function parseCodecChainSpec(
   obj: unknown,
   decodedArrayInfo: CodecArrayInfo,
+  float64 = false,
 ): CodecChainSpec {
   const arrayToArray: CodecSpec<CodecKind.arrayToArray>[] = [];
   const arrayInfo: CodecArrayInfo[] = [];
@@ -154,6 +162,11 @@ export function parseCodecChainSpec(
   } = (() => {
     const { resolver, configuration: initialConfiguration } = codecSpecs[i];
     const arrayToBytesResolver = resolver as ArrayToBytesCodecResolver<unknown>;
+    if (float64 && !arrayToBytesResolver.decodesFloat64AsFloat32) {
+      throw new Error(
+        `float64 arrays are not supported with the ${JSON.stringify(resolver.name)} codec`,
+      );
+    }
     const { configuration, shardingInfo, encodedSize } =
       arrayToBytesResolver.resolve(initialConfiguration, decodedArrayInfo);
     if (shardingInfo !== undefined) {
