@@ -16,9 +16,8 @@ import sys
 from pathlib import Path
 
 import numpy as np
-import zarr
-
 import refkv.zarr
+import zarr
 from refkv.ir import zarrify
 
 HERE = Path(__file__).parent / "flac"
@@ -48,7 +47,10 @@ def write(path: Path, out: Path) -> None:
         shard = out / key.removeprefix("samples/")
         shard.parent.mkdir(parents=True, exist_ok=True)
         shard.write_bytes(
-            b"".join(p if isinstance(p, bytes) else data[p[-2] : p[-2] + p[-1]] for p in parts)
+            b"".join(
+                p if isinstance(p, bytes) else data[p[-2] : p[-2] + p[-1]]
+                for p in parts
+            )
         )
     root = zarr.open_group(refkv.zarr.store(result.to_store()), mode="r", zarr_format=3)
     np.save(out / "expected.npy", root.get_array("samples")[...])
