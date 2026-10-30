@@ -64,7 +64,7 @@ test("rejects a stream format it does not decode", () => {
       { dataType: DataType.FLOAT32, chunkShape: [1024, 2] },
     ),
   ).toThrow(
-    "aac streams are not decoded, only h264 video and mp3 and flac audio",
+    "aac streams are not decoded, only h264 and hevc video and mp3 and flac audio",
   );
 });
 

@@ -17,11 +17,11 @@
 /**
  * @file What the `refkv.stream` codec needs besides a decoder: a chunk's
  * frames and their output positions, the WebCodecs codec string of an H.264
- * stream, the copy of a decoded picture's planes into a chunk, and the planes
- * a decoding gave that were not asked for yet. A chunk is a varint count `n`,
- * then for each frame a varint size and a zigzag varint of its position less
- * the previous frame's (the first's less -1), then the frames; a frame at
- * position -1 is decoded and dropped (refkv's spec/conventions.md, section 10
+ * or HEVC stream, the copy of a decoded picture's planes into a chunk, and the
+ * planes a decoding gave that were not asked for yet. A chunk is a varint
+ * count `n`, then for each frame a varint size and a zigzag varint of its
+ * position less the previous frame's (the first's less -1), then the frames;
+ * a frame at position -1 is decoded and dropped (refkv's spec/conventions.md, section 10
  * <https://github.com/d-v-b/refkv/blob/main/spec/conventions.md#10-coded-streams>).
  */
 
@@ -89,6 +89,60 @@ export function avcCodecString(avcc: Uint8Array): string {
   }
   const hex = (x: number) => x.toString(16).padStart(2, "0");
   return `avc1.${hex(avcc[1])}${hex(avcc[2])}${hex(avcc[3])}`;
+}
+
+/** The WebCodecs codec string of an HEVC stream from its hvcC box's payload
+ * (ISO/IEC 14496-15 E.3): `hvc1.` (or `hev1.`), then the general profile space
+ * (none for 0, else "A" to "C") and profile, the profile compatibility flags
+ * in reverse bit order in hex, the tier ("L" or "H") and level, and the
+ * constraint flags' bytes in hex, without the trailing zero ones: x265's Main
+ * at level 3 is `hvc1.1.6.L30.90`. */
+export function hevcCodecString(
+  hvcc: Uint8Array,
+  entry: "hvc1" | "hev1" = "hvc1",
+): string {
+  // version 1, and the reserved bits before min_spatial_segmentation_idc and
+  // parallelismType set
+  if (
+    hvcc.length < 23 ||
+    hvcc[0] !== 1 ||
+    (hvcc[13] & 0xf0) !== 0xf0 ||
+    (hvcc[15] & 0xfc) !== 0xfc
+  ) {
+    throw new Error("refkv.stream: the setup is not an hvcC box's payload");
+  }
+  const space = hvcc[1] >> 6;
+  const tier = (hvcc[1] >> 5) & 1;
+  const profile = hvcc[1] & 0x1f;
+  // general_profile_compatibility_flag[j], the j-th bit from the first
+  // byte's high bit, is bit j of the reversed value
+  let reversed = 0;
+  for (let j = 0; j < 32; ++j) {
+    if ((hvcc[2 + (j >> 3)] >> (7 - (j & 7))) & 1) reversed += 2 ** j;
+  }
+  const constraints = Array.from(hvcc.subarray(6, 12));
+  while (constraints.length > 0 && constraints[constraints.length - 1] === 0) {
+    constraints.pop();
+  }
+  const hex = (x: number) => x.toString(16).toUpperCase();
+  return [
+    entry,
+    `${["", "A", "B", "C"][space]}${profile}`,
+    hex(reversed),
+    `${tier ? "H" : "L"}${hvcc[12]}`,
+    ...constraints.map(hex),
+  ].join(".");
+}
+
+/** The general profile of an HEVC stream from its hvcC box's payload, by name
+ * when it is Main or Main 10. */
+export function hevcProfile(hvcc: Uint8Array): string {
+  const profile = hvcc[1] & 0x1f;
+  return profile === 1
+    ? "Main"
+    : profile === 2
+      ? "Main 10"
+      : `profile ${profile}`;
 }
 
 /** What an AudioDecoder needs to know of an MP3 stream, from a frame's
@@ -259,9 +313,9 @@ const MATRICES: Record<number, string> = {
   9: "bt2020-ncl",
 };
 
-/** An H.264 stream's color signaling, from its first SPS's VUI (H.264 E.1):
- * full range or not (limited when the VUI does not say), and its matrix, if it
- * names one this reader knows. */
+/** A stream's color signaling, from its first SPS's VUI (H.264 E.1, H.265
+ * E.2): full range or not (limited when the VUI does not say), and its matrix,
+ * if it names one this reader knows. */
 export interface StreamColor {
   fullRange: boolean;
   matrix?: string;
@@ -297,21 +351,45 @@ class Bits {
   }
 }
 
-/** The color signaling of the stream whose avcC payload is `avcc`. */
-export function streamColor(avcc: Uint8Array): StreamColor {
-  const limited: StreamColor = { fullRange: false };
-  if (avcc.length < 8 || (avcc[5] & 0x1f) === 0) return limited;
-  const length = (avcc[6] << 8) | avcc[7];
-  const nal = avcc.subarray(8, 8 + length);
-  // the RBSP: the NAL unit's payload without its emulation prevention bytes
+const LIMITED: StreamColor = { fullRange: false };
+
+/** The bits of a NAL unit's payload, after its header of `header` bytes,
+ * without its emulation prevention bytes. */
+function rbspBits(nal: Uint8Array, header: number) {
   const rbsp: number[] = [];
-  for (let i = 1; i < nal.length; ++i) {
-    if (i >= 3 && nal[i] === 3 && nal[i - 1] === 0 && nal[i - 2] === 0) {
+  for (let i = header; i < nal.length; ++i) {
+    if (
+      i >= header + 2 &&
+      nal[i] === 3 &&
+      nal[i - 1] === 0 &&
+      nal[i - 2] === 0
+    ) {
       continue;
     }
     rbsp.push(nal[i]);
   }
-  const r = new Bits(Uint8Array.from(rbsp));
+  return new Bits(Uint8Array.from(rbsp));
+}
+
+/** The color signaling at the start of an SPS's VUI, whose fields H.264 and
+ * HEVC share up to the matrix. */
+function vuiColor(r: Bits): StreamColor {
+  if (r.bit() && r.bits(8) === 255) r.bits(32); // aspect ratio
+  if (r.bit()) r.bit(); // overscan
+  if (!r.bit()) return LIMITED; // video_signal_type_present_flag
+  r.bits(3);
+  const fullRange = r.bit() === 1;
+  if (!r.bit()) return { fullRange };
+  r.bits(16); // colour primaries, transfer characteristics
+  const matrix = MATRICES[r.bits(8)];
+  return matrix === undefined ? { fullRange } : { fullRange, matrix };
+}
+
+/** The color signaling of the stream whose avcC payload is `avcc`. */
+export function streamColor(avcc: Uint8Array): StreamColor {
+  if (avcc.length < 8 || (avcc[5] & 0x1f) === 0) return LIMITED;
+  const length = (avcc[6] << 8) | avcc[7];
+  const r = rbspBits(avcc.subarray(8, 8 + length), 1);
   const profile = r.bits(8);
   r.bits(16); // constraint flags and level
   r.ue(); // seq_parameter_set_id
@@ -354,16 +432,113 @@ export function streamColor(avcc: Uint8Array): StreamColor {
   if (!r.bit()) r.bit(); // frame_mbs_only_flag, mb_adaptive_frame_field_flag
   r.bit();
   if (r.bit()) for (let i = 0; i < 4; ++i) r.ue(); // frame cropping
-  if (!r.bit()) return limited; // vui_parameters_present_flag
-  if (r.bit() && r.bits(8) === 255) r.bits(32); // aspect ratio
-  if (r.bit()) r.bit(); // overscan
-  if (!r.bit()) return limited; // video_signal_type_present_flag
-  r.bits(3);
-  const fullRange = r.bit() === 1;
-  if (!r.bit()) return { fullRange };
-  r.bits(16); // colour primaries, transfer characteristics
-  const matrix = MATRICES[r.bits(8)];
-  return matrix === undefined ? { fullRange } : { fullRange, matrix };
+  if (!r.bit()) return LIMITED; // vui_parameters_present_flag
+  return vuiColor(r);
+}
+
+/** The first SPS of an hvcC payload: its arrays follow the 23-byte header,
+ * each a NAL unit type, a count and the units, each after its 16-bit size. */
+function hevcSps(hvcc: Uint8Array): Uint8Array | undefined {
+  let at = 23;
+  for (let a = 0; a < (hvcc[22] ?? 0) && at + 3 <= hvcc.length; ++a) {
+    const type = hvcc[at] & 0x3f;
+    const count = (hvcc[at + 1] << 8) | hvcc[at + 2];
+    at += 3;
+    for (let k = 0; k < count && at + 2 <= hvcc.length; ++k) {
+      const length = (hvcc[at] << 8) | hvcc[at + 1];
+      at += 2;
+      if (type === 33) return hvcc.subarray(at, at + length);
+      at += length;
+    }
+  }
+  return undefined;
+}
+
+/** The color signaling of the HEVC stream whose hvcC payload is `hvcc`, from
+ * its first SPS (H.265 7.3.2.2.1). */
+export function hevcStreamColor(hvcc: Uint8Array): StreamColor {
+  const sps = hevcSps(hvcc);
+  if (sps === undefined) return LIMITED;
+  const r = rbspBits(sps, 2);
+  r.bits(4); // sps_video_parameter_set_id
+  const subLayers = r.bits(3); // sps_max_sub_layers_minus1
+  r.bit();
+  // profile_tier_level: the general profile and level, then the sub-layers'
+  r.bits(96);
+  const present: [number, number][] = [];
+  for (let i = 0; i < subLayers; ++i) present.push([r.bit(), r.bit()]);
+  if (subLayers > 0) r.bits(2 * (8 - subLayers));
+  for (const [profile, level] of present) {
+    if (profile) r.bits(88);
+    if (level) r.bits(8);
+  }
+  r.ue(); // sps_seq_parameter_set_id
+  if (r.ue() === 3) r.bit(); // chroma_format_idc, separate_colour_plane_flag
+  r.ue();
+  r.ue();
+  if (r.bit()) for (let i = 0; i < 4; ++i) r.ue(); // conformance window
+  r.ue(); // bit depths
+  r.ue();
+  const pocBits = r.ue() + 4; // log2_max_pic_order_cnt_lsb_minus4
+  for (let i = r.bit() ? 0 : subLayers; i <= subLayers; ++i) {
+    r.ue(); // sub-layer ordering
+    r.ue();
+    r.ue();
+  }
+  for (let i = 0; i < 6; ++i) r.ue(); // block sizes and transform depths
+  if (r.bit() && r.bit()) {
+    // scaling_list_data
+    for (let size = 0; size < 4; ++size) {
+      for (let matrix = 0; matrix < 6; matrix += size === 3 ? 3 : 1) {
+        if (!r.bit()) {
+          r.ue();
+          continue;
+        }
+        if (size > 1) r.se();
+        for (let i = 0; i < Math.min(64, 1 << (4 + (size << 1))); ++i) r.se();
+      }
+    }
+  }
+  r.bit(); // amp_enabled_flag
+  r.bit(); // sample_adaptive_offset_enabled_flag
+  if (r.bit()) {
+    // pcm
+    r.bits(8);
+    r.ue();
+    r.ue();
+    r.bit();
+  }
+  // st_ref_pic_set: a set predicted from the one before it has an entry for
+  // each of that one's pictures and itself, and as many pictures as it uses
+  const sets = r.ue();
+  const pictures: number[] = [];
+  for (let k = 0; k < sets; ++k) {
+    if (k > 0 && r.bit()) {
+      r.bit(); // delta_rps_sign
+      r.ue();
+      let used = 0;
+      for (let j = 0; j <= pictures[k - 1]; ++j) {
+        if (r.bit() || r.bit()) ++used; // used_by_curr_pic_flag, use_delta_flag
+      }
+      pictures.push(used);
+    } else {
+      const n = r.ue() + r.ue();
+      for (let j = 0; j < n; ++j) {
+        r.ue();
+        r.bit();
+      }
+      pictures.push(n);
+    }
+  }
+  if (r.bit()) {
+    // long-term reference pictures
+    const n = r.ue();
+    for (let i = 0; i < n; ++i) r.bits(pocBits + 1);
+  }
+  r.bit(); // sps_temporal_mvp_enabled_flag
+  r.bit(); // strong_intra_smoothing_enabled_flag
+  if (!r.bit()) return LIMITED; // vui_parameters_present_flag
+  return vuiColor(r);
 }
 
 /** Converts a picture's full-range Y, U and V (a decoder's output for a
@@ -387,27 +562,36 @@ export function narrowRange(out: ChunkPlanes, position: number) {
 export const PLANES = ["y", "u", "v"] as const;
 export type Plane = (typeof PLANES)[number];
 
-/** A chunk's planes: each `frames` pictures of its height and width, row-major. */
+/** A plane's samples: `uint8` of 8 bits, `uint16` of 10. */
+export type SampleArray = Uint8Array<ArrayBuffer> | Uint16Array<ArrayBuffer>;
+
+/** A chunk's planes: each `frames` pictures of its height and width,
+ * row-major, of `depth` bits a sample (8 or 10). */
 export interface ChunkPlanes {
   frames: number;
+  depth: number;
   shapes: Record<Plane, [number, number]>;
-  data: Partial<Record<Plane, Uint8Array<ArrayBuffer>>>;
+  data: Partial<Record<Plane, SampleArray>>;
 }
 
 export function newChunkPlanes(
   frames: number,
   width: number,
   height: number,
+  depth = 8,
 ): ChunkPlanes {
   const cw = Math.ceil(width / 2);
   const ch = Math.ceil(height / 2);
+  const array = (n: number) =>
+    depth > 8 ? new Uint16Array(n) : new Uint8Array(n);
   return {
     frames,
+    depth,
     shapes: { y: [height, width], u: [ch, cw], v: [ch, cw] },
     data: {
-      y: new Uint8Array(frames * width * height),
-      u: new Uint8Array(frames * cw * ch),
-      v: new Uint8Array(frames * cw * ch),
+      y: array(frames * width * height),
+      u: array(frames * cw * ch),
+      v: array(frames * cw * ch),
     },
   };
 }
@@ -444,10 +628,21 @@ function lumaWeights(matrix: string | null | undefined): [number, number] {
   }
 }
 
-/** Whether a picture in `format` holds its decoder's Y, U and V exactly
- * (8-bit 4:2:0), rather than RGB converted from them. */
-export function isExactFormat(format: string) {
-  return format === "I420" || format === "I420A" || format === "NV12";
+/** The 4:2:0 formats of 8 bits a sample and of 10 (each in the low bits of a
+ * little-endian 16-bit integer). */
+const EIGHT_BIT = ["I420", "I420A", "NV12"];
+const TEN_BIT = ["I420P10", "I420AP10"];
+
+/** Whether a picture in `format` holds RGB converted from its decoder's Y, U
+ * and V, as Firefox's VideoDecoder gives them. */
+export function isRgbFormat(format: string) {
+  return format in RGB_FORMATS;
+}
+
+/** Whether a picture in `format` holds its decoder's Y, U and V exactly, of
+ * `depth` bits, rather than converted from them. */
+export function isExactFormat(format: string, depth = 8) {
+  return (depth > 8 ? TEN_BIT : EIGHT_BIT).includes(format);
 }
 
 /** Converts an RGB picture back to Y, U and V by its color space (BT.601 and
@@ -498,8 +693,9 @@ function convertRgb(
 }
 
 /** Copies a decoded picture, `src` with the plane layouts `layout` in the
- * pixel format `format`, into the chunk's planes at `position`: 8-bit 4:2:0
- * ("I420", "I420A" or "NV12") as it is, and RGB ("BGRX", "BGRA", "RGBX",
+ * pixel format `format`, into the chunk's planes at `position`: 4:2:0 of the
+ * chunk's depth ("I420", "I420A" or "NV12" of 8 bits, "I420P10" or "I420AP10"
+ * of 10) as it is, and, into 8-bit planes, RGB ("BGRX", "BGRA", "RGBX",
  * "RGBA") converted back by its color space `color` (see `convertRgb`). */
 export function copyPicture(
   format: string,
@@ -513,6 +709,31 @@ export function copyPicture(
     throw new Error(
       `refkv.stream: a picture at ${position} is outside the chunk's ${out.frames}`,
     );
+  }
+  if (out.depth > 8) {
+    if (!TEN_BIT.includes(format)) {
+      throw new Error(
+        `refkv.stream: a picture decodes to ${format}, not 4:2:0 of ${out.depth} bits`,
+      );
+    }
+    // little-endian 16-bit samples
+    const copyWideRows = (
+      from: PlaneLayoutLike,
+      to: SampleArray,
+      [h, w]: [number, number],
+    ) => {
+      const base = position * h * w;
+      for (let r = 0; r < h; ++r) {
+        const s = from.offset + r * from.stride;
+        for (let c = 0; c < w; ++c) {
+          to[base + r * w + c] = src[s + 2 * c] | (src[s + 2 * c + 1] << 8);
+        }
+      }
+    };
+    copyWideRows(layout[0], out.data.y!, out.shapes.y);
+    copyWideRows(layout[1], out.data.u!, out.shapes.u);
+    copyWideRows(layout[2], out.data.v!, out.shapes.v);
+    return;
   }
   const copyRows = (
     from: PlaneLayoutLike,
@@ -547,7 +768,7 @@ export function copyPicture(
     convertRgb(RGB_FORMATS[format], src, layout[0], out, position, color);
   } else {
     throw new Error(
-      `refkv.stream: an H.264 picture decodes to ${format}, not 8-bit 4:2:0 or RGB`,
+      `refkv.stream: a picture decodes to ${format}, not 8-bit 4:2:0 or RGB`,
     );
   }
 }
@@ -599,7 +820,7 @@ export class SharedPlanes {
     bytes: Uint8Array,
     plane: Plane,
     decode: () => Promise<ChunkPlanes>,
-  ): Promise<Uint8Array<ArrayBuffer>> {
+  ): Promise<SampleArray> {
     const key = `${bytes.length}:${fnv1a(bytes)}`;
     const found = this.entries
       .get(key)

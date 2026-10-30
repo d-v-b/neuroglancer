@@ -22,6 +22,8 @@ import {
   copyFlacSamples,
   copyPicture,
   flacStream,
+  hevcCodecString,
+  hevcStreamColor,
   mp3Stream,
   narrowRange,
   newChunkPlanes,
@@ -44,6 +46,37 @@ const SLEAP_AVCC = fromBase64(
 );
 const BFRAMES_AVCC = fromBase64(
   "AWQACv/hABhnZAAKrNlEewEQAAADABAAAAMBQPEiWWABAAZo6+PLIsD9+PgA",
+);
+
+const fromHex = (h: string) =>
+  Uint8Array.from(h.match(/../g)!, (b) => parseInt(b, 16));
+
+// hvcC payloads: refkv's (rust/refkv-ir/src/mp4.rs), x265's Main with three
+// temporal sub-layers and its Main 10 (BT.2020 matrix, limited range); and,
+// without their SEI arrays, x265's Main with sub-layers in full range and the
+// BT.709 matrix, and macOS VideoToolbox's Main in full range and BT.709, whose
+// SPS has short-term reference picture sets and scaling lists enabled
+const HVCC_SUB_LAYERS = fromHex(
+  "0101600000009000000000001ef000fcfdf8f800001b03a00001001e40010c04" +
+    "ffff01600000030090000003000003001e00009594aca5650240a10001002e42" +
+    "010401600000030090000003000003001e0000a020831659594aca565b932bc0" +
+    "5a020000030002000003001410a2000100064401c173d089",
+);
+const HVCC_MAIN10 = fromHex(
+  "0102200000009000000000001ef000fcfdfafa00000f03a00001001840010c01" +
+    "ffff02200000030090000003000003001e959409a10001002b42010102200000" +
+    "030090000003000003001ea0208313659596e4caf016a1224120800000030080" +
+    "00000504a2000100064401c173d089",
+);
+const X265_FULL_HVCC = fromBase64(
+  "AQFgAAAAkAAAAAAAHvAA/P34+AAAGwOgAAEAHkABDAT//wFgAAADAJAAAAMAAAMAHgAAlZSs" +
+    "pWUCQKEAAQAxQgEEAWAAAAMAkAAAAwAAAwAeAACgIIMWWVlKylZbkyvAW4CAgIIAAAMAAgAA" +
+    "AwAUEKIAAQAGRAHBc9CJ",
+);
+const VIDEOTOOLBOX_HVCC = fromBase64(
+  "AQFgAAAAsAAAAAAAHvAA/P34+AAADwOgAAEAGEABDAH//wFgAAADALAAAAMAAAMAHhcCQKEA" +
+    "AQAqQgEBAWAAAAMAsAAAAwAAAwAeoBQgQcGMTiBe5FkUv/Ln8T+sBbgQEAgEogABAAdEAcBy" +
+    "8FMk",
 );
 
 function chunk(): Uint8Array<ArrayBuffer> {
@@ -79,6 +112,20 @@ describe("refkv.stream", () => {
       "avc1.4d401e",
     );
 
+    // HEVC: the profile, the compatibility flags reversed (Main's 0x60000000
+    // is 6, Main 10's 0x20000000 is 4), tier and level, and the constraint
+    // bytes without the trailing zero ones; a profile space, the high tier and
+    // no constraint flags
+    expect(hevcCodecString(HVCC_SUB_LAYERS)).toBe("hvc1.1.6.L30.90");
+    expect(hevcCodecString(HVCC_MAIN10)).toBe("hvc1.2.4.L30.90");
+    expect(hevcCodecString(HVCC_MAIN10, "hev1")).toBe("hev1.2.4.L30.90");
+    expect(hevcCodecString(VIDEOTOOLBOX_HVCC)).toBe("hvc1.1.6.L30.B0");
+    const header = new Uint8Array(23);
+    header.set([1, 0x62, 0x40, 0, 0, 1, 0, 0, 0, 0, 0, 0, 120, 0xf0, 0, 0xfc]);
+    expect(hevcCodecString(header)).toBe("hvc1.A2.80000002.H120");
+    header.set([0x88, 0, 0, 0, 0, 0x0c], 6);
+    expect(hevcCodecString(header)).toBe("hvc1.A2.80000002.H120.88.0.0.0.0.C");
+
     // a 3 x 2 picture (chroma 2 x 1) with row padding, as I420 and as NV12,
     // at position 1 of a 2-picture chunk
     for (const [format, src, layout] of [
@@ -108,6 +155,31 @@ describe("refkv.stream", () => {
       expect(Array.from(planes.data.u!)).toEqual([0, 0, 7, 8]);
       expect(Array.from(planes.data.v!)).toEqual([0, 0, 9, 10]);
     }
+
+    // a 10-bit picture (I420P10: little-endian 16-bit samples, 0 to 1023)
+    // with row padding
+    const ten = newChunkPlanes(1, 3, 2, 10);
+    const le = (...xs: number[]) => xs.flatMap((x) => [x & 0xff, x >> 8]);
+    copyPicture(
+      "I420P10",
+      Uint8Array.from([
+        ...le(1, 1023, 512, 0),
+        ...le(64, 940, 300, 0),
+        ...le(5, 6, 0),
+        ...le(7, 8, 0),
+      ]),
+      [
+        { offset: 0, stride: 8 },
+        { offset: 16, stride: 6 },
+        { offset: 22, stride: 6 },
+      ],
+      ten,
+      0,
+    );
+    expect(ten.data.y).toBeInstanceOf(Uint16Array);
+    expect(Array.from(ten.data.y!)).toEqual([1, 1023, 512, 64, 940, 300]);
+    expect(Array.from(ten.data.u!)).toEqual([5, 6]);
+    expect(Array.from(ten.data.v!)).toEqual([7, 8]);
 
     // RGB pictures (Firefox's VideoDecoder gives BGRX) converted back by
     // their color space, the chroma of each 2 x 2 block its pixels' mean: red,
@@ -141,6 +213,19 @@ describe("refkv.stream", () => {
       matrix: "smpte170m",
     });
     expect(streamColor(BFRAMES_AVCC)).toEqual({ fullRange: false });
+    expect(hevcStreamColor(HVCC_SUB_LAYERS)).toEqual({ fullRange: false });
+    expect(hevcStreamColor(HVCC_MAIN10)).toEqual({
+      fullRange: false,
+      matrix: "bt2020-ncl",
+    });
+    expect(hevcStreamColor(X265_FULL_HVCC)).toEqual({
+      fullRange: true,
+      matrix: "bt709",
+    });
+    expect(hevcStreamColor(VIDEOTOOLBOX_HVCC)).toEqual({
+      fullRange: true,
+      matrix: "bt709",
+    });
 
     // full-range planes (WebKit's, for a limited-range stream) narrowed back
     const wide = newChunkPlanes(1, 2, 2);
@@ -158,6 +243,7 @@ describe("refkv.stream", () => {
       runs += 1;
       return {
         frames: 1,
+        depth: 8,
         shapes: { y: [1, n], u: [1, n], v: [1, n] },
         data: {
           y: new Uint8Array(n),
@@ -204,10 +290,40 @@ describe("refkv.stream", () => {
     ).toThrow("not an avcC box's payload");
   });
 
-  test("rejects a picture that is not 8-bit 4:2:0", () => {
+  test("rejects a setup that is not an hvcC payload", () => {
+    expect(() => hevcCodecString(BFRAMES_AVCC)).toThrow(
+      "not an hvcC box's payload",
+    );
+  });
+
+  test("rejects a picture that is not 8-bit 4:2:0 or RGB", () => {
     expect(() =>
       copyPicture("I444", new Uint8Array(18), [], newChunkPlanes(1, 3, 2), 0),
     ).toThrow("decodes to I444, not 8-bit 4:2:0 or RGB");
+  });
+
+  test("rejects a 10-bit picture for 8-bit planes", () => {
+    expect(() =>
+      copyPicture(
+        "I420P10",
+        new Uint8Array(28),
+        [],
+        newChunkPlanes(1, 3, 2),
+        0,
+      ),
+    ).toThrow("decodes to I420P10, not 8-bit 4:2:0 or RGB");
+  });
+
+  test("rejects an 8-bit picture for 10-bit planes", () => {
+    expect(() =>
+      copyPicture(
+        "NV12",
+        new Uint8Array(12),
+        [],
+        newChunkPlanes(1, 3, 2, 10),
+        0,
+      ),
+    ).toThrow("decodes to NV12, not 4:2:0 of 10 bits");
   });
 
   test("rejects a picture outside the chunk", () => {

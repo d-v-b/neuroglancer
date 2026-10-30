@@ -104,10 +104,16 @@ Supported codecs:
   BGRA pixels of ``uint8``, ``uint16`` or ``float32`` samples, as jxrlib
   decodes them, color in R, G, B (A) order; the chunk shape is as for
   imagecodecs_jpeg2k)
+- imagecodecs_ljpeg (lossless JPEG, ITU-T T.81 process 14 with the SOF3
+  marker: predictors 1 to 7, point transforms, restart intervals, and 1 to 4
+  components of 2 to 16 bits interleaved in one scan, decoded to ``uint8``
+  for up to 8 bits and ``uint16`` otherwise; the chunk shape is as for
+  imagecodecs_jpeg2k)
 - n5_default (one N5 default-mode block per chunk, header included, its
   body encoded with the inner codecs; edge blocks of another size are
   truncated or padded with zeros to the chunk's shape)
 - numcodecs.shuffle (numcodecs' byte shuffle, as zarr-python 3 names it)
+- numcodecs.zlib (zlib streams, as zarr-python 3 names numcodecs' Zlib)
 - sharding_indexed
 - transpose
 - zlib
