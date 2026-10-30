@@ -19,9 +19,12 @@ import type { Configuration } from "#src/datasource/zarr/codec/gzip/resolve.js";
 import { CodecKind } from "#src/datasource/zarr/codec/index.js";
 import { decodeGzip } from "#src/util/gzip.js";
 
+// `numcodecs.zlib` is zarr-python 3's name for numcodecs' `Zlib`: zlib streams
+// (RFC 1950), which `DecompressionStream("deflate")` reads, as `zlib` does.
 for (const [name, compressionFormat] of [
   ["gzip", "gzip"],
   ["zlib", "deflate"],
+  ["numcodecs.zlib", "deflate"],
 ] as const) {
   registerCodec({
     name,
