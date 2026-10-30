@@ -113,6 +113,7 @@ Supported codecs:
   body encoded with the inner codecs; edge blocks of another size are
   truncated or padded with zeros to the chunk's shape)
 - numcodecs.shuffle (numcodecs' byte shuffle, as zarr-python 3 names it)
+- numcodecs.zlib (zlib streams, as zarr-python 3 names numcodecs' Zlib)
 - sharding_indexed
 - transpose
 - zlib

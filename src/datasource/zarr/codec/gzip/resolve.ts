@@ -26,7 +26,7 @@ export interface Configuration {
   level: number;
 }
 
-for (const name of ["gzip", "zlib"]) {
+for (const name of ["gzip", "zlib", "numcodecs.zlib"]) {
   registerCodec({
     name,
     kind: CodecKind.bytesToBytes,
