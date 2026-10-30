@@ -73,6 +73,14 @@ export function parseStreamChunk(b: Uint8Array<ArrayBuffer>): StreamChunk {
   return { units, positions };
 }
 
+/** The bytes of a `setup`, base64. */
+export function base64Bytes(s: string): Uint8Array<ArrayBuffer> {
+  const b = atob(s);
+  const out = new Uint8Array(b.length);
+  for (let i = 0; i < b.length; ++i) out[i] = b.charCodeAt(i);
+  return out;
+}
+
 /** The WebCodecs codec string of an H.264 stream from its avcC box's payload:
  * `avc1.PPCCLL`, its profile, constraint flags and level. */
 export function avcCodecString(avcc: Uint8Array): string {
@@ -135,6 +143,166 @@ export function hevcProfile(hvcc: Uint8Array): string {
     : profile === 2
       ? "Main 10"
       : `profile ${profile}`;
+}
+
+/** What an AudioDecoder needs to know of an MP3 stream, from a frame's
+ * header: its sample rate, its channels, and the samples a frame decodes to
+ * for each channel. */
+export interface Mp3Stream {
+  sampleRate: number;
+  channels: number;
+  samplesPerFrame: number;
+}
+
+// by the header's version bits (00 MPEG-2.5, 10 MPEG-2, 11 MPEG-1; 01 is
+// reserved), then its sample rate index (3 is invalid)
+const MP3_SAMPLE_RATES: Record<number, number[]> = {
+  0: [11025, 12000, 8000],
+  2: [22050, 24000, 16000],
+  3: [44100, 48000, 32000],
+};
+
+/** The stream of a Layer III frame, from its 4-byte header (refkv's
+ * spec/zarrify/mp3.md, section 2
+ * <https://github.com/d-v-b/refkv/blob/main/spec/zarrify/mp3.md#2-frames>). */
+export function mp3Stream(frame: Uint8Array): Mp3Stream {
+  if (frame.length < 4 || frame[0] !== 0xff || (frame[1] & 0xe0) !== 0xe0) {
+    throw new Error("refkv.stream: an mp3 frame does not start with a sync");
+  }
+  const version = (frame[1] >> 3) & 3;
+  const layer = (frame[1] >> 1) & 3;
+  const rateIndex = (frame[2] >> 2) & 3;
+  const rates = MP3_SAMPLE_RATES[version];
+  if (rates === undefined) {
+    throw new Error("refkv.stream: an mp3 frame's version is reserved");
+  }
+  if (layer !== 1) {
+    throw new Error(
+      `refkv.stream: an mp3 frame is ${layer === 0 ? "of a reserved layer" : `Layer ${"I".repeat(4 - layer)}`}, not Layer III`,
+    );
+  }
+  if (rateIndex === 3) {
+    throw new Error(
+      "refkv.stream: an mp3 frame's sample rate index is invalid",
+    );
+  }
+  return {
+    sampleRate: rates[rateIndex],
+    channels: frame[3] >> 6 === 3 ? 1 : 2,
+    samplesPerFrame: version === 3 ? 1152 : 576,
+  };
+}
+
+/** What an AudioDecoder needs to know of a FLAC stream, and what its samples
+ * are, from its STREAMINFO block: its sample rate, its channels, the bits of a
+ * sample and the samples of a frame (its largest block size). */
+export interface FlacStream {
+  sampleRate: number;
+  channels: number;
+  bitsPerSample: number;
+  blockSize: number;
+}
+
+/** The stream of a `refkv.stream` setup of format "flac": `fLaC`, then the
+ * STREAMINFO block, its 4-byte header and its 34-byte body (RFC 9639 §8.2
+ * <https://www.rfc-editor.org/rfc/rfc9639#section-8.2>). */
+export function flacStream(setup: Uint8Array): FlacStream {
+  if (
+    setup.length !== 42 ||
+    String.fromCharCode(...setup.subarray(0, 4)) !== "fLaC" ||
+    (setup[4] & 0x7f) !== 0 ||
+    setup[5] !== 0 ||
+    setup[6] !== 0 ||
+    setup[7] !== 34
+  ) {
+    throw new Error(
+      "refkv.stream: a flac setup is fLaC and a STREAMINFO block, 42 bytes",
+    );
+  }
+  return {
+    blockSize: (setup[10] << 8) | setup[11],
+    sampleRate: (setup[18] << 12) | (setup[19] << 4) | (setup[20] >> 4),
+    channels: ((setup[20] >> 1) & 7) + 1,
+    bitsPerSample: (((setup[20] & 1) << 4) | (setup[21] >> 4)) + 1,
+  };
+}
+
+/** The integer samples of a FLAC stream, of the array's data type. */
+export type FlacSamples =
+  | Int8Array<ArrayBuffer>
+  | Int16Array<ArrayBuffer>
+  | Int32Array<ArrayBuffer>;
+
+/** The bits of a sample of an AudioData of `format`, and whether it is
+ * unsigned (biased by half its range) or a float. */
+const SAMPLE_FORMATS: Record<string, { bits: number; kind: "u" | "s" | "f" }> =
+  {
+    u8: { bits: 8, kind: "u" },
+    s16: { bits: 16, kind: "s" },
+    s32: { bits: 32, kind: "s" },
+    f32: { bits: 32, kind: "f" },
+  };
+
+/** The typed array an AudioData of `format` copies its samples to. */
+export function audioSampleArray(format: string, length: number) {
+  const base = format.replace(/-planar$/, "");
+  switch (base) {
+    case "u8":
+      return new Uint8Array(length);
+    case "s16":
+      return new Int16Array(length);
+    case "s32":
+      return new Int32Array(length);
+    case "f32":
+      return new Float32Array(length);
+  }
+  throw new Error(`refkv.stream: an audio decoder gives ${format} samples`);
+}
+
+/** Copies one channel's (planar) or every channel's (interleaved) `n` decoded
+ * samples, of an AudioData's `format`, to rows `position` on of `out`, the
+ * `[samples, channels]` integers of a FLAC stream of `bits` bits. A decoder
+ * gives an integer sample in the high bits of its format's (ffmpeg's: a
+ * 24-bit sample in the top 24 of 32, an 8-bit one in the top 8 of 16), which
+ * is shifted back, and a float sample scaled to [-1, 1), which is scaled back
+ * (exactly, for 24 bits or fewer). */
+export function copyFlacSamples(
+  format: string,
+  data: ArrayLike<number>,
+  n: number,
+  out: FlacSamples,
+  position: number,
+  channels: number,
+  channel: number | undefined,
+  bits: number,
+) {
+  const planar = format.endsWith("-planar");
+  const given = SAMPLE_FORMATS[format.replace(/-planar$/, "")];
+  if (given === undefined) {
+    throw new Error(`refkv.stream: an audio decoder gives ${format} samples`);
+  }
+  if (given.kind !== "f" && given.bits < bits) {
+    throw new Error(
+      `refkv.stream: the flac decoder gives ${format} samples of a stream of ${bits} bits`,
+    );
+  }
+  const shift = given.bits - bits;
+  const bias = given.kind === "u" ? 1 << (given.bits - 1) : 0;
+  const scale = 2 ** (bits - 1);
+  const convert =
+    given.kind === "f"
+      ? (v: number) =>
+          Math.max(-scale, Math.min(scale - 1, Math.round(v * scale)))
+      : (v: number) => (v - bias) >> shift;
+  const first = planar ? channel! : 0;
+  const last = planar ? channel! + 1 : channels;
+  const stride = planar ? 1 : channels;
+  for (let i = 0; i < n; ++i) {
+    const row = (position + i) * channels;
+    for (let c = first; c < last; ++c) {
+      out[row + c] = convert(data[i * stride + (planar ? 0 : c)]);
+    }
+  }
 }
 
 /** The H.273 matrix codes a VideoColorSpace names. */
