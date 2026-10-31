@@ -47,6 +47,7 @@ if (node !== undefined && import.meta.url.startsWith("file:")) {
 
 export {
   decodeFitsTiles,
-  virtualizeToArchive,
+  decodeGrib,
+  zarrifyToArchive,
 } from "#src/third_party/refkv/refkv_embed.js";
 export type { FileInput } from "#src/third_party/refkv/refkv_embed.js";

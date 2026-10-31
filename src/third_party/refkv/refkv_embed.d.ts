@@ -25,8 +25,8 @@ export interface FileInput {
   size: number;
   /** Exactly `length` bytes at `offset`. */
   read(offset: number, length: number): Promise<Uint8Array>;
-  /** For a VSI input: the file `key` beside it (relative to its directory),
-   * or undefined when there is none. */
+  /** For a VSI or NRRD input: the file `key` beside it (relative to its
+   * directory), or undefined when there is none. */
   open?(key: string): Promise<Omit<FileInput, "url" | "open"> | undefined>;
 }
 
@@ -46,10 +46,10 @@ export interface EmbedOptions {
   policy?: Policy;
 }
 
-export interface Virtualized {
+export interface Zarrified {
   /** The vzip archive. */
   archive: Uint8Array;
-  /** The profile that virtualized the input. */
+  /** The profile that zarrified the input. */
   format: string;
   summary: object;
 }
@@ -62,16 +62,16 @@ export function setIrWasmModule(
   module: WebAssembly.Module | Promise<WebAssembly.Module>,
 ): void;
 
-/** Virtualizes the file `input`, or the store at `input` (an http(s) URL whose
+/** Zarrifies the file `input`, or the store at `input` (an http(s) URL whose
  * path ends in `/`), and writes its vzip archive. Rejects an input of no
  * supported format with an Error whose message says why. */
-export function virtualizeToArchive(
+export function zarrifyToArchive(
   input: FileInput | string,
   options?: EmbedOptions,
-): Promise<Virtualized>;
+): Promise<Zarrified>;
 
 /** Decodes a chunk of the `refkv.fits_tiles` codec (refkv's
- * spec/virtualize/fits.md, section 3.3) with the codec's `configuration` into
+ * spec/zarrify/fits.md, section 3.3) with the codec's `configuration` into
  * the pixels of the chunk shape `shape`: little-endian values of the array's
  * data type. Rejects with an Error whose message starts "refkv.fits_tiles: ". */
 export function decodeFitsTiles(
@@ -79,3 +79,15 @@ export function decodeFitsTiles(
   configuration: unknown,
   shape: number[],
 ): Promise<Uint8Array>;
+
+/** Decodes a chunk of the `refkv.grib` codec (refkv's spec/conventions.md,
+ * section 12), one GRIB message, with the codec's `configuration` into the
+ * values of the chunk shape `shape` (the field's grid), NaN where missing:
+ * binary64, or rounded to nearest binary32 for `dataType` "float32". Rejects
+ * with an Error whose message starts "refkv.grib: ". */
+export function decodeGrib(
+  chunk: Uint8Array,
+  configuration: unknown,
+  shape: number[],
+  dataType?: "float64" | "float32",
+): Promise<Float64Array | Float32Array>;

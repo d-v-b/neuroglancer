@@ -35,7 +35,7 @@ import { KvStoreFileHandle, readFileHandle } from "#src/kvstore/index.js";
 import { encodePathForUrl } from "#src/kvstore/url.js";
 import { VzipKvStore } from "#src/kvstore/vzip/backend.js";
 import type { FileInput } from "#src/third_party/refkv/core.js";
-import { virtualizeToArchive } from "#src/third_party/refkv/core.js";
+import { zarrifyToArchive } from "#src/third_party/refkv/core.js";
 import type { ProgressOptions } from "#src/util/progress_listener.js";
 import { ProgressSpan } from "#src/util/progress_listener.js";
 
@@ -73,7 +73,7 @@ async function virtualize(
     }
     // the user named this store: a private host (a local server) is allowed
     return (
-      await virtualizeToArchive(url, {
+      await zarrifyToArchive(url, {
         policy: { allowPrivateHosts: true },
         pins: false,
       })
@@ -96,7 +96,7 @@ async function virtualize(
       return { size: s.totalSize, read: reader(sibling, options.signal) };
     },
   };
-  return (await virtualizeToArchive(input, { pins: false })).archive;
+  return (await zarrifyToArchive(input, { pins: false })).archive;
 }
 
 function getArchiveCache(

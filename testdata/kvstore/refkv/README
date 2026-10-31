@@ -1,4 +1,7 @@
 Inputs of the refkv kvstore's tests (tests/kvstore/refkv.spec.ts), copied
 from refkv's synthetic fixtures (https://github.com/d-v-b/refkv, fixtures/,
 MIT OR Apache-2.0): an MP4 file (H.264 and AAC), a TIFF file, a VSI file with
-its tile files beside it, and a RICE_1 tile-compressed FITS image; notes.txt is of no supported format.
+its tile files beside it, a RICE_1 tile-compressed FITS image, and a GRIB2
+message with a bitmap (grib_bitmap.grib2, with grib_bitmap.expected.npy, the
+values eccodes decodes it to: refkv's fixtures/grib/expected/grib_bitmap.0.npy);
+notes.txt is of no supported format.

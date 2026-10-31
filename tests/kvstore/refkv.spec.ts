@@ -20,7 +20,13 @@ import "#src/kvstore/http/register_frontend.js";
 import "#src/kvstore/refkv/register_frontend.js";
 import { createHash } from "node:crypto";
 import { expect, test } from "vitest";
+import "#src/datasource/zarr/codec/resolvers.js";
+import "#src/datasource/zarr/codec/refkv_grib/decode.js";
+import { decodeArray } from "#src/datasource/zarr/codec/decode.js";
+import type { ArrayMetadata } from "#src/datasource/zarr/metadata/index.js";
+import { parseV3Metadata } from "#src/datasource/zarr/metadata/parse.js";
 import { decodeFitsTiles } from "#src/third_party/refkv/core.js";
+import { DataType } from "#src/util/data_type.js";
 import { parseStreamChunk } from "#src/util/refkv_stream.js";
 import { constantFixture } from "#tests/fixtures/fixture.js";
 import { httpServerFixture } from "#tests/fixtures/http_server.js";
@@ -54,7 +60,7 @@ async function keys(file: string) {
   return keys;
 }
 
-test("virtualizes a file and reads its chunks from the file", async () => {
+test("zarrifies a file and reads its chunks from the file", async () => {
   for (const [file, profile, chunk] of [
     ["mp4_h264_aac.mp4", "mp4", "tracks/1/y/c/0/0/0"],
     ["edge_aperio_position.tif", "tiff", undefined],
@@ -63,7 +69,7 @@ test("virtualizes a file and reads its chunks from the file", async () => {
     const root = JSON.parse(
       new TextDecoder().decode(await read(file, "zarr.json")),
     );
-    expect(root.attributes.refkv_virtualized.profile, file).toBe(profile);
+    expect(root.attributes.refkv_zarrified.profile, file).toBe(profile);
     const all = await keys(file);
     expect(all, file).toContain("zarr.json");
     expect(
@@ -108,5 +114,40 @@ test("decodes a refkv.fits_tiles chunk as refkv's Python codec does", async () =
   );
   expect(createHash("sha256").update(pixels).digest("hex").slice(0, 16)).toBe(
     "0713fe744f834c15",
+  );
+});
+
+test("decodes a float64 refkv.grib array as float32", async () => {
+  // a field of 12 x 16 points, 12 of them missing (a bitmap), and the values
+  // eccodes decodes it to (refkv's fixtures/grib/expected), rounded to float32
+  const file = "grib_bitmap.grib2";
+  // the variable, beside the grid's coordinates
+  let path = "";
+  let json: any;
+  for (const k of await keys(file)) {
+    if (!/^grid0\/[^/]+\/zarr\.json$/.test(k)) continue;
+    json = JSON.parse(new TextDecoder().decode(await read(file, k)));
+    path = k.slice(0, -"/zarr.json".length);
+    if (json.codecs[0].name === "refkv.grib") break;
+  }
+  expect(json.codecs[0].name).toBe("refkv.grib");
+  expect(json.data_type).toBe("float64");
+  const meta = parseV3Metadata(json, "array") as ArrayMetadata;
+  expect(meta.dataType).toBe(DataType.FLOAT32);
+  const key = ["c", ...meta.chunkShape.map(() => 0)].join("/");
+  const values = await decodeArray(
+    meta.codecs,
+    await read(file, `${path}/${key}`),
+    new AbortController().signal,
+  );
+  expect(values).toBeInstanceOf(Float32Array);
+  const npy = (await (
+    await fetch(
+      (await serverFixture.serverUrl()) + "refkv/grib_bitmap.expected.npy",
+    )
+  ).arrayBuffer()) as ArrayBuffer;
+  const header = 10 + new DataView(npy).getUint16(8, true);
+  expect(Array.from(values as Float32Array)).toEqual(
+    Array.from(new Float64Array(npy, header), Math.fround),
   );
 });
