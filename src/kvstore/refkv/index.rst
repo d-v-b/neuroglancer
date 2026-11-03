@@ -19,14 +19,18 @@ URL syntax
 - :file:`{base-kvstore-url}|refkv:{path}/{to}/{key}`
 
 The :file:`{base-kvstore-url}` names a file, or a store when it ends in
-``/`` (an N5, Zarr v2, OME-Zarr 0.4 or Sentinel-2 SAFE store, which refkv
-lists and reads itself, over ``http:`` and ``https:`` only). For example:
+``/`` (an N5, Zarr v2, OME-Zarr 0.4, Sentinel-2 SAFE or Neuroglancer precomputed
+store, which refkv lists and reads itself, over ``http:`` and ``https:`` only).
+For example:
 
 - ``https://example.com/recording.mp4|refkv:|zarr3:``
 - ``https://example.com/slide.ndpi|refkv:|zarr3:``
+- ``https://bossdb-open-data.s3.amazonaws.com/bates_phelps_kim_yang2025/banc/em/|refkv:|zarr3:``
 
 A VSI file's tile files are read from beside it through the same base
-key-value store.
+key-value store. A precomputed store's objects stored with a
+``Content-Encoding`` cannot be read, as the :ref:`vzip adapter<vzip-kvstore>`
+says of any such object.
 
 Sources and pins
 ----------------
