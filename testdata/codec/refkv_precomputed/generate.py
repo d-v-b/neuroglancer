@@ -55,11 +55,15 @@ def write(name: str) -> None:
     with tempfile.TemporaryDirectory() as tmp:
         archive = Path(tmp) / "archive.vzip"
         zarrify_store(str(FIXTURES / name), f"{URL}{name}/").save(str(archive))
-        reader = refkv.open(str(archive), registry={"https://example.test": LocalStore(FIXTURES.parent)})
+        reader = refkv.open(
+            str(archive), registry={"https://example.test": LocalStore(FIXTURES.parent)}
+        )
         store = zarr_store(reader)
         for key, array in zarr.open_group(store, mode="r").arrays():
             asyncio.run(write_array(store, key, out))
-            (out / f"{key}.expected").write_bytes(array[...].astype(array.dtype.newbyteorder("<")).tobytes())
+            (out / f"{key}.expected").write_bytes(
+                array[...].astype(array.dtype.newbyteorder("<")).tobytes()
+            )
 
 
 for volume in VOLUMES:
