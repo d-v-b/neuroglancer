@@ -112,6 +112,24 @@ Supported codecs:
   components of 2 to 16 bits interleaved in one scan, decoded to ``uint8``
   for up to 8 bits and ``uint16`` otherwise; the chunk shape is as for
   imagecodecs_jpeg2k)
+- imagecodecs_floatpred (TIFF's floating-point predictor, Predictor 3 of TIFF
+  Technical Note 3, in place of bytes; ``axis`` must be the last axis or the one
+  before it, an axis after it holding a pixel's samples, and ``dist`` must be 1;
+  ``float32`` arrays, and ``float64`` arrays, shown as ``float32``, their values
+  rounded to nearest)
+- imagecodecs_packints (TIFF's packed samples: ``bitspersample`` 1 for ``uint8``
+  arrays of values 0 and 1, or 12 for ``uint16`` arrays, most significant bit
+  first, restarting on a byte boundary every ``runlen`` samples)
+- imagecodecs_packbits (TIFF PackBits run-length coding; this is not the
+  zarr-extensions ``packbits`` codec, which is bit packing)
+- imagecodecs_ccittfax4 (CCITT Group 4, ITU-T T.6, bits filled most significant
+  bit first, to ``uint8`` arrays, coded black runs 1 and white runs 0, with no
+  photometric interpretation applied; a chunk's last two dimensions are the
+  image's, the others 1, and a stream that ends before the image does is an
+  error)
+- imagecodecs_eer (Electron Event Representation frames, to ``uint8`` arrays of
+  0 and 1; ``superres`` must be 0, and the configuration's ``shape`` must be the
+  last two dimensions of a chunk, the others 1)
 - n5_default (one N5 default-mode block per chunk, header included, its
   body encoded with the inner codecs; edge blocks of another size are
   truncated or padded with zeros to the chunk's shape)
