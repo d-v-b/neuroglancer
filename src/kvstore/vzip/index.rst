@@ -33,6 +33,17 @@ Capabilities
    * - :ref:`Listing<kvstore-listing>`
      - Supported
 
+Checksums
+---------
+
+A source range may carry a `crc32c
+<https://github.com/d-v-b/refkv/blob/main/spec/refkv.md#42-range>`__, which
+detects a changed source even where a cross-origin response hides the headers
+that pins need. Such a range is `read whole
+<https://github.com/d-v-b/refkv/blob/main/spec/refkv.md#63-resolving-a-reference>`__,
+however little of it a read asks for, and checked before any of its bytes are
+returned. A failed check fails the reads that need that range and no others.
+
 Sources and pins
 ----------------
 
