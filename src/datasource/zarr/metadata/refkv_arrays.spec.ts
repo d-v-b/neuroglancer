@@ -20,6 +20,7 @@ import "#src/datasource/zarr/codec/jpegls/decode.js";
 import "#src/datasource/zarr/codec/packbits/decode.js";
 import "#src/datasource/zarr/codec/resolvers.js";
 import { decodeArray } from "#src/datasource/zarr/codec/decode.js";
+import type { ArrayMetadata } from "#src/datasource/zarr/metadata/index.js";
 import { parseV3Metadata } from "#src/datasource/zarr/metadata/parse.js";
 import { DataType } from "#src/util/data_type.js";
 
@@ -51,7 +52,7 @@ function metadata(
       attributes: {},
     },
     "array",
-  );
+  ) as ArrayMetadata;
 }
 
 async function decoded(meta: ReturnType<typeof metadata>, encoded: number[]) {
