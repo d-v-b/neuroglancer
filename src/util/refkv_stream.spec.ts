@@ -17,6 +17,7 @@
 import { describe, expect, test } from "vitest";
 import type { ChunkPlanes } from "#src/util/refkv_stream.js";
 import {
+  aacStream,
   av1CodecString,
   avcCodecString,
   base64Bytes,
@@ -195,6 +196,39 @@ describe("refkv.stream", () => {
     expect(() =>
       copyPicture("NV12", src, layout, newChunkPlanes(1, 2, 2, 8, "4:2:2"), 0),
     ).toThrow("not 4:2:2 of 8 bits");
+  });
+
+  test("an AudioSpecificConfig gives the stream", () => {
+    const of = (hex: string) =>
+      aacStream(Uint8Array.from(hex.match(/../g)!, (x) => parseInt(x, 16)));
+    const he = { sampleRate: 44100, samplesPerFrame: 2048 };
+    // ffmpeg's AAC-LC, with and without its sync word for no SBR
+    expect(of("1408")).toEqual({
+      codec: "mp4a.40.2",
+      sampleRate: 16000,
+      samplesPerFrame: 1024,
+    });
+    expect(of("121056e500")).toEqual({
+      codec: "mp4a.40.2",
+      sampleRate: 44100,
+      samplesPerFrame: 1024,
+    });
+    // AudioToolbox's backward-compatible HE-AAC and HE-AAC v2, and the
+    // hierarchical signaling of each
+    expect(of("139056e5a0")).toEqual({ codec: "mp4a.40.5", ...he });
+    expect(of("138856e5a54880")).toEqual({ codec: "mp4a.40.29", ...he });
+    expect(of("2b920880")).toEqual({ codec: "mp4a.40.5", ...he });
+    expect(of("eb8a0880")).toEqual({ codec: "mp4a.40.29", ...he });
+  });
+
+  test("an AudioSpecificConfig of another object type is an error", () => {
+    expect(() => aacStream(Uint8Array.of(0x0c, 0x08))).toThrow(
+      "not an AudioSpecificConfig",
+    );
+  });
+
+  test("an AudioSpecificConfig that ends early is an error", () => {
+    expect(() => aacStream(Uint8Array.of(0x14))).toThrow("ends early");
   });
 
   test("reads chunks, codec strings and pictures, and shares planes", async () => {

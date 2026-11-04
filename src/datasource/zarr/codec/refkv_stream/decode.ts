@@ -69,6 +69,13 @@
  * the samples the decoder gives for that timestamp are copied to the chunk's
  * rows from frame `k`'s position, those of a lead-in frame dropped.
  *
+ * Chunks of AAC audio are decoded so too, with the AudioSpecificConfig of the
+ * `setup` as the decoder's description. Measured on macOS against ffmpeg's
+ * decoding of refkv's fixtures, Chrome 148, Firefox 150 and WebKit 26 give
+ * AAC-LC within 135 dB of it. Chrome (about 110 dB) and WebKit (about 100 dB)
+ * decode HE-AAC and HE-AAC v2; Firefox says it does and fails on the first
+ * frames (`EncodingError`).
+ *
  * Chunks of FLAC audio, a frame each as refkv writes a FLAC file's inner
  * chunks, are decoded so too, with the STREAMINFO block of the `setup` as the
  * decoder's description, and give the stream's own integer samples: a decoder
@@ -89,6 +96,7 @@ import type {
   VideoFormat,
 } from "#src/util/refkv_stream.js";
 import {
+  aacStream,
   audioSampleArray,
   av1CodecString,
   avcCodecString,
@@ -331,28 +339,23 @@ export async function decodeVideo(
   return planes ?? newChunkPlanes(frames, 0, 0);
 }
 
-/** The chunk's `[samples, channels]` samples, interleaved by channel. */
-export async function decodeMp3(
-  encoded: Uint8Array<ArrayBuffer>,
-  samples: number,
+/** The chunk's `[samples, channels]` samples of a stream of float samples, the
+ * `format`'s, interleaved by channel: its frames decoded by a decoder of
+ * `config`, each `samplesPerFrame` samples at `config.sampleRate`. */
+async function decodeFloatFrames(
+  format: string,
+  config: AudioDecoderConfig,
+  samplesPerFrame: number,
+  units: Uint8Array<ArrayBuffer>[],
+  positions: number[],
+  out: Float32Array<ArrayBuffer>,
   channels: number,
   signal: AbortSignal,
 ): Promise<Float32Array<ArrayBuffer>> {
-  const out = new Float32Array(samples * channels);
-  const { units, positions } = parseStreamChunk(encoded);
-  if (units.length === 0) return out;
-  if (typeof AudioDecoder === "undefined") {
-    throw new Error("refkv.stream: this browser has no WebCodecs AudioDecoder");
-  }
-  const stream = mp3Stream(units[0]);
-  if (stream.channels !== channels) {
-    throw new Error(
-      `refkv.stream: the mp3 stream has ${stream.channels} channels, not the chunk's ${channels}`,
-    );
-  }
+  const samples = out.length / channels;
   // a frame's duration, in the microseconds of a timestamp
-  const frameTime = (stream.samplesPerFrame * 1e6) / stream.sampleRate;
-  const plane = new Float32Array(stream.samplesPerFrame);
+  const frameTime = (samplesPerFrame * 1e6) / config.sampleRate;
+  const plane = new Float32Array(samplesPerFrame);
   let failure: unknown;
   const decoder = new AudioDecoder({
     output(data) {
@@ -364,7 +367,7 @@ export async function decodeMp3(
         const n = data.numberOfFrames;
         if (position + n > samples) {
           throw new Error(
-            `refkv.stream: an mp3 frame's ${n} samples at ${position} do not fit the chunk's ${samples}`,
+            `refkv.stream: an ${format} frame's ${n} samples at ${position} do not fit the chunk's ${samples}`,
           );
         }
         const buffer = n > plane.length ? new Float32Array(n) : plane;
@@ -390,11 +393,7 @@ export async function decodeMp3(
   };
   signal.addEventListener("abort", abort, { once: true });
   try {
-    decoder.configure({
-      codec: "mp3",
-      sampleRate: stream.sampleRate,
-      numberOfChannels: channels,
-    });
+    decoder.configure(config);
     units.forEach((data, k) => {
       decoder.decode(
         new EncodedAudioChunk({
@@ -413,6 +412,76 @@ export async function decodeMp3(
   }
   if (failure !== undefined) throw failure;
   return out;
+}
+
+/** The chunk's `[samples, channels]` samples of an MP3 stream, interleaved by
+ * channel. */
+export async function decodeMp3(
+  encoded: Uint8Array<ArrayBuffer>,
+  samples: number,
+  channels: number,
+  signal: AbortSignal,
+): Promise<Float32Array<ArrayBuffer>> {
+  const out = new Float32Array(samples * channels);
+  const { units, positions } = parseStreamChunk(encoded);
+  if (units.length === 0) return out;
+  if (typeof AudioDecoder === "undefined") {
+    throw new Error("refkv.stream: this browser has no WebCodecs AudioDecoder");
+  }
+  const stream = mp3Stream(units[0]);
+  if (stream.channels !== channels) {
+    throw new Error(
+      `refkv.stream: the mp3 stream has ${stream.channels} channels, not the chunk's ${channels}`,
+    );
+  }
+  return decodeFloatFrames(
+    "mp3",
+    {
+      codec: "mp3",
+      sampleRate: stream.sampleRate,
+      numberOfChannels: channels,
+    },
+    stream.samplesPerFrame,
+    units,
+    positions,
+    out,
+    channels,
+    signal,
+  );
+}
+
+/** The chunk's `[samples, channels]` samples of an AAC, HE-AAC or HE-AAC v2
+ * stream whose AudioSpecificConfig is `setup`, interleaved by channel. */
+export async function decodeAac(
+  setup: string,
+  encoded: Uint8Array<ArrayBuffer>,
+  samples: number,
+  channels: number,
+  signal: AbortSignal,
+): Promise<Float32Array<ArrayBuffer>> {
+  const out = new Float32Array(samples * channels);
+  const { units, positions } = parseStreamChunk(encoded);
+  if (units.length === 0) return out;
+  if (typeof AudioDecoder === "undefined") {
+    throw new Error("refkv.stream: this browser has no WebCodecs AudioDecoder");
+  }
+  const description = base64Bytes(setup);
+  const stream = aacStream(description);
+  return decodeFloatFrames(
+    "aac",
+    {
+      codec: stream.codec,
+      sampleRate: stream.sampleRate,
+      numberOfChannels: channels,
+      description,
+    },
+    stream.samplesPerFrame,
+    units,
+    positions,
+    out,
+    channels,
+    signal,
+  );
 }
 
 /** The chunk's `[samples, channels]` integer samples of a FLAC stream,
@@ -524,6 +593,10 @@ registerCodec({
     if (configuration.format === "mp3") {
       const [samples, channels] = decodedArrayInfo.chunkShape;
       return decodeMp3(encoded, samples, channels, signal);
+    }
+    if (configuration.format === "aac") {
+      const [samples, channels] = decodedArrayInfo.chunkShape;
+      return decodeAac(configuration.setup, encoded, samples, channels, signal);
     }
     if (configuration.format === "flac") {
       const [samples, channels] = decodedArrayInfo.chunkShape;
