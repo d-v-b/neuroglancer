@@ -15,7 +15,7 @@
  */
 
 /**
- * @file Decodes `refkv.stream` chunks of H.264 and HEVC video with WebCodecs'
+ * @file Decodes `refkv.stream` chunks of H.264, HEVC, AV1 and VP9 video with WebCodecs'
  * VideoDecoder, in the worker: the frames are fed in order, each tagged with
  * its index as its timestamp, which the decoder gives the picture it decodes
  * to; a picture is copied to its position in the chunk as the decoder gives
@@ -49,6 +49,21 @@
  * stream's by up to 58 levels even in the stream's own range (its luma, and
  * VideoToolbox's streams, an iPhone's encoder, are exact).
  *
+ * AV1 and VP9 are decoded in software when the browser lets a page ask
+ * (`prefer-software`), since Chrome's hardware path gives 10-bit pictures in GPU
+ * memory of no format, and fails on small pictures. Their 8-bit 4:2:0 pictures
+ * are shown as H.264's are: as the decoder gives them, or converted back from
+ * Firefox's RGB. Anything else, in any format, is shown only as the decoder gives
+ * it: 10-bit H.264, and 4:2:2 or more than 8 bits of AV1 or VP9.
+ *
+ * Measured on macOS against ffmpeg's decoding of refkv's fixtures, whole tracks
+ * through `decodeVideo`: Chrome 148 gives exact planes of 10-bit H.264, of 8-
+ * and 10-bit AV1, and of VP9 of 8, 10 and 12 bits and 4:2:0 and 4:2:2, and of HEVC
+ * only 8-bit 4:2:0 (more bits or 4:2:2 come in GPU memory of no format, and it has
+ * no software decoder to ask for). WebKit 26 gives exact planes of 8-bit AV1 and
+ * VP9, and converts or cannot copy the others; Firefox 150 gives RGB of 8-bit AV1
+ * and VP9, up to 48 levels off at sharp edges, and decodes none of the others.
+ *
  * Chunks of MP3 audio are decoded with AudioDecoder in the same way: frame
  * `k` is given the timestamp of its start, `k` frames of the stream on, and
  * the samples the decoder gives for that timestamp are copied to the chunk's
@@ -67,12 +82,15 @@ import type { Configuration } from "#src/datasource/zarr/codec/refkv_stream/reso
 import { DataType } from "#src/util/data_type.js";
 import type {
   ChunkPlanes,
+  Chroma,
   FlacSamples,
   SampleArray,
   StreamColor,
+  VideoFormat,
 } from "#src/util/refkv_stream.js";
 import {
   audioSampleArray,
+  av1CodecString,
   avcCodecString,
   base64Bytes,
   copyFlacSamples,
@@ -89,6 +107,8 @@ import {
   parseStreamChunk,
   SharedPlanes,
   streamColor,
+  streamFormat,
+  vp9CodecString,
 } from "#src/util/refkv_stream.js";
 
 // 64 MiB: the two planes not asked for of at least one chunk of 32 MiB of luma
@@ -101,7 +121,7 @@ function warnConverted(what: string) {
   if (warned) return;
   warned = true;
   console.warn(
-    `refkv.stream: this browser's VideoDecoder gives H.264 pictures as ${what}; the planes are converted back and may differ from the stream's by a few levels`,
+    `refkv.stream: this browser's VideoDecoder gives 8-bit 4:2:0 pictures as ${what}; the planes are converted back and may differ from the stream's by a few levels`,
   );
 }
 
@@ -132,16 +152,61 @@ async function checkSupported(
   }
 }
 
+/** A format's VideoDecoder configuration, by its decoder configuration
+ * `description`, and its name in an error. */
+function videoConfig(
+  format: VideoFormat,
+  description: Uint8Array<ArrayBuffer>,
+): [VideoDecoderConfig, string] {
+  const optimizeForLatency = true;
+  switch (format) {
+    case "h264":
+      return [
+        { codec: avcCodecString(description), description, optimizeForLatency },
+        "H.264",
+      ];
+    case "hevc":
+      return [
+        {
+          codec: hevcCodecString(description),
+          description,
+          optimizeForLatency,
+        },
+        `HEVC ${hevcProfile(description)}`,
+      ];
+    case "av1":
+      return [
+        {
+          codec: av1CodecString(description),
+          description,
+          optimizeForLatency,
+          hardwareAcceleration: "prefer-software",
+        },
+        "AV1",
+      ];
+    case "vp9":
+      return [
+        {
+          codec: vp9CodecString(description),
+          optimizeForLatency,
+          hardwareAcceleration: "prefer-software",
+        },
+        "VP9",
+      ];
+  }
+}
+
 /** The chunk's Y, U and V planes, `frames` pictures each of `depth` bits a
- * sample, of the `format` ("h264" or "hevc") stream whose decoder
- * configuration is `setup`. */
+ * sample and `chroma`, of the `format` stream whose decoder configuration is
+ * `setup`. */
 export async function decodeVideo(
-  format: "h264" | "hevc",
+  format: VideoFormat,
   setup: string,
   encoded: Uint8Array<ArrayBuffer>,
   frames: number,
   depth: number,
   signal: AbortSignal,
+  chroma: Chroma = "4:2:0",
 ): Promise<ChunkPlanes> {
   if (typeof VideoDecoder === "undefined") {
     throw new Error("refkv.stream: this browser has no WebCodecs VideoDecoder");
@@ -149,22 +214,19 @@ export async function decodeVideo(
   const { units, positions } = parseStreamChunk(encoded);
   const description = base64Bytes(setup);
   const hevc = format === "hevc";
-  const config: VideoDecoderConfig = {
-    codec: hevc ? hevcCodecString(description) : avcCodecString(description),
-    description,
-    optimizeForLatency: true,
-  };
-  await checkSupported(
-    config,
-    hevc ? `HEVC ${hevcProfile(description)}` : "H.264",
-    hevc,
-  );
-  let color: StreamColor;
+  const [config, name] = videoConfig(format, description);
+  await checkSupported(config, name, hevc);
+  let color: StreamColor = { fullRange: false };
   try {
-    color = hevc ? hevcStreamColor(description) : streamColor(description);
+    if (format === "hevc") color = hevcStreamColor(description);
+    else if (format === "h264") color = streamColor(description);
+    else if (format === "vp9")
+      color = { fullRange: (description[6] & 1) === 1 };
   } catch {
     color = { fullRange: false };
   }
+  // what only a decoder given as it is may show
+  const exactOnly = hevc || depth > 8 || chroma !== "4:2:0";
   let planes: ChunkPlanes | undefined;
   let failure: unknown;
   const copies: Promise<void>[] = [];
@@ -181,13 +243,16 @@ export async function decodeVideo(
           try {
             if (frame.format === null) {
               throw new Error(
-                "refkv.stream: this browser's VideoDecoder gives pictures that WebCodecs cannot copy (of format null), as Chrome's does for 10-bit HEVC on macOS",
+                "refkv.stream: this browser's VideoDecoder gives pictures that WebCodecs cannot copy (of format null), as Chrome's does for HEVC of more than 8 bits or 4:2:2 on macOS",
               );
             }
             const range = frame.colorSpace?.fullRange;
-            if (hevc && !isExactFormat(frame.format, depth)) {
+            // an av1C box does not say, and its sequence header is the decoder's
+            const pictureColor =
+              format === "av1" ? { fullRange: range === true } : color;
+            if (exactOnly && !isExactFormat(frame.format, depth, chroma)) {
               throw new Error(
-                `refkv.stream: this browser's VideoDecoder converts ${depth}-bit HEVC pictures to ${frame.format}; HEVC is shown only as the decoder gives it`,
+                `refkv.stream: this browser's VideoDecoder converts ${chroma} ${depth}-bit ${name} pictures to ${frame.format}; such a stream is shown only as the decoder gives it`,
               );
             }
             if (
@@ -201,20 +266,26 @@ export async function decodeVideo(
               );
             }
             const rect = frame.visibleRect!;
-            planes ??= newChunkPlanes(frames, rect.width, rect.height, depth);
+            planes ??= newChunkPlanes(
+              frames,
+              rect.width,
+              rect.height,
+              depth,
+              chroma,
+            );
             const buffer = new Uint8Array(frame.allocationSize({ rect }));
             const layout = await frame.copyTo(buffer, { rect });
-            const format = frame.format;
-            if (isRgbFormat(format)) {
+            const pixels = frame.format;
+            if (isRgbFormat(pixels)) {
               // RGB (Firefox): back to the stream's range, by its matrix
-              warnConverted(format);
-              copyPicture(format, buffer, layout, planes, position, {
-                matrix: color.matrix ?? frame.colorSpace?.matrix,
-                fullRange: color.fullRange,
+              warnConverted(pixels);
+              copyPicture(pixels, buffer, layout, planes, position, {
+                matrix: pictureColor.matrix ?? frame.colorSpace?.matrix,
+                fullRange: pictureColor.fullRange,
               });
             } else {
-              copyPicture(format, buffer, layout, planes, position);
-              if (range === true && !color.fullRange) {
+              copyPicture(pixels, buffer, layout, planes, position);
+              if (range === true && !pictureColor.fullRange) {
                 // a limited-range stream given in full range (WebKit)
                 warnConverted("full-range Y, U and V");
                 narrowRange(planes, position);
@@ -466,7 +537,11 @@ registerCodec({
       return decodeFlac(configuration.setup, encoded, out, channels, signal);
     }
     const [frames, height, width] = decodedArrayInfo.chunkShape;
-    const depth = decodedArrayInfo.dataType === DataType.UINT16 ? 10 : 8;
+    const { depth, chroma } = streamFormat(
+      configuration.format,
+      base64Bytes(configuration.setup),
+      decodedArrayInfo.dataType === DataType.UINT16,
+    );
     const data: SampleArray = await SHARED.take(
       configuration.setup,
       encoded,
@@ -479,6 +554,7 @@ registerCodec({
           frames,
           depth,
           signal,
+          chroma,
         ),
     );
     if (data.length !== frames * height * width) {

@@ -18,18 +18,18 @@
  * @file The `refkv.stream` array-to-bytes codec: a chunk is a run of coded
  * frames of a stream whose frames depend on earlier ones (refkv's
  * [spec/conventions.md, section 10](https://github.com/d-v-b/refkv/blob/main/spec/conventions.md#10-coded-streams)),
- * as refkv writes the video planes of an MP4 file's H.264 and HEVC tracks
+ * as refkv writes the video planes of an MP4 file's H.264, HEVC, AV1 and VP9 tracks
  * ([spec/zarrify/mp4.md](https://github.com/d-v-b/refkv/blob/main/spec/zarrify/mp4.md)),
  * the samples of an MP3 file
  * ([spec/zarrify/mp3.md, section 4.1](https://github.com/d-v-b/refkv/blob/main/spec/zarrify/mp3.md#41-the-array))
  * and the inner chunks of a FLAC file's samples
  * ([spec/zarrify/flac.md, section 4.1](https://github.com/d-v-b/refkv/blob/main/spec/zarrify/flac.md#41-the-array)).
- * The configuration is the stream's `format`, "h264", "hevc", "mp3" or "flac"
- * ("aac" streams are not decoded). For "h264" and "hevc", it also has the
- * stream's `setup` (base64 of the avcC or hvcC box's payload) and the `plane`
- * the array holds ("y", "u" or "v"), and a chunk's shape is
- * `[pictures, height, width]`, of `uint8` for 8 bits a sample, or, for HEVC
- * Main 10, `uint16` (values 0 to 1023). For "mp3", a chunk's shape is
+ * The configuration is the stream's `format`, "h264", "hevc", "av1", "vp9",
+ * "mp3" or "flac" ("aac" streams are not decoded). For the video formats, it
+ * also has the stream's `setup` (base64 of the avcC, hvcC, av1C or vpcC box's
+ * payload) and the `plane` the array holds ("y", "u" or "v"), and a chunk's shape
+ * is `[pictures, height, width]`, of `uint8` for 8 bits a sample, or `uint16` for
+ * 10 or 12 (the sample's value, not scaled). For "mp3", a chunk's shape is
  * `[samples, channels]`, of `float32`. For "flac", the `setup` is base64 of
  * `fLaC` and the STREAMINFO block, and a chunk's shape is `[samples,
  * channels]`, of the signed integer type that holds the stream's bits per
@@ -50,10 +50,11 @@ import {
   verifyString,
 } from "#src/util/json.js";
 import type { Plane } from "#src/util/refkv_stream.js";
+import type { VideoFormat } from "#src/util/refkv_stream.js";
 import { base64Bytes, flacStream, PLANES } from "#src/util/refkv_stream.js";
 
 export type Configuration =
-  | { format: "h264" | "hevc"; setup: string; plane: Plane }
+  | { format: VideoFormat; setup: string; plane: Plane }
   | { format: "mp3" }
   | { format: "flac"; setup: string };
 
@@ -100,9 +101,14 @@ registerCodec({
       }
       return { configuration: { format, setup } };
     }
-    if (format !== "h264" && format !== "hevc") {
+    if (
+      format !== "h264" &&
+      format !== "hevc" &&
+      format !== "av1" &&
+      format !== "vp9"
+    ) {
       throw new Error(
-        `refkv.stream: ${format} streams are not decoded, only h264 and hevc video and mp3 and flac audio`,
+        `refkv.stream: ${format} streams are not decoded, only h264, hevc, av1 and vp9 video and mp3 and flac audio`,
       );
     }
     const setup = verifyObjectProperty(configuration, "setup", verifyString);
@@ -118,12 +124,9 @@ registerCodec({
       "y",
     );
     const { dataType } = decodedArrayInfo;
-    if (
-      dataType !== DataType.UINT8 &&
-      !(format === "hevc" && dataType === DataType.UINT16)
-    ) {
+    if (dataType !== DataType.UINT8 && dataType !== DataType.UINT16) {
       throw new Error(
-        `refkv.stream: ${format} planes are ${format === "hevc" ? "uint8 or uint16" : "uint8"}, not ${DataType[dataType].toLowerCase()}`,
+        `refkv.stream: ${format} planes are uint8 or uint16, not ${DataType[dataType].toLowerCase()}`,
       );
     }
     if (decodedArrayInfo.chunkShape.length !== 3) {

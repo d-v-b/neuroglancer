@@ -17,6 +17,7 @@
 import { describe, expect, test } from "vitest";
 import type { ChunkPlanes } from "#src/util/refkv_stream.js";
 import {
+  av1CodecString,
   avcCodecString,
   base64Bytes,
   copyFlacSamples,
@@ -30,6 +31,8 @@ import {
   parseStreamChunk,
   SharedPlanes,
   streamColor,
+  streamFormat,
+  vp9CodecString,
 } from "#src/util/refkv_stream.js";
 
 // A chunk of three frames of 2, 200 and 3 bytes at positions -1, 1 and 0 (the
@@ -97,6 +100,103 @@ function chunk(): Uint8Array<ArrayBuffer> {
 }
 
 describe("refkv.stream", () => {
+  // SVT-AV1's av1C (Main, level 4, 10 bits: refkv's mp4_av1_10bit.mp4 at 640 x
+  // 480), libvpx's vpcC (profile 2, 10 bits) and x265's hvcC header of 4:2:2, 12
+  // bits, as refkv writes each in its `setup`
+  const AV1C = Uint8Array.of(0x81, 0x04, 0x4c, 0x00);
+  const VPCC = Uint8Array.of(1, 0, 0, 0, 2, 10, 0xa2, 2, 2, 2, 0, 0);
+  const HVCC_FORMAT = new Uint8Array(23);
+  HVCC_FORMAT[16] = 0xfc | 2;
+  HVCC_FORMAT[17] = 0xf8 | 4;
+
+  test("the codec strings of AV1 and VP9", () => {
+    expect(av1CodecString(AV1C)).toBe("av01.0.04M.10");
+    expect(av1CodecString(Uint8Array.of(0x81, 0x5f, 0x8c, 0))).toBe(
+      "av01.2.31H.08",
+    );
+    expect(vp9CodecString(VPCC)).toBe("vp09.02.10.10.01.02.02.02.00");
+  });
+
+  test("a setup that is not its box's payload is an error", () => {
+    expect(() => av1CodecString(Uint8Array.of(0x80, 0, 0, 0))).toThrow(
+      "not an av1C box's payload",
+    );
+    expect(() => vp9CodecString(Uint8Array.of(0, 0, 0, 0))).toThrow(
+      "not a vpcC box's payload",
+    );
+  });
+
+  test("a stream's bits a sample and chroma subsampling", () => {
+    expect(streamFormat("h264", new Uint8Array(8), true)).toEqual({
+      depth: 10,
+      chroma: "4:2:0",
+    });
+    expect(streamFormat("hevc", HVCC_FORMAT, true)).toEqual({
+      depth: 12,
+      chroma: "4:2:2",
+    });
+    expect(streamFormat("av1", AV1C, true)).toEqual({
+      depth: 10,
+      chroma: "4:2:0",
+    });
+    expect(streamFormat("vp9", VPCC, true)).toEqual({
+      depth: 10,
+      chroma: "4:2:0",
+    });
+    expect(
+      streamFormat("vp9", Uint8Array.of(1, 0, 0, 0, 3, 10, 0xc4), true),
+    ).toEqual({ depth: 12, chroma: "4:2:2" });
+  });
+
+  test("a 4:2:2 picture's chroma planes are half its width alone", () => {
+    const planes = newChunkPlanes(2, 3, 2, 12, "4:2:2");
+    expect(planes.shapes).toEqual({ y: [2, 3], u: [2, 2], v: [2, 2] });
+    // Y, then U and V of a picture, little-endian 16-bit samples
+    const src = Uint8Array.from(
+      Array.from({ length: 14 }, (_, i) => [i, 0x0f]).flat(),
+    );
+    const layout = [
+      { offset: 0, stride: 6 },
+      { offset: 12, stride: 4 },
+      { offset: 20, stride: 4 },
+    ];
+    copyPicture("I422P12", src, layout, planes, 1);
+    expect(Array.from(planes.data.y!.subarray(6))).toEqual(
+      [0, 1, 2, 3, 4, 5].map((i) => 0x0f00 + i),
+    );
+    expect(Array.from(planes.data.u!.subarray(4))).toEqual(
+      [6, 7, 8, 9].map((i) => 0x0f00 + i),
+    );
+    expect(Array.from(planes.data.v!.subarray(4))).toEqual(
+      [10, 11, 12, 13].map((i) => 0x0f00 + i),
+    );
+    const eight = newChunkPlanes(1, 2, 1, 8, "4:2:2");
+    copyPicture(
+      "I422",
+      Uint8Array.of(1, 2, 3, 4),
+      [
+        { offset: 0, stride: 2 },
+        { offset: 2, stride: 1 },
+        { offset: 3, stride: 1 },
+      ],
+      eight,
+      0,
+    );
+    expect(Array.from(eight.data.u!)).toEqual([3]);
+    expect(Array.from(eight.data.v!)).toEqual([4]);
+  });
+
+  test("a picture of another format than the chunk's is an error", () => {
+    const layout = [{ offset: 0, stride: 2 }];
+    const src = new Uint8Array(8);
+    expect(() =>
+      copyPicture("I420P12", src, layout, newChunkPlanes(1, 2, 2, 10), 0),
+    ).toThrow("not 4:2:0 of 10 bits");
+    expect(() =>
+      copyPicture("NV12", src, layout, newChunkPlanes(1, 2, 2, 8, "4:2:2"), 0),
+    ).toThrow("not 4:2:2 of 8 bits");
+  });
+
   test("reads chunks, codec strings and pictures, and shares planes", async () => {
     const { units, positions } = parseStreamChunk(chunk());
     expect(positions).toEqual([-1, 1, 0]);
@@ -244,6 +344,7 @@ describe("refkv.stream", () => {
       return {
         frames: 1,
         depth: 8,
+        chroma: "4:2:0",
         shapes: { y: [1, n], u: [1, n], v: [1, n] },
         data: {
           y: new Uint8Array(n),

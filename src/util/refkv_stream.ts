@@ -134,6 +134,79 @@ export function hevcCodecString(
   ].join(".");
 }
 
+/** The WebCodecs codec string of an AV1 stream from its av1C box's payload
+ * (AV1 ISOBMFF section 2.3.3): `av01.P.LLT.DD`, its profile, level, tier and bit
+ * depth. */
+export function av1CodecString(av1c: Uint8Array): string {
+  if (av1c.length < 4 || av1c[0] !== 0x81) {
+    throw new Error("refkv.stream: the setup is not an av1C box's payload");
+  }
+  const level = String(av1c[1] & 0x1f).padStart(2, "0");
+  const depth = String(av1Depth(av1c)).padStart(2, "0");
+  return `av01.${av1c[1] >> 5}.${level}${av1c[2] >> 7 ? "H" : "M"}.${depth}`;
+}
+
+function av1Depth(av1c: Uint8Array) {
+  return (av1c[2] & 0x40) === 0 ? 8 : (av1c[2] & 0x20) === 0 ? 10 : 12;
+}
+
+/** The WebCodecs codec string of a VP9 stream from its vpcC box's payload (VP
+ * Codec ISOBMFF Binding section 2.2):
+ * `vp09.PP.LL.DD.CC.cp.tc.mc.FF`, its profile, level, bit depth, chroma
+ * subsampling, color primaries, transfer function, matrix and range. */
+export function vp9CodecString(vpcc: Uint8Array): string {
+  if (vpcc.length < 10 || vpcc[0] !== 1) {
+    throw new Error("refkv.stream: the setup is not a vpcC box's payload");
+  }
+  const two = (x: number) => String(x).padStart(2, "0");
+  return [
+    "vp09",
+    two(vpcc[4]),
+    two(vpcc[5]),
+    two(vpcc[6] >> 4),
+    two((vpcc[6] >> 1) & 7),
+    two(vpcc[7]),
+    two(vpcc[8]),
+    two(vpcc[9]),
+    two(vpcc[6] & 1),
+  ].join(".");
+}
+
+export type VideoFormat = "h264" | "hevc" | "av1" | "vp9";
+export type Chroma = "4:2:0" | "4:2:2";
+
+/** A video stream's bits a sample and chroma subsampling, by its decoder
+ * configuration `setup`. An avcC box's are in its SPS: refkv writes uint16
+ * planes (`wide`) of H.264 only for 10 bits of 4:2:0. */
+export function streamFormat(
+  format: VideoFormat,
+  setup: Uint8Array,
+  wide: boolean,
+): { depth: number; chroma: Chroma } {
+  switch (format) {
+    case "h264":
+      return { depth: wide ? 10 : 8, chroma: "4:2:0" };
+    case "hevc":
+      return {
+        depth: (setup[17] & 7) + 8,
+        chroma: (setup[16] & 3) === 2 ? "4:2:2" : "4:2:0",
+      };
+    case "av1":
+      return {
+        depth: av1Depth(setup),
+        chroma:
+          (setup[2] & 0x08) !== 0 && (setup[2] & 0x04) === 0
+            ? "4:2:2"
+            : "4:2:0",
+      };
+    case "vp9":
+      return {
+        depth: setup[6] >> 4,
+        chroma: ((setup[6] >> 1) & 7) === 2 ? "4:2:2" : "4:2:0",
+      };
+  }
+}
+
 /** The general profile of an HEVC stream from its hvcC box's payload, by name
  * when it is Main or Main 10. */
 export function hevcProfile(hvcc: Uint8Array): string {
@@ -562,14 +635,15 @@ export function narrowRange(out: ChunkPlanes, position: number) {
 export const PLANES = ["y", "u", "v"] as const;
 export type Plane = (typeof PLANES)[number];
 
-/** A plane's samples: `uint8` of 8 bits, `uint16` of 10. */
+/** A plane's samples: `uint8` of 8 bits, `uint16` of 10 or 12. */
 export type SampleArray = Uint8Array<ArrayBuffer> | Uint16Array<ArrayBuffer>;
 
 /** A chunk's planes: each `frames` pictures of its height and width,
- * row-major, of `depth` bits a sample (8 or 10). */
+ * row-major, of `depth` bits a sample (8, 10 or 12). */
 export interface ChunkPlanes {
   frames: number;
   depth: number;
+  chroma: Chroma;
   shapes: Record<Plane, [number, number]>;
   data: Partial<Record<Plane, SampleArray>>;
 }
@@ -579,14 +653,16 @@ export function newChunkPlanes(
   width: number,
   height: number,
   depth = 8,
+  chroma: Chroma = "4:2:0",
 ): ChunkPlanes {
   const cw = Math.ceil(width / 2);
-  const ch = Math.ceil(height / 2);
+  const ch = chroma === "4:2:2" ? height : Math.ceil(height / 2);
   const array = (n: number) =>
     depth > 8 ? new Uint16Array(n) : new Uint8Array(n);
   return {
     frames,
     depth,
+    chroma,
     shapes: { y: [height, width], u: [ch, cw], v: [ch, cw] },
     data: {
       y: array(frames * width * height),
@@ -628,10 +704,20 @@ function lumaWeights(matrix: string | null | undefined): [number, number] {
   }
 }
 
-/** The 4:2:0 formats of 8 bits a sample and of 10 (each in the low bits of a
- * little-endian 16-bit integer). */
-const EIGHT_BIT = ["I420", "I420A", "NV12"];
-const TEN_BIT = ["I420P10", "I420AP10"];
+/** The pixel formats of each chroma subsampling and bits a sample (more than 8
+ * in the low bits of a little-endian 16-bit integer). */
+const YUV_FORMATS: Record<Chroma, Record<number, string[]>> = {
+  "4:2:0": {
+    8: ["I420", "I420A", "NV12"],
+    10: ["I420P10", "I420AP10"],
+    12: ["I420P12"],
+  },
+  "4:2:2": {
+    8: ["I422", "I422A"],
+    10: ["I422P10", "I422AP10"],
+    12: ["I422P12"],
+  },
+};
 
 /** Whether a picture in `format` holds RGB converted from its decoder's Y, U
  * and V, as Firefox's VideoDecoder gives them. */
@@ -640,9 +726,13 @@ export function isRgbFormat(format: string) {
 }
 
 /** Whether a picture in `format` holds its decoder's Y, U and V exactly, of
- * `depth` bits, rather than converted from them. */
-export function isExactFormat(format: string, depth = 8) {
-  return (depth > 8 ? TEN_BIT : EIGHT_BIT).includes(format);
+ * `depth` bits and `chroma`, rather than converted from them. */
+export function isExactFormat(
+  format: string,
+  depth = 8,
+  chroma: Chroma = "4:2:0",
+) {
+  return YUV_FORMATS[chroma][depth]?.includes(format) ?? false;
 }
 
 /** Converts an RGB picture back to Y, U and V by its color space (BT.601 and
@@ -693,10 +783,10 @@ function convertRgb(
 }
 
 /** Copies a decoded picture, `src` with the plane layouts `layout` in the
- * pixel format `format`, into the chunk's planes at `position`: 4:2:0 of the
- * chunk's depth ("I420", "I420A" or "NV12" of 8 bits, "I420P10" or "I420AP10"
- * of 10) as it is, and, into 8-bit planes, RGB ("BGRX", "BGRA", "RGBX",
- * "RGBA") converted back by its color space `color` (see `convertRgb`). */
+ * pixel format `format`, into the chunk's planes at `position`: Y, U and V of
+ * the chunk's depth and chroma subsampling (`YUV_FORMATS`) as they are, and,
+ * into 8-bit 4:2:0 planes, RGB ("BGRX", "BGRA", "RGBX", "RGBA") converted back
+ * by its color space `color` (see `convertRgb`). */
 export function copyPicture(
   format: string,
   src: Uint8Array,
@@ -711,9 +801,9 @@ export function copyPicture(
     );
   }
   if (out.depth > 8) {
-    if (!TEN_BIT.includes(format)) {
+    if (!isExactFormat(format, out.depth, out.chroma)) {
       throw new Error(
-        `refkv.stream: a picture decodes to ${format}, not 4:2:0 of ${out.depth} bits`,
+        `refkv.stream: a picture decodes to ${format}, not ${out.chroma} of ${out.depth} bits`,
       );
     }
     // little-endian 16-bit samples
@@ -747,7 +837,12 @@ export function copyPicture(
     }
   };
   const { y, u, v } = out.data as Record<Plane, Uint8Array>;
-  if (format === "I420" || format === "I420A") {
+  if (out.chroma === "4:2:2" && !isExactFormat(format, 8, out.chroma)) {
+    throw new Error(
+      `refkv.stream: a picture decodes to ${format}, not 4:2:2 of 8 bits`,
+    );
+  }
+  if (format === "I420" || format === "I420A" || out.chroma === "4:2:2") {
     copyRows(layout[0], y, out.shapes.y);
     copyRows(layout[1], u, out.shapes.u);
     copyRows(layout[2], v, out.shapes.v);
