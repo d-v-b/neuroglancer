@@ -118,13 +118,14 @@ Supported codecs:
 - numcodecs.shuffle (numcodecs' byte shuffle, as zarr-python 3 names it)
 - numcodecs.zlib (zlib streams, as zarr-python 3 names numcodecs' Zlib)
 - refkv.precomputed (a chunk or a whole shard of a Neuroglancer precomputed
-  volume, as refkv writes them: raw, jpeg, png and compressed_segmentation
-  chunks, clipped ones filled with the fill value, a shard's chunks read through
+  volume, as refkv writes them: raw, jpeg, png, compressed_segmentation,
+  compresso, crackle and jxl chunks, clipped ones filled with the fill value, a shard's chunks read through
   its index as the precomputed data source reads them. It refuses what it
   cannot decode as refkv's Python codec does: a chunk stored in brotli, a JPEG
   with subsampled chroma or of other than 8 bits, and a PNG of several 16-bit
   channels. Other JPEGs may differ from libjpeg's by 1 level, as those of the
-  precomputed data source do)
+  precomputed data source do, and lossy JPEG XL images by 1 level too. It has no
+  decoder of fpzip, zfpc and kempressed chunks, which refkv's Python codec reads)
 - refkv.tiff_lzw (the same streams as imagecodecs_lzw, as refkv names them)
 - sharding_indexed
 - transpose
