@@ -1,5 +1,5 @@
 // <define:__REFKV_PROFILES__>
-var define_REFKV_PROFILES_default = [{ name: "czi", title: "CZI", uuid: "7a0733c7-d4be-4482-a64f-6904d9354ea5", version: 0, kind: "file", sniff: 50, chosen_by: null, suffixes: [".czi"], reference: 20, source: "Zeiss CZI", inputs: "Zeiss CZI files (ZISRAW, file version 1), with uncompressed, JPEG, JPEG XR and Zstd subblocks, mosaics and pyramids", for: "Zeiss CZI files" }, { name: "dicom", title: "DICOM", uuid: "acf17198-e5a5-48d3-8187-22ec4bb40ea5", version: 0, kind: "file", sniff: 10, chosen_by: null, suffixes: [".dcm"], reference: 25, source: "DICOM", inputs: "DICOM Part 10 files with native, JPEG, lossless JPEG or JPEG 2000 pixel data, including whole-slide images", for: "DICOM files, including whole-slide images" }, { name: "fits", title: "FITS", uuid: "4b0d3a7e-1c52-4f6a-9b8e-2d7f0c6a1e93", version: 0, kind: "file", sniff: 110, chosen_by: null, suffixes: [".fits", ".fz"], reference: null, source: "FITS", inputs: "FITS files: images, multi-extension files, binary and ASCII tables", for: "FITS images and tables (`.fits`, `.fz`)" }, { name: "flac", title: "FLAC", uuid: "e9108d07-b24b-432f-a8ce-09d80c8073b4", version: 0, kind: "file", sniff: 95, chosen_by: null, suffixes: [".flac"], reference: null, source: "FLAC (Free Lossless Audio Codec)", inputs: "FLAC files (`.flac`) of a fixed block size, with their metadata blocks and ID3v2 and ID3v1 tags; one sharded array of integer samples, not an image", for: "FLAC audio files, as a sharded array of samples (`.flac`)" }, { name: "grib", title: "GRIB", uuid: "c9bbe039-8dfa-49f9-a655-756f822a42d6", version: 0, kind: "file", sniff: 65, chosen_by: null, suffixes: [".grib2", ".grb2"], reference: null, source: "WMO FM 92 GRIB edition 2 (WMO-No. 306, Manual on Codes, Volume I.2)", inputs: "GRIB edition 2 files of gridded fields, such as NOAA's and ECMWF's forecasts, whose regular latitude/longitude and Lambert conformal fields it presents", for: "GRIB2 files of gridded weather and climate fields (`.grib2`), as labeled arrays with CF coordinates" }, { name: "hdf5", title: "HDF5", uuid: "6c006834-424b-451b-b786-f8c502ec32af", version: 0, kind: "file", sniff: 70, chosen_by: null, suffixes: [".h5", ".nwb"], reference: null, source: "HDF5, NWB", inputs: "HDF5 files, NWB files first among them: every group, dataset, attribute, link and object reference the profile can present, in hdmf-zarr's Zarr v3 form", for: "HDF5 files (`.h5`, `.hdf5`), and NWB files (`.nwb`), which pynwb's `NWBZarrIO` opens" }, { name: "ims", title: "IMS", uuid: "5067a535-8261-4b25-a93c-1985ed333bde", version: 0, kind: "file", sniff: null, chosen_by: "hdf5", suffixes: [".ims"], reference: 25, source: "Imaris IMS", inputs: "Imaris IMS files (HDF5)", for: "Imaris `.ims` files" }, { name: "lif", title: "LIF", uuid: "b099ab1f-f9d4-4276-9006-9ff1193a34b2", version: 0, kind: "file", sniff: 55, chosen_by: null, suffixes: [".lif"], reference: null, source: "Leica LIF", inputs: "Leica LIF files (LAS X and LAS AF, versions 1 and 2): every image of the file's element tree, with interleaved or planar channels, z-stacks, time series and mosaics, uncompressed", for: "Leica LIF files (`.lif`)" }, { name: "mp3", title: "MP3", uuid: "b6cb0047-9448-4fdc-b03e-10dd3d6aa829", version: 0, kind: "file", sniff: 100, chosen_by: null, suffixes: [".mp3"], reference: null, source: "MP3 (MPEG Layer III audio)", inputs: "MPEG-1, MPEG-2 and MPEG-2.5 Layer III audio files (`.mp3`), with their ID3v2, ID3v1 and APE tags; one array of samples, not an image", for: "MP3 audio files, as an array of samples (`.mp3`)" }, { name: "mp4", title: "MP4", uuid: "bbe3f6b9-488d-4d8d-85ce-60a1649dd27e", version: 0, kind: "file", sniff: 85, chosen_by: null, suffixes: [".mp4", ".mov"], reference: null, source: "MP4 and QuickTime (H.264 and HEVC video, AAC and MP3 audio)", inputs: "MP4 and QuickTime files (`.mp4`, `.m4a`, `.mov`) with H.264 or HEVC video and AAC or MP3 audio tracks; a group per track, not an image", for: "MP4 and QuickTime video and audio, as arrays of planes and samples (`.mp4`, `.mov`)" }, { name: "mrc", title: "MRC", uuid: "2aacd010-2ed1-4748-bc3c-5dd5e840bbce", version: 0, kind: "file", sniff: 90, chosen_by: null, suffixes: [".mrc"], reference: null, source: "MRC2014", inputs: "MRC2014 files (CCP4 maps, image stacks, volumes and volume stacks)", for: "MRC2014 maps, image stacks, volumes and volume stacks (`.mrc`, `.map`)" }, { name: "mrc-dataset", title: "MRC dataset", uuid: "f139bf4e-7bab-4c3c-9b2d-66ba747f9b93", version: 0, kind: "layout", sniff: null, chosen_by: null, suffixes: [], reference: null, source: "MRC2014, as a dataset", inputs: "", for: "" }, { name: "n5", title: "N5", uuid: "ad5d4c39-c69e-48f7-a3ef-4cc8c607d416", version: 0, kind: "store", sniff: null, chosen_by: null, suffixes: [], reference: 25, source: "N5", inputs: "N5 containers, default-mode blocks", for: "N5 containers on S3" }, { name: "nd2", title: "ND2", uuid: "59612f14-e314-4207-ba00-8f422ba71490", version: 0, kind: "file", sniff: 20, chosen_by: null, suffixes: [".nd2"], reference: 20, source: "Nikon ND2", inputs: "Nikon ND2, format version 3 and later", for: "Nikon NIS-Elements ND2 files" }, { name: "ndpi", title: "NDPI", uuid: "6cac71ef-dbb2-4acd-b60c-00389aa4238a", version: 0, kind: "file", sniff: null, chosen_by: "tiff", suffixes: [".ndpi"], reference: 25, source: "Hamamatsu NDPI", inputs: "Hamamatsu NDPI slides, a TIFF variant with 64-bit offsets", for: "Hamamatsu NDPI whole-slide images" }, { name: "nifti", title: "NIfTI", uuid: "06e5809d-4d54-4b72-afd0-6bf61a7b4c85", version: 0, kind: "file", sniff: 60, chosen_by: null, suffixes: [".nii"], reference: 25, source: "NIfTI-1 and NIfTI-2", inputs: "NIfTI-1 and NIfTI-2 single files (`.nii`)", for: "NIfTI-1 and NIfTI-2 volumes (`.nii`)" }, { name: "npy", title: "NumPy", uuid: "62b1d1ba-8eb3-465c-a333-75e096fce519", version: 0, kind: "file", sniff: 75, chosen_by: null, suffixes: [".npy", ".npz"], reference: null, source: "NumPy NPY and NPZ (NEP 1)", inputs: "NumPy `.npy` files, and `.npz` archives of them (`np.savez`, `np.savez_compressed`), whose stored and deflated members it presents", for: "NumPy arrays: `.npy` files, and the arrays of `.npz` archives, stored or deflated" }, { name: "nrrd", title: "NRRD", uuid: "23e0c600-8da6-40f1-81e7-ab246e948e88", version: 0, kind: "file", sniff: 95, chosen_by: null, suffixes: [".nhdr", ".nrrd"], reference: null, source: "NRRD (Teem)", inputs: "NRRD files (`.nrrd`) and detached headers with one data file (`.nhdr`), raw or gzip-encoded", for: "NRRD volumes, attached or detached, raw or gzip (`.nrrd`, `.nhdr`)" }, { name: "ome-zarr", title: "OME-Zarr", uuid: "b74ea302-65bb-49ae-b81f-f9bb52cd4eed", version: 0, kind: "store", sniff: null, chosen_by: null, suffixes: [], reference: 25, source: "OME-Zarr 0.4", inputs: "OME-Zarr 0.4 hierarchies on Zarr v2, migrated to OME-Zarr 0.5", for: "OME-Zarr 0.4 hierarchies, migrated to OME-Zarr 0.5 in place" }, { name: "qptiff", title: "QPTIFF", uuid: "329ea136-2f55-4c27-b6f4-8e60ca2109b8", version: 0, kind: "file", sniff: null, chosen_by: "tiff", suffixes: [".qptiff"], reference: null, source: "Akoya QPTIFF", inputs: "Akoya (PerkinElmer) Vectra QPTIFF slides and inForm component data, a TIFF with an XML description per image, in LZW, JPEG or uncompressed tiles or strips", for: "Akoya (PerkinElmer) Vectra multiplex scans and inForm component data" }, { name: "safe", title: "Sentinel-2 SAFE", uuid: "ef81346c-19e8-42ad-93b0-a279ccaf44c1", version: 0, kind: "both", sniff: 80, chosen_by: null, suffixes: [".zip"], reference: 25, source: "Sentinel-2 SAFE (Level-1C, Level-2A)", inputs: "Sentinel-2 Level-1C and Level-2A products: a `.SAFE` directory (a store) or a `.SAFE.zip` file", for: "Sentinel-2 Level-1C and Level-2A products, as a `.SAFE` directory or a `.SAFE.zip`" }, { name: "tiff", title: "TIFF", uuid: "48e9ac4e-1156-4a62-955e-20467d9c2700", version: 0, kind: "file", sniff: 40, chosen_by: null, suffixes: [".tif"], reference: 20, source: "TIFF, OME-TIFF, Aperio SVS", inputs: "TIFF and BigTIFF, including OME-TIFF and JPEG-tiled slides such as Aperio SVS", for: "OME-TIFF, plain TIFF (tiled or in strips), and JPEG-tiled slides such as Aperio SVS" }, { name: "vsi", title: "VSI", uuid: "c0a1d4e6-5b7f-4f3a-9c2d-8e1f6a7b3c45", version: 0, kind: "file", sniff: 30, chosen_by: null, suffixes: [".vsi"], reference: null, source: "Olympus VSI", inputs: "Olympus cellSens VSI slides: a `.vsi` file and the tile files beside it, probed by key (uncompressed, JPEG, JPEG 2000 and lossless JPEG tiles)", for: "Olympus cellSens whole-slide images (`.vsi` with its tile files)" }, { name: "zarr2", title: "Zarr v2", uuid: "8e792619-d671-4687-ab51-752885dd3ee6", version: 0, kind: "store", sniff: null, chosen_by: null, suffixes: [], reference: 25, source: "Zarr v2", inputs: "Zarr v2 hierarchies", for: "Zarr v2 hierarchies on S3" }];
+var define_REFKV_PROFILES_default = [{ name: "czi", title: "CZI", uuid: "7a0733c7-d4be-4482-a64f-6904d9354ea5", version: 0, kind: "file", sniff: 50, chosen_by: null, suffixes: [".czi"], reference: 20, source: "Zeiss CZI", inputs: "Zeiss CZI files (ZISRAW, file version 1), with uncompressed, JPEG, JPEG XR and Zstd subblocks, mosaics and pyramids", for: "Zeiss CZI files" }, { name: "dicom", title: "DICOM", uuid: "acf17198-e5a5-48d3-8187-22ec4bb40ea5", version: 0, kind: "file", sniff: 10, chosen_by: null, suffixes: [".dcm"], reference: 25, source: "DICOM", inputs: "DICOM Part 10 files with native, JPEG, lossless JPEG or JPEG 2000 pixel data, including whole-slide images", for: "DICOM files, including whole-slide images" }, { name: "fits", title: "FITS", uuid: "4b0d3a7e-1c52-4f6a-9b8e-2d7f0c6a1e93", version: 0, kind: "file", sniff: 110, chosen_by: null, suffixes: [".fits", ".fz"], reference: null, source: "FITS", inputs: "FITS files: images, multi-extension files, binary and ASCII tables", for: "FITS images and tables (`.fits`, `.fz`)" }, { name: "flac", title: "FLAC", uuid: "e9108d07-b24b-432f-a8ce-09d80c8073b4", version: 0, kind: "file", sniff: 95, chosen_by: null, suffixes: [".flac"], reference: null, source: "FLAC (Free Lossless Audio Codec)", inputs: "FLAC files (`.flac`) of a fixed block size, with their metadata blocks and ID3v2 and ID3v1 tags; one sharded array of integer samples, not an image", for: "FLAC audio files, as a sharded array of samples (`.flac`)" }, { name: "grib", title: "GRIB", uuid: "c9bbe039-8dfa-49f9-a655-756f822a42d6", version: 0, kind: "file", sniff: 65, chosen_by: null, suffixes: [".grib2", ".grb2"], reference: null, source: "WMO FM 92 GRIB edition 2 (WMO-No. 306, Manual on Codes, Volume I.2)", inputs: "GRIB edition 2 files of gridded fields, such as NOAA's and ECMWF's forecasts, whose regular latitude/longitude and Lambert conformal fields it presents", for: "GRIB2 files of gridded weather and climate fields (`.grib2`), as labeled arrays with CF coordinates" }, { name: "hdf5", title: "HDF5", uuid: "6c006834-424b-451b-b786-f8c502ec32af", version: 0, kind: "file", sniff: 70, chosen_by: null, suffixes: [".h5", ".nwb"], reference: null, source: "HDF5, NWB", inputs: "HDF5 files, NWB files first among them: every group, dataset, attribute, link and object reference the profile can present, in hdmf-zarr's Zarr v3 form", for: "HDF5 files (`.h5`, `.hdf5`), and NWB files (`.nwb`), which pynwb's `NWBZarrIO` opens" }, { name: "ims", title: "IMS", uuid: "5067a535-8261-4b25-a93c-1985ed333bde", version: 0, kind: "file", sniff: null, chosen_by: "hdf5", suffixes: [".ims"], reference: 25, source: "Imaris IMS", inputs: "Imaris IMS files (HDF5)", for: "Imaris `.ims` files" }, { name: "lif", title: "LIF", uuid: "b099ab1f-f9d4-4276-9006-9ff1193a34b2", version: 0, kind: "file", sniff: 55, chosen_by: null, suffixes: [".lif"], reference: null, source: "Leica LIF", inputs: "Leica LIF files (LAS X and LAS AF, versions 1 and 2): every image of the file's element tree, with interleaved or planar channels, z-stacks, time series and mosaics, uncompressed", for: "Leica LIF files (`.lif`)" }, { name: "mp3", title: "MP3", uuid: "b6cb0047-9448-4fdc-b03e-10dd3d6aa829", version: 0, kind: "file", sniff: 100, chosen_by: null, suffixes: [".mp3"], reference: null, source: "MP3 (MPEG Layer III audio)", inputs: "MPEG-1, MPEG-2 and MPEG-2.5 Layer III audio files (`.mp3`), with their ID3v2, ID3v1 and APE tags; one array of samples, not an image", for: "MP3 audio files, as an array of samples (`.mp3`)" }, { name: "mp4", title: "MP4", uuid: "bbe3f6b9-488d-4d8d-85ce-60a1649dd27e", version: 0, kind: "file", sniff: 85, chosen_by: null, suffixes: [".mp4", ".mov"], reference: null, source: "MP4 and QuickTime (H.264 and HEVC video, AAC and MP3 audio)", inputs: "MP4 and QuickTime files (`.mp4`, `.m4a`, `.m4v`, `.mov`) with H.264 or HEVC video and AAC or MP3 audio tracks; a group per track, not an image", for: "MP4 and QuickTime video and audio, as arrays of planes and samples (`.mp4`, `.m4a`, `.m4v`, `.mov`)" }, { name: "mrc", title: "MRC", uuid: "2aacd010-2ed1-4748-bc3c-5dd5e840bbce", version: 0, kind: "file", sniff: 90, chosen_by: null, suffixes: [".mrc"], reference: null, source: "MRC2014", inputs: "MRC2014 files (CCP4 maps, image stacks, volumes and volume stacks)", for: "MRC2014 maps, image stacks, volumes and volume stacks (`.mrc`, `.map`)" }, { name: "mrc-dataset", title: "MRC dataset", uuid: "f139bf4e-7bab-4c3c-9b2d-66ba747f9b93", version: 0, kind: "layout", sniff: null, chosen_by: null, suffixes: [], reference: null, source: "MRC2014, as a dataset", inputs: "", for: "" }, { name: "n5", title: "N5", uuid: "ad5d4c39-c69e-48f7-a3ef-4cc8c607d416", version: 0, kind: "store", sniff: null, chosen_by: null, suffixes: [], reference: 25, source: "N5", inputs: "N5 containers, default-mode blocks", for: "N5 containers on S3" }, { name: "nd2", title: "ND2", uuid: "59612f14-e314-4207-ba00-8f422ba71490", version: 0, kind: "file", sniff: 20, chosen_by: null, suffixes: [".nd2"], reference: 20, source: "Nikon ND2", inputs: "Nikon ND2, format version 3 and later", for: "Nikon NIS-Elements ND2 files" }, { name: "ndpi", title: "NDPI", uuid: "6cac71ef-dbb2-4acd-b60c-00389aa4238a", version: 0, kind: "file", sniff: null, chosen_by: "tiff", suffixes: [".ndpi"], reference: 25, source: "Hamamatsu NDPI", inputs: "Hamamatsu NDPI slides, a TIFF variant with 64-bit offsets", for: "Hamamatsu NDPI whole-slide images" }, { name: "nifti", title: "NIfTI", uuid: "06e5809d-4d54-4b72-afd0-6bf61a7b4c85", version: 0, kind: "file", sniff: 60, chosen_by: null, suffixes: [".nii"], reference: 25, source: "NIfTI-1 and NIfTI-2", inputs: "NIfTI-1 and NIfTI-2 single files (`.nii`)", for: "NIfTI-1 and NIfTI-2 volumes (`.nii`)" }, { name: "npy", title: "NumPy", uuid: "62b1d1ba-8eb3-465c-a333-75e096fce519", version: 0, kind: "file", sniff: 75, chosen_by: null, suffixes: [".npy", ".npz"], reference: null, source: "NumPy NPY and NPZ (NEP 1)", inputs: "NumPy `.npy` files, and `.npz` archives of them (`np.savez`, `np.savez_compressed`), whose stored and deflated members it presents", for: "NumPy arrays: `.npy` files, and the arrays of `.npz` archives, stored or deflated" }, { name: "nrrd", title: "NRRD", uuid: "23e0c600-8da6-40f1-81e7-ab246e948e88", version: 0, kind: "file", sniff: 95, chosen_by: null, suffixes: [".nhdr", ".nrrd"], reference: null, source: "NRRD (Teem)", inputs: "NRRD files (`.nrrd`) and detached headers with one data file (`.nhdr`), raw or gzip-encoded", for: "NRRD volumes, attached or detached, raw or gzip (`.nrrd`, `.nhdr`)" }, { name: "ome-zarr", title: "OME-Zarr", uuid: "b74ea302-65bb-49ae-b81f-f9bb52cd4eed", version: 0, kind: "store", sniff: null, chosen_by: null, suffixes: [], reference: 25, source: "OME-Zarr 0.4", inputs: "OME-Zarr 0.4 hierarchies on Zarr v2, migrated to OME-Zarr 0.5", for: "OME-Zarr 0.4 hierarchies, migrated to OME-Zarr 0.5 in place" }, { name: "precomputed", title: "Neuroglancer precomputed", uuid: "c499987a-9518-4b2b-a804-a70a8de1a911", version: 0, kind: "store", sniff: null, chosen_by: null, suffixes: [], reference: null, source: "Neuroglancer precomputed", inputs: "Neuroglancer precomputed volumes, unsharded or with identity-hashed shards", for: "connectomics volumes in Neuroglancer's precomputed format, including shards too many to scan" }, { name: "qptiff", title: "QPTIFF", uuid: "329ea136-2f55-4c27-b6f4-8e60ca2109b8", version: 0, kind: "file", sniff: null, chosen_by: "tiff", suffixes: [".qptiff"], reference: null, source: "Akoya QPTIFF", inputs: "Akoya (PerkinElmer) Vectra QPTIFF slides and inForm component data, a TIFF with an XML description per image, in LZW, JPEG or uncompressed tiles or strips", for: "Akoya (PerkinElmer) Vectra multiplex scans and inForm component data" }, { name: "safe", title: "Sentinel-2 SAFE", uuid: "ef81346c-19e8-42ad-93b0-a279ccaf44c1", version: 0, kind: "both", sniff: 80, chosen_by: null, suffixes: [".zip"], reference: 25, source: "Sentinel-2 SAFE (Level-1C, Level-2A)", inputs: "Sentinel-2 Level-1C and Level-2A products: a `.SAFE` directory (a store) or a `.SAFE.zip` file", for: "Sentinel-2 Level-1C and Level-2A products, as a `.SAFE` directory or a `.SAFE.zip`" }, { name: "safetensors", title: "safetensors", uuid: "15e7ce39-d4ca-4514-8144-6e19d2a0341b", version: 0, kind: "both", sniff: 35, chosen_by: null, suffixes: [".safetensors"], reference: null, source: "safetensors (Hugging Face)", inputs: "safetensors files of a model's tensors (`model.safetensors`), in every data type the library defines, `BF16`, `F8_*`, `F4` and `F6_*` included; and stores of them, such as a model's repository of shards with its index", for: "machine learning model weights in safetensors files (`.safetensors`), each tensor an array, and a model's shards as one group" }, { name: "tiff", title: "TIFF", uuid: "48e9ac4e-1156-4a62-955e-20467d9c2700", version: 0, kind: "file", sniff: 40, chosen_by: null, suffixes: [".tif"], reference: 20, source: "TIFF, OME-TIFF, Aperio SVS", inputs: "TIFF and BigTIFF, including OME-TIFF and JPEG-tiled slides such as Aperio SVS", for: "OME-TIFF, plain TIFF (tiled or in strips), and JPEG-tiled slides such as Aperio SVS" }, { name: "vsi", title: "VSI", uuid: "c0a1d4e6-5b7f-4f3a-9c2d-8e1f6a7b3c45", version: 0, kind: "file", sniff: 30, chosen_by: null, suffixes: [".vsi"], reference: null, source: "Olympus VSI", inputs: "Olympus cellSens VSI slides: a `.vsi` file and the tile files beside it, probed by key (uncompressed, JPEG, JPEG 2000 and lossless JPEG tiles)", for: "Olympus cellSens whole-slide images (`.vsi` with its tile files)" }, { name: "zarr2", title: "Zarr v2", uuid: "8e792619-d671-4687-ab51-752885dd3ee6", version: 0, kind: "store", sniff: null, chosen_by: null, suffixes: [], reference: 25, source: "Zarr v2", inputs: "Zarr v2 hierarchies", for: "Zarr v2 hierarchies on S3" }];
 
 // src/zarrify/profiles_bundled.ts
 var REGISTRY = define_REFKV_PROFILES_default;
@@ -329,6 +329,76 @@ function isUriReference(ref) {
   }
   return true;
 }
+function removeDotSegments(input) {
+  const out2 = [];
+  let path = input;
+  while (path !== "") {
+    if (path.startsWith("../")) path = path.slice(3);
+    else if (path.startsWith("./")) path = path.slice(2);
+    else if (path.startsWith("/./")) path = path.slice(2);
+    else if (path === "/.") path = "/";
+    else if (path.startsWith("/../")) {
+      path = path.slice(3);
+      out2.pop();
+    } else if (path === "/..") {
+      path = "/";
+      out2.pop();
+    } else if (path === "." || path === "..") path = "";
+    else {
+      const i = path.indexOf("/", 1);
+      const segment = i === -1 ? path : path.slice(0, i);
+      path = i === -1 ? "" : path.slice(i);
+      out2.push(segment);
+    }
+  }
+  return out2.join("");
+}
+function compose(p) {
+  let s = p.scheme !== void 0 ? `${p.scheme}:` : "";
+  if (p.authority !== void 0) s += `//${p.authority}`;
+  s += p.path;
+  if (p.query !== void 0) s += `?${p.query}`;
+  if (p.fragment !== void 0) s += `#${p.fragment}`;
+  return s;
+}
+function resolveReference(base, ref) {
+  if (!isUriReference(ref)) {
+    throw new Error(`not a valid URI reference: ${JSON.stringify(ref)}`);
+  }
+  const b = split(base);
+  const r = split(ref);
+  if (r.scheme !== void 0) {
+    return compose({ ...r, path: removeDotSegments(r.path) });
+  }
+  if (r.authority !== void 0) {
+    return compose({ ...r, scheme: b.scheme, path: removeDotSegments(r.path) });
+  }
+  if (r.path === "") {
+    return compose({
+      scheme: b.scheme,
+      authority: b.authority,
+      path: b.path,
+      query: r.query ?? b.query,
+      fragment: r.fragment
+    });
+  }
+  let path;
+  if (r.path.startsWith("/")) path = removeDotSegments(r.path);
+  else if (b.authority !== void 0 && b.path === "") {
+    path = removeDotSegments("/" + r.path);
+  } else {
+    path = removeDotSegments(
+      b.path.slice(0, b.path.lastIndexOf("/") + 1) + r.path
+    );
+  }
+  return compose({
+    scheme: b.scheme,
+    authority: b.authority,
+    path,
+    query: r.query,
+    fragment: r.fragment
+  });
+}
 function checkHttpUrl(url2) {
   const { authority } = split(url2);
   if (authority === void 0 || authority === "") {
@@ -347,15 +417,56 @@ function checkHttpUrl(url2) {
 
 // src/http.ts
 var HttpResolutionError = class extends Error {
+  /** Whether the object is not the one the pins name: it changed since they were taken. */
+  sourceChanged;
+  /**
+   * Why the request got no response, where a browser could tell (`noResponse`): undefined for a
+   * response that failed, or a request outside a browser.
+   */
+  noResponse;
+  constructor(message, sourceChanged = false, noResponse2) {
+    super(message);
+    this.sourceChanged = sourceChanged;
+    this.noResponse = noResponse2;
+  }
 };
 function inBrowser() {
   const g = globalThis;
   return g.document !== void 0 || g.WorkerGlobalScope !== void 0;
 }
-function fetchFailed(url2, e, browser = inBrowser()) {
+async function answers(url2) {
+  const abort = new AbortController();
+  try {
+    await fetch(url2, { mode: "no-cors", cache: "no-store", signal: abort.signal });
+    return true;
+  } catch {
+    return false;
+  } finally {
+    abort.abort();
+  }
+}
+async function noResponse(url2, e, browser = inBrowser(), probe = answers, page = globalThis.location?.protocol) {
   const message = `${url2}: ${e.message}`;
-  if (!browser || !(e instanceof TypeError)) return message;
-  return `${message}. A browser reports this for a server that does not allow cross-origin reads (no Access-Control-Allow-Origin header for this page) as well as for one it cannot reach`;
+  if (!browser || !(e instanceof TypeError)) return new HttpResolutionError(message);
+  if (page === "https:" && new URL(url2).protocol === "http:") {
+    return new HttpResolutionError(
+      `${message}: this https:// page cannot read an http:// URL (mixed content)`,
+      false,
+      "mixed-content"
+    );
+  }
+  if (await probe(url2)) {
+    return new HttpResolutionError(
+      `${message}: the server answered, but its CORS headers do not let this site read the response (it sends no Access-Control-Allow-Origin for this site, or refuses the preflight of a range request)`,
+      false,
+      "cors"
+    );
+  }
+  return new HttpResolutionError(
+    `${message}: the server could not be reached (the host may not exist, or it refused or dropped the connection)`,
+    false,
+    "unreachable"
+  );
 }
 var STRONG_ETAG = /^"[\x21\x23-\x7e]*"$/;
 var EtagLog = class {
@@ -542,7 +653,7 @@ function endRecords(at, count, cdOffset, cdSize, comment) {
 function referenceBlock(ranges) {
   return ranges.length === 1 ? { id: RANGE_ID, payload: encodeRange(ranges[0]) } : { id: CONCAT_ID, payload: encodeConcat(ranges) };
 }
-function validate(desc) {
+function validate(desc, maxPayload = MAX_PAYLOAD) {
   const n = desc.sources.length;
   const byKey = /* @__PURE__ */ new Map();
   for (const e of desc.entries) {
@@ -610,8 +721,8 @@ function validate(desc) {
       total += r.length;
     }
     if (total > U64_MAX2) reject(`${e.key}: value size exceeds 2^64 - 1`);
-    if (referenceBlock(e.ranges).payload.length > MAX_PAYLOAD) {
-      reject(`${e.key}: reference payload exceeds ${MAX_PAYLOAD} bytes`);
+    if (referenceBlock(e.ranges).payload.length > maxPayload) {
+      reject(`${e.key}: reference payload exceeds ${maxPayload} bytes`);
     }
   }
 }
@@ -722,10 +833,18 @@ async function writeVzip(desc) {
 
 // src/archive.ts
 var RefkvError = class extends Error {
+  /** The error's class, as spec §6.5 <https://github.com/d-v-b/refkv/blob/main/spec/refkv.md#65-error-reporting> has readers report it. */
   errorClass;
-  constructor(errorClass, message) {
+  /**
+   * Whether a source is not the one the archive pins (spec §5.1
+   * <https://github.com/d-v-b/refkv/blob/main/spec/refkv.md#51-pins>): a pin or a range checksum
+   * failed, so the source changed since the archive was written.
+   */
+  sourceChanged;
+  constructor(errorClass, message, sourceChanged = false) {
     super(`refkv ${errorClass} error: ${message}`);
     this.errorClass = errorClass;
+    this.sourceChanged = sourceChanged;
   }
 };
 var DEFAULT_POLICY = {
@@ -888,299 +1007,6 @@ function checkAddress(policy, url2, address) {
 var MERGE_GAP = 1 << 16;
 var strictUtf82 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
-// src/zarrify/ir/source.ts
-function readerSource(read, size, options = {}) {
-  return {
-    size,
-    remote: false,
-    concurrency: options.concurrency ?? 4,
-    multirange: false,
-    fetch: (spans) => Promise.all(spans.map(([a, b]) => b > a ? read(a, b - a) : Promise.resolve(new Uint8Array()))),
-    read: (o, n) => n > 0 ? read(o, n) : Promise.resolve(new Uint8Array()),
-    ...options.etag ? { etag: options.etag } : {}
-  };
-}
-var OPEN = 1 << 16;
-var RETRY = /* @__PURE__ */ new Set([429, 500, 502, 503, 504]);
-var Transient = class extends Error {
-  status;
-  retryAfter;
-  constructor(status, retryAfter) {
-    super(`HTTP ${status}`);
-    this.status = status;
-    this.retryAfter = retryAfter;
-  }
-};
-var NoResponse = class extends Error {
-  error;
-  constructor(error) {
-    super(error.message);
-    this.error = error;
-  }
-};
-var isNode = typeof process !== "undefined" && process.versions?.node !== void 0;
-var HttpSource = class {
-  remote = true;
-  concurrency;
-  multirange;
-  planner;
-  size = 0;
-  head;
-  /** Where requests go: the URL, then where its redirects led. */
-  at;
-  /** Retries made, and requests sent. */
-  retries = 0;
-  requests = 0;
-  etags = new EtagLog();
-  send;
-  refusals = /* @__PURE__ */ new Set();
-  attempts;
-  baseDelay;
-  headers;
-  signal;
-  url;
-  /** The options this source was opened with: a file beside it (a VSI slide's tile files,
-   * ir/vsi.ts) is opened with the same policy, headers and limits. */
-  options;
-  constructor(url2, options = {}) {
-    this.url = url2;
-    this.options = options;
-    const policy = options.policy ?? {};
-    this.at = url2;
-    this.concurrency = options.concurrency ?? 6;
-    this.multirange = options.multirange ?? isNode;
-    if (options.planner) this.planner = options.planner;
-    this.attempts = options.attempts ?? 6;
-    this.baseDelay = options.baseDelay ?? 0.5;
-    this.headers = options.headers ?? {};
-    this.signal = options.signal;
-    const allow = (u) => {
-      try {
-        checkHttpUrl(u);
-      } catch (e) {
-        throw new RefkvError("resolution", e.message);
-      }
-      checkPolicy(policy, url2, u);
-    };
-    const checked = policy.allowPrivateHosts ? void 0 : checkedFetch((u, address) => {
-      try {
-        checkAddress(policy, u, address);
-      } catch (e) {
-        this.refusals.add(e.message);
-        throw e;
-      }
-    }, policy);
-    this.send = async (u, headers, signal, cache = "no-store") => {
-      const response = checked ? await checked(u, { headers, signal }, allow) : await fetch(u, { headers, signal, redirect: "follow", cache });
-      if (response.redirected) {
-        try {
-          allow(response.url);
-        } catch (e) {
-          await response.body?.cancel();
-          throw e;
-        }
-      }
-      return response;
-    };
-  }
-  /** Checks the URL, then reads its first `OPEN` bytes: the size, and the bytes the run is seeded with. */
-  async open() {
-    const t = performance.now();
-    const response = await this.retry(() => this.get(`bytes=0-${OPEN - 1}`, void 0, "default"));
-    const seconds = (performance.now() - t) / 1e3;
-    if (response.status === 416) {
-      await response.body?.cancel();
-      this.size = 0;
-      return this;
-    }
-    if (response.status !== 206) {
-      await response.body?.cancel();
-      throw new HttpResolutionError(`${this.url}: HTTP ${response.status} for a range of its first bytes`);
-    }
-    const crange = response.headers.get("Content-Range");
-    const body = await this.body(response);
-    const m = crange?.trim().match(/^bytes (\d+)-(\d+)\/(\d+)$/i);
-    if (m && Number(m[1]) === 0 && body.length === Number(m[2]) + 1) {
-      this.size = Number(m[3]);
-    } else if (crange === null && response.type === "cors") {
-      this.size = body.length < OPEN ? body.length : await this.headSize();
-    } else {
-      throw new HttpResolutionError(`${this.url}: Content-Range ${JSON.stringify(crange)} for ${body.length} bytes of [0, ${OPEN})`);
-    }
-    if (body.length > this.size) throw new HttpResolutionError(`${this.url}: ${body.length} bytes of a ${this.size}-byte object`);
-    this.head = { offset: 0, data: body, seconds };
-    return this;
-  }
-  async headSize() {
-    const r = await fetch(this.at, { method: "HEAD", signal: this.signal });
-    const v = r.headers.get("Content-Length");
-    if (r.status !== 200 || v === null || !/^\d+$/.test(v)) {
-      throw new HttpResolutionError(`${this.url}: cannot determine the size (HEAD ${r.status})`);
-    }
-    return Number(v);
-  }
-  etag() {
-    return this.etags.pin();
-  }
-  /** One GET of a range (redirects followed and checked); a 429 or 5xx is a Transient. */
-  async get(range, signal, cache) {
-    this.requests++;
-    const headers = { ...this.headers, Range: range, "Accept-Encoding": "identity" };
-    let response;
-    try {
-      response = await this.send(this.at, headers, signal ?? this.signal, cache);
-    } catch (e) {
-      if (e instanceof RefkvError || e instanceof HttpResolutionError) throw e;
-      if (this.refusals.has(e.message)) throw new RefkvError("resolution", e.message);
-      (signal ?? this.signal)?.throwIfAborted();
-      if (e instanceof TypeError || typeof e.code === "string") throw new NoResponse(e);
-      throw new HttpResolutionError(`${this.url}: ${e.message}`);
-    }
-    if (response.redirected && response.url) this.at = response.url;
-    if (RETRY.has(response.status)) {
-      await response.body?.cancel();
-      throw new Transient(response.status, response.headers.get("Retry-After"));
-    }
-    if (response.status === 200 || response.status === 206) {
-      const encoding = response.headers.get("Content-Encoding");
-      if (encoding !== null && encoding.trim().toLowerCase() !== "identity") {
-        await response.body?.cancel();
-        throw new HttpResolutionError(`${this.url}: response has Content-Encoding ${JSON.stringify(encoding)}`);
-      }
-      const etag = response.headers.get("ETag");
-      if (etag !== null && etag.includes(",")) {
-        await response.body?.cancel();
-        throw new HttpResolutionError(`${this.url}: more than one ETag field`);
-      }
-      this.etags.saw(etag);
-    }
-    return response;
-  }
-  async body(response) {
-    return new Uint8Array(await response.arrayBuffer());
-  }
-  async retry(f) {
-    for (let attempt = 0; ; attempt++) {
-      try {
-        return await f();
-      } catch (e) {
-        if (e instanceof RefkvError || e instanceof HttpResolutionError || e.name === "AbortError") throw e;
-        const last = attempt >= this.attempts - 1;
-        if (e instanceof Transient) {
-          if (last) throw new HttpResolutionError(`${this.url}: HTTP ${e.status} after ${this.attempts} attempts`);
-          await this.wait(attempt, e.retryAfter);
-        } else {
-          if (last) {
-            if (e instanceof NoResponse) throw new HttpResolutionError(`${fetchFailed(this.url, e.error)}${causeOf(e.error)}`);
-            throw new HttpResolutionError(`${this.url}: ${e.message}${causeOf(e)}`);
-          }
-          await this.wait(attempt, null);
-        }
-      }
-    }
-  }
-  async wait(attempt, retryAfter) {
-    let delay = this.baseDelay * 2 ** attempt * (0.5 + Math.random());
-    if (retryAfter !== null) {
-      const s = retryAfter.trim();
-      if (/^\d+$/.test(s)) delay = Math.max(delay, Number(s));
-      else {
-        const when = Date.parse(s);
-        if (!Number.isNaN(when)) delay = Math.max(delay, (when - Date.now()) / 1e3);
-      }
-    }
-    this.retries++;
-    await new Promise((resolve) => setTimeout(resolve, Math.min(delay, 120) * 1e3));
-  }
-  async read(offset, length) {
-    if (length === 0) return new Uint8Array();
-    const h = this.head;
-    if (h && offset >= h.offset && offset + length <= h.offset + h.data.length) {
-      return h.data.subarray(offset - h.offset, offset - h.offset + length);
-    }
-    return this.single(offset, offset + length);
-  }
-  single(a, b, signal) {
-    return this.retry(async () => {
-      const response = await this.get(`bytes=${a}-${b - 1}`, signal);
-      if (response.status !== 206) {
-        await response.body?.cancel();
-        throw new HttpResolutionError(`${this.url}: HTTP ${response.status} for [${a}, ${b})`);
-      }
-      const crange = response.headers.get("Content-Range");
-      const body = await this.body(response);
-      const m = crange?.trim().match(/^bytes (\d+)-(\d+)\/(\d+|\*)$/i);
-      const hidden = crange === null && response.type === "cors";
-      if (body.length !== b - a || !hidden && (!m || Number(m[1]) !== a || Number(m[2]) !== b - 1)) {
-        throw new HttpResolutionError(`${this.url}: HTTP 206 with Content-Range ${JSON.stringify(crange)}, ${body.length} bytes for [${a}, ${b})`);
-      }
-      return body;
-    });
-  }
-  async fetch(spans, signal) {
-    if (spans.length === 1) return [await this.single(spans[0][0], spans[0][1], signal)];
-    const range = "bytes=" + spans.map(([a, b]) => `${a}-${b - 1}`).join(",");
-    let got;
-    try {
-      const response = await this.get(range, signal);
-      const ctype = response.headers.get("Content-Type") ?? "";
-      if (response.status !== 206 || !/multipart\/byteranges/i.test(ctype)) {
-        await response.body?.cancel();
-        return null;
-      }
-      got = multipartParts(await this.body(response), ctype);
-    } catch (e) {
-      if (e instanceof RefkvError || e instanceof HttpResolutionError || e.name === "AbortError") throw e;
-      return null;
-    }
-    if (got === null) return null;
-    return spans.map(([a, b]) => {
-      const data = got.get(`${a}-${b}`);
-      if (data === void 0) throw new HttpResolutionError(`${this.url}: the multipart answer lacks [${a}, ${b})`);
-      return data;
-    });
-  }
-};
-function causeOf(e) {
-  const cause = e.cause;
-  return cause ? ` (${cause.code ?? cause.message ?? String(cause)})` : "";
-}
-function indexOf(hay, needle, from) {
-  outer: for (let i = from; i + needle.length <= hay.length; i++) {
-    for (let j = 0; j < needle.length; j++) if (hay[i + j] !== needle[j]) continue outer;
-    return i;
-  }
-  return -1;
-}
-var latin1 = (b) => Array.from(b, (c) => String.fromCharCode(c)).join("");
-function multipartParts(body, ctype) {
-  const m = ctype.match(/boundary=("?)([^";]+)\1/i);
-  const out2 = /* @__PURE__ */ new Map();
-  if (!m) return out2;
-  const sep = new TextEncoder().encode(`--${m[2].trim()}`);
-  const crlf2 = new TextEncoder().encode("\r\n\r\n");
-  let pos = 0;
-  for (; ; ) {
-    const k = indexOf(body, sep, pos);
-    if (k < 0 || body[k + sep.length] === 45 && body[k + sep.length + 1] === 45) return out2;
-    const headEnd = indexOf(body, crlf2, k);
-    if (headEnd < 0) return out2;
-    let start;
-    let end = 0;
-    for (const line of latin1(body.subarray(k + sep.length, headEnd)).split("\r\n")) {
-      const i = line.indexOf(":");
-      if (i < 0 || line.slice(0, i).trim().toLowerCase() !== "content-range") continue;
-      const r = line.slice(i + 1).trim().match(/^bytes (\d+)-(\d+)\//i);
-      if (r) [start, end] = [Number(r[1]), Number(r[2]) + 1];
-    }
-    if (start === void 0) return out2;
-    const at = headEnd + 4;
-    if (at + end - start > body.length) return out2;
-    out2.set(`${start}-${end}`, body.slice(at, at + end - start));
-    pos = at + end - start;
-  }
-}
-
 // src/zarrify/store.ts
 var StoreError = class extends Error {
   /** The store format that refused the input, once one was chosen (the Rust core's store run:
@@ -1274,6 +1100,67 @@ function listingEndpoint(url2) {
     reject2(`the key prefix of ${url2} is not UTF-8`);
   }
   return [endpoint, prefix];
+}
+var HUB = "https://huggingface.co";
+var HUB_NAME = /^[A-Za-z0-9._-]+$/;
+function hubEndpoint(endpoint) {
+  const e = (endpoint || HUB).replace(/\/+$/, "");
+  const m = e.match(SPLIT2);
+  if (m === null || !isUriReference(e)) throw new TypeError(`the Hub endpoint ${JSON.stringify(e)} is not a valid URI`);
+  const [, scheme, authority, , query, fragment] = m;
+  if (scheme === void 0 || !["http", "https"].includes(scheme.toLowerCase()) || !authority || authority.includes("@") || query !== void 0 || fragment !== void 0) {
+    throw new TypeError(`the Hub endpoint ${JSON.stringify(e)} is not an http(s) URL without userinfo, query or fragment`);
+  }
+  return e;
+}
+function hubApi(repo) {
+  return `${repo.endpoint}/api/${repo.kind}/${repo.owner}/${repo.name}`;
+}
+function hubRevisionUrl(repo) {
+  return `${hubApi(repo)}/revision/${queryEncode(repo.revision)}?expand%5B%5D=sha&expand%5B%5D=gated`;
+}
+function hubTreeUrl(repo, commit) {
+  const d = repo.directory ? "/" + pct(repo.directory.slice(0, -1), PATH_SAFE) : "";
+  return `${hubApi(repo)}/tree/${commit}${d}?recursive=true`;
+}
+function hubBase(repo, commit) {
+  const kind = repo.kind === "datasets" ? "/datasets/" : "/";
+  return `${repo.endpoint}${kind}${repo.owner}/${repo.name}/resolve/${commit}/${objectUrl("", repo.directory)}`;
+}
+function under(url2, endpoint) {
+  const m = url2.match(SPLIT2);
+  const e = endpoint.match(SPLIT2);
+  if (m === null || m[1] === void 0 || m[2] === void 0) return void 0;
+  if (m[1].toLowerCase() !== e[1].toLowerCase() || m[2].toLowerCase() !== e[2].toLowerCase()) return void 0;
+  const base = e[3] + "/";
+  return m[3].startsWith(base) ? m[3].slice(base.length) : void 0;
+}
+var utf8Fatal = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+function hubRepo(url2, endpoint) {
+  const rest = under(url2, endpoint);
+  if (rest === void 0) return void 0;
+  checkStoreUrl(url2);
+  let segments = rest.split("/");
+  let kind = "models";
+  if (segments[0] === "datasets") {
+    kind = "datasets";
+    segments = segments.slice(1);
+  }
+  if (segments.length < 5 || segments[2] !== "tree" || segments[segments.length - 1] !== "" || !segments.slice(0, 2).every((n) => HUB_NAME.test(n) && n !== "." && n !== "..") || segments.slice(3, -1).some((x) => !x)) {
+    reject2(`Hub store URL ${JSON.stringify(url2)} is not <owner>/<repo>/tree/<rev>/[<dir>/] (or that after datasets/)`);
+  }
+  let revision = "";
+  let directory = "";
+  try {
+    revision = utf8Fatal.decode(percentDecode(segments[3]));
+    directory = segments.slice(4, -1).map((x) => utf8Fatal.decode(percentDecode(x)) + "/").join("");
+  } catch {
+    reject2(`the revision or directory of ${JSON.stringify(url2)} is not UTF-8`);
+  }
+  if (directory.split("/").slice(0, -1).some((x) => x === "." || x === "..")) {
+    reject2(`the directory of ${JSON.stringify(url2)} has a segment . or ..`);
+  }
+  return { endpoint, kind, owner: segments[0], name: segments[1], revision, directory };
 }
 function isChar(c) {
   return c === 9 || c === 10 || c === 13 || c >= 32 && c <= 55295 || c >= 57344 && c <= 65533 || c >= 65536 && c <= 1114111;
@@ -1470,6 +1357,194 @@ function parseListing(body, prefix) {
   }
   return { objects };
 }
+function checkNumbers(v) {
+  if (typeof v === "number") {
+    if (!Number.isFinite(v)) reject2("JSON number is not finite in binary64");
+  } else if (Array.isArray(v)) {
+    for (const x of v) checkNumbers(x);
+  } else if (v !== null && typeof v === "object") {
+    for (const x of Object.values(v)) checkNumbers(x);
+  }
+}
+var RawJSON = JSON;
+var INTEGER = /^-?(?:0|[1-9][0-9]*)$/;
+var NoSourceText = class extends Error {
+  constructor() {
+    super("JSON.parse gives the reviver no source text (needs JSON.parse source text access, as in Node 21+)");
+  }
+};
+function keepIntegers(_key, value, context) {
+  if (typeof value !== "number") return value;
+  if (context?.source === void 0) throw new NoSourceText();
+  if (!INTEGER.test(context.source)) return Object.is(value, -0) ? RawJSON.rawJSON("-0.0") : value;
+  if (Object.is(value, -0)) return 0;
+  if (Math.abs(value) <= MAX_SAFE || !Number.isFinite(value)) return value;
+  return RawJSON.rawJSON(context.source);
+}
+function isRawInteger(v) {
+  return v !== null && typeof v === "object" && RawJSON.isRawJSON(v);
+}
+function parseJson(data) {
+  if (data.length > MAX_DOCUMENT) reject2(`JSON document of ${data.length} bytes exceeds ${MAX_DOCUMENT}`);
+  if (data[0] === 239 && data[1] === 187 && data[2] === 191) reject2("JSON document starts with a byte order mark");
+  let s = "";
+  try {
+    s = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(data);
+  } catch {
+    reject2("JSON document is not UTF-8");
+  }
+  if (nesting(s) > MAX_DEPTH) reject2(`JSON nests more than ${MAX_DEPTH} deep`);
+  let v = null;
+  try {
+    v = JSON.parse(s, keepIntegers);
+  } catch (e) {
+    if (e instanceof NoSourceText) throw e;
+    reject2(`invalid JSON: ${e.message}`);
+  }
+  checkNumbers(v);
+  return v;
+}
+function nesting(s) {
+  let depth = 0, deepest = 0, open = true;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c === 34 && open) {
+      let j = i + 1;
+      while (j < s.length && s.charCodeAt(j) !== 34) j += s.charCodeAt(j) === 92 ? 2 : 1;
+      if (j >= s.length) open = false;
+      else i = j;
+    } else if (c === 91 || c === 123) {
+      deepest = Math.max(deepest, ++depth);
+    } else if (c === 93 || c === 125) {
+      depth--;
+    }
+  }
+  return deepest;
+}
+var COMMIT = /^[0-9a-f]{40}$/;
+var LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+function parseHubRevision(body) {
+  const doc = parseJson(body);
+  if (!isObject(doc)) return reject2("the Hub revision is not a JSON object");
+  const sha = has(doc, "sha") ? doc.sha : void 0;
+  if (typeof sha !== "string" || !COMMIT.test(sha)) {
+    reject2(`the Hub revision's sha ${show(sha).slice(0, 80)} is not 40 lowercase hex digits`);
+  }
+  if (has(doc, "gated") && doc.gated !== false) {
+    reject2(`the Hub repository is gated (${show(doc.gated).slice(0, 40)}): its files are not read anonymously`);
+  }
+  return sha;
+}
+function parseHubTree(body, prefix) {
+  const doc = parseJson(body);
+  if (!Array.isArray(doc)) return reject2("the Hub tree listing is not a JSON array");
+  const objects = [];
+  for (const entry of doc) {
+    if (!isObject(entry)) reject2("a Hub tree entry is not a JSON object");
+    const e = entry;
+    const kind = has(e, "type") ? e.type : void 0;
+    const path = has(e, "path") ? e.path : void 0;
+    if (kind !== "file" && kind !== "directory") {
+      reject2(`a Hub tree entry's type ${show(kind).slice(0, 40)} is neither file nor directory`);
+    }
+    if (typeof path !== "string" || !path.startsWith(prefix) || path.length === prefix.length) {
+      reject2(`the Hub tree entry ${show(path).slice(0, 200)} is not under ${JSON.stringify(prefix)}`);
+    }
+    if (LONE_SURROGATE.test(path)) reject2(`the Hub tree entry ${show(path).slice(0, 200)} is not Unicode`);
+    if (kind === "file") {
+      const size = asInt(has(e, "size") ? e.size : void 0, 0, MAX_SAFE);
+      if (size === void 0) reject2(`the Hub tree file ${show(path).slice(0, 200)} has no size from 0 to 2^53 - 1`);
+      objects.push([path, size]);
+    }
+  }
+  return { objects, entries: doc.length };
+}
+var LINK_WS = /* @__PURE__ */ new Set([" ", "	", "\r", "\n"]);
+var PARAM_NAME = /[A-Za-z0-9-]+/y;
+var TOKEN = /[^ \t\r\n;,"]+/y;
+function links(value) {
+  const out2 = [];
+  const bad = (why) => reject2(`the Link header ${JSON.stringify(value.slice(0, 200))} ${why}`);
+  const n = value.length;
+  let i = 0;
+  const ws = () => {
+    while (i < n && LINK_WS.has(value[i])) i++;
+  };
+  const match = (re) => {
+    re.lastIndex = i;
+    const m = re.exec(value);
+    if (m === null) return void 0;
+    i = re.lastIndex;
+    return m[0];
+  };
+  for (; ; ) {
+    ws();
+    if (i >= n || value[i] !== "<") bad("is not a list of links");
+    const end = value.indexOf(">", i);
+    if (end < 0) bad("has an unterminated <");
+    const target = value.slice(i + 1, end);
+    if (!isUriReference(target)) reject2(`the Link header's target ${JSON.stringify(target.slice(0, 200))} is not a URI reference`);
+    i = end + 1;
+    const params = [];
+    for (; ; ) {
+      ws();
+      if (i >= n || value[i] !== ";") break;
+      i++;
+      ws();
+      const name = match(PARAM_NAME);
+      if (name === void 0) bad("has a bad parameter");
+      ws();
+      if (i >= n || value[i] !== "=") bad("has a parameter without =");
+      i++;
+      ws();
+      let param;
+      if (i < n && value[i] === '"') {
+        const close = value.indexOf('"', i + 1);
+        if (close < 0) bad("has an unterminated quote");
+        param = value.slice(i + 1, close);
+        i = close + 1;
+      } else {
+        param = match(TOKEN);
+        if (param === void 0) bad("has a parameter without a value");
+      }
+      params.push([name, param]);
+    }
+    out2.push([target, params]);
+    if (i >= n) return out2;
+    if (value[i] !== ",") bad("is not a list of links");
+    i++;
+  }
+}
+function nextLink(field, url2, endpoint) {
+  if (field === null) return void 0;
+  const found = links(field).filter(([, params]) => params.some(([k, v]) => k.toLowerCase() === "rel" && v.toLowerCase().split(/[ \t\r\n]+/).includes("next"))).map(([t]) => t);
+  if (found.length > 1) reject2("the Hub tree response has more than one next link");
+  if (found.length === 0) return void 0;
+  const next = resolveReference(url2, found[0]);
+  const a = next.match(SPLIT2);
+  const b = endpoint.match(SPLIT2);
+  if (a[1]?.toLowerCase() !== b[1].toLowerCase() || a[2]?.toLowerCase() !== b[2].toLowerCase()) {
+    reject2(`the Hub tree's next link ${JSON.stringify(next.slice(0, 200))} is not on ${JSON.stringify(endpoint)}`);
+  }
+  return next;
+}
+function show(v) {
+  return String(JSON.stringify(v));
+}
+function num(v) {
+  return isRawInteger(v) ? Number(v.rawJSON) : v;
+}
+function asInt(v, lo = -MAX_SAFE, hi = MAX_SAFE) {
+  if (isRawInteger(v)) v = num(v) + 0;
+  if (typeof v !== "number" || !Number.isInteger(v) || Math.abs(v) > MAX_SAFE) return void 0;
+  return v >= lo && v <= hi ? v : void 0;
+}
+function isObject(v) {
+  return v !== null && typeof v === "object" && !Array.isArray(v) && !RawJSON.isRawJSON(v);
+}
+function has(o, k) {
+  return Object.hasOwn(o, k);
+}
 function compareKeys(a, b) {
   const n = Math.min(a.length, b.length);
   for (let i = 0; i < n; i++) {
@@ -1547,7 +1622,8 @@ function storeFetch(base, policy = {}, headers = {}, check = (u, address) => che
     return r;
   };
 }
-async function openHttpStore(url2, { fetch: given2, policy = {}, headers = {}, maxObjects = MAX_OBJECTS, concurrency = CONCURRENCY } = {}) {
+async function openHttpStore(url2, { fetch: given2, policy = {}, headers = {}, maxObjects = MAX_OBJECTS, concurrency = CONCURRENCY, hubEndpoint: hub } = {}) {
+  const repo = hubRepo(url2, hubEndpoint(hub));
   const allow = (u) => allowStoreUrl(policy, url2, u);
   const send = given2 ?? storeFetch(url2, policy, headers);
   const f = async (u, init) => {
@@ -1563,7 +1639,7 @@ async function openHttpStore(url2, { fetch: given2, policy = {}, headers = {}, m
     }
     return r;
   };
-  const [endpoint, prefix] = listingEndpoint(url2);
+  let base = url2;
   const store = {
     url: url2,
     objects: /* @__PURE__ */ new Map(),
@@ -1573,7 +1649,7 @@ async function openHttpStore(url2, { fetch: given2, policy = {}, headers = {}, m
     async read(key) {
       const size = this.objects.get(key);
       if (size === 0) return new Uint8Array(0);
-      const u = objectUrl(url2, key);
+      const u = objectUrl(base, key);
       let r;
       try {
         r = await f(u, { headers: { Range: `bytes=0-${size - 1}` } });
@@ -1588,7 +1664,7 @@ async function openHttpStore(url2, { fetch: given2, policy = {}, headers = {}, m
     },
     async readRange(key, offset, length) {
       if (length === 0) return new Uint8Array(0);
-      const u = objectUrl(url2, key);
+      const u = objectUrl(base, key);
       let r;
       try {
         r = await f(u, { headers: { Range: `bytes=${offset}-${offset + length - 1}` } });
@@ -1602,24 +1678,55 @@ async function openHttpStore(url2, { fetch: given2, policy = {}, headers = {}, m
       return data;
     }
   };
+  const list = async (u) => {
+    store.requests++;
+    let r;
+    try {
+      r = await f(u);
+    } catch (e) {
+      if (e instanceof RefkvError) throw e;
+      throw new StoreReadError(`${u}: ${e.message}`);
+    }
+    if (r.status === 408 || r.status === 429 || r.status >= 500) {
+      await r.body?.cancel();
+      throw new StoreReadError(`${u}: HTTP ${r.status}`);
+    }
+    if (r.status !== 200) {
+      await r.body?.cancel();
+      if (repo === void 0) reject2(`the store has no listing: ${u} answered HTTP ${r.status}`);
+      const why = r.status === 401 ? " (a repository that does not exist, or a private one)" : r.status === 404 ? " (a revision or a directory the repository does not have)" : "";
+      reject2(`the Hub answered HTTP ${r.status} for ${u}${why}`);
+    }
+    return r;
+  };
   const seen = /* @__PURE__ */ new Set();
+  if (repo !== void 0) {
+    const commit = parseHubRevision(new Uint8Array(await (await list(hubRevisionUrl(repo))).arrayBuffer()));
+    base = store.url = hubBase(repo, commit);
+    const requested = /* @__PURE__ */ new Set();
+    let link = hubTreeUrl(repo, commit);
+    while (link !== void 0) {
+      requested.add(link);
+      const r = await list(link);
+      const answered = r.url || link;
+      const page = parseHubTree(new Uint8Array(await r.arrayBuffer()), repo.directory);
+      addListed(store, page.objects, repo.directory, seen);
+      if (store.listed > maxObjects) throw new StoreLimitError(`the store lists more than ${maxObjects} objects`);
+      link = nextLink(r.headers.get("Link"), answered, repo.endpoint);
+      if (link !== void 0 && page.entries === 0) reject2("a Hub tree page with a next link lists nothing");
+      if (link !== void 0 && requested.has(link)) {
+        reject2(`the Hub tree's next link ${JSON.stringify(link.slice(0, 200))} was requested already`);
+      }
+    }
+    return store;
+  }
+  const [endpoint, prefix] = listingEndpoint(url2);
   const tokens = /* @__PURE__ */ new Set();
   let token;
   for (; ; ) {
     let q = `?list-type=2&prefix=${queryEncode(prefix)}`;
     if (token !== void 0) q += `&continuation-token=${queryEncode(token)}`;
-    store.requests++;
-    let r;
-    try {
-      r = await f(endpoint + q);
-    } catch (e) {
-      if (e instanceof RefkvError) throw e;
-      throw new StoreReadError(`${endpoint + q}: ${e.message}`);
-    }
-    if (r.status === 408 || r.status === 429 || r.status >= 500) {
-      throw new StoreReadError(`${endpoint + q}: HTTP ${r.status}`);
-    }
-    if (r.status !== 200) reject2(`the store has no listing: ${endpoint + q} answered HTTP ${r.status}`);
+    const r = await list(endpoint + q);
     const listing = parseListing(new Uint8Array(await r.arrayBuffer()), prefix);
     addListed(store, listing.objects, prefix, seen);
     if (store.listed > maxObjects) throw new StoreLimitError(`the store lists more than ${maxObjects} objects`);
@@ -1634,11 +1741,310 @@ function chooseProfile(store) {
   if (store.objects.has(".zarray") || store.objects.has(".zgroup")) return "zarr2";
   if (store.objects.has("attributes.json")) return "n5";
   if (store.objects.has("manifest.safe")) return "safe";
+  if (store.objects.has("info")) return "precomputed";
+  for (const k of store.objects.keys()) if (k.endsWith(".safetensors")) return "safetensors";
   return reject2(
-    "not an N5, Zarr v2 or SAFE store: the root has no .zarray, .zgroup, attributes.json or manifest.safe"
+    "not an N5, Zarr v2, SAFE, Neuroglancer precomputed or safetensors store: the root has no .zarray, .zgroup, attributes.json, manifest.safe or info, and no key ends in .safetensors"
   );
 }
 var MAX_BLOCK = 2 ** 31 - 1;
+
+// src/zarrify/ir/source.ts
+function readerSource(read, size, options = {}) {
+  return {
+    size,
+    remote: false,
+    concurrency: options.concurrency ?? 4,
+    multirange: false,
+    fetch: (spans) => Promise.all(spans.map(([a, b]) => b > a ? read(a, b - a) : Promise.resolve(new Uint8Array()))),
+    read: (o, n) => n > 0 ? read(o, n) : Promise.resolve(new Uint8Array()),
+    ...options.etag ? { etag: options.etag } : {}
+  };
+}
+var OPEN = 1 << 16;
+var RETRY = /* @__PURE__ */ new Set([429, 500, 502, 503, 504]);
+var Transient = class extends Error {
+  status;
+  retryAfter;
+  constructor(status, retryAfter) {
+    super(`HTTP ${status}`);
+    this.status = status;
+    this.retryAfter = retryAfter;
+  }
+};
+var NoResponse = class extends Error {
+  error;
+  constructor(error) {
+    super(error.message);
+    this.error = error;
+  }
+};
+var isNode = typeof process !== "undefined" && process.versions?.node !== void 0;
+var HttpSource = class {
+  remote = true;
+  concurrency;
+  multirange;
+  planner;
+  size = 0;
+  head;
+  /** Where requests go: the URL, then where its redirects led. */
+  at;
+  /** Retries made, and requests sent. */
+  retries = 0;
+  requests = 0;
+  etags = new EtagLog();
+  send;
+  refusals = /* @__PURE__ */ new Set();
+  attempts;
+  baseDelay;
+  headers;
+  signal;
+  url;
+  /** The options this source was opened with: a file beside it (a VSI slide's tile files,
+   * ir/vsi.ts) is opened with the same policy, headers and limits. */
+  options;
+  constructor(url2, options = {}) {
+    this.url = url2;
+    this.options = options;
+    const policy = options.policy ?? {};
+    this.at = url2;
+    this.concurrency = options.concurrency ?? 6;
+    this.multirange = options.multirange ?? isNode;
+    if (options.planner) this.planner = options.planner;
+    this.attempts = options.attempts ?? 6;
+    this.baseDelay = options.baseDelay ?? 0.5;
+    this.headers = options.headers ?? {};
+    this.signal = options.signal;
+    const allow = (u) => {
+      try {
+        checkHttpUrl(u);
+      } catch (e) {
+        throw new RefkvError("resolution", e.message);
+      }
+      checkPolicy(policy, url2, u);
+    };
+    const checked = policy.allowPrivateHosts ? void 0 : checkedFetch((u, address) => {
+      try {
+        checkAddress(policy, u, address);
+      } catch (e) {
+        this.refusals.add(e.message);
+        throw e;
+      }
+    }, policy);
+    this.send = async (u, headers, signal, cache = "no-store") => {
+      const response = checked ? await checked(u, { headers, signal }, allow) : await fetch(u, { headers, signal, redirect: "follow", cache });
+      if (response.redirected) {
+        try {
+          allow(response.url);
+        } catch (e) {
+          await response.body?.cancel();
+          throw e;
+        }
+      }
+      return response;
+    };
+  }
+  /** Checks the URL, then reads its first `OPEN` bytes: the size, and the bytes the run is seeded with. */
+  async open() {
+    const t = performance.now();
+    const response = await this.retry(() => this.get(`bytes=0-${OPEN - 1}`, void 0, "default"));
+    const seconds = (performance.now() - t) / 1e3;
+    if (response.status === 416) {
+      await response.body?.cancel();
+      this.size = 0;
+      return this;
+    }
+    if (response.status !== 206) {
+      await response.body?.cancel();
+      throw new HttpResolutionError(`${this.url}: HTTP ${response.status} for a range of its first bytes`);
+    }
+    const crange = response.headers.get("Content-Range");
+    const body = await this.body(response);
+    const m = crange?.trim().match(/^bytes (\d+)-(\d+)\/(\d+)$/i);
+    if (m && Number(m[1]) === 0 && body.length === Number(m[2]) + 1) {
+      this.size = Number(m[3]);
+    } else if (crange === null && response.type === "cors") {
+      this.size = body.length < OPEN ? body.length : await this.headSize();
+    } else {
+      throw new HttpResolutionError(`${this.url}: Content-Range ${JSON.stringify(crange)} for ${body.length} bytes of [0, ${OPEN})`);
+    }
+    if (body.length > this.size) throw new HttpResolutionError(`${this.url}: ${body.length} bytes of a ${this.size}-byte object`);
+    this.head = { offset: 0, data: body, seconds };
+    return this;
+  }
+  async headSize() {
+    const r = await fetch(this.at, { method: "HEAD", signal: this.signal });
+    const v = r.headers.get("Content-Length");
+    if (r.status !== 200 || v === null || !/^\d+$/.test(v)) {
+      throw new HttpResolutionError(`${this.url}: cannot determine the size (HEAD ${r.status})`);
+    }
+    return Number(v);
+  }
+  etag() {
+    return this.etags.pin();
+  }
+  /** One GET of a range (redirects followed and checked); a 429 or 5xx is a Transient. */
+  async get(range, signal, cache) {
+    this.requests++;
+    const headers = { ...this.headers, Range: range, "Accept-Encoding": "identity" };
+    let response;
+    try {
+      response = await this.send(this.at, headers, signal ?? this.signal, cache);
+    } catch (e) {
+      if (e instanceof RefkvError || e instanceof HttpResolutionError) throw e;
+      if (this.refusals.has(e.message)) throw new RefkvError("resolution", e.message);
+      (signal ?? this.signal)?.throwIfAborted();
+      if (e instanceof TypeError || typeof e.code === "string") throw new NoResponse(e);
+      throw new HttpResolutionError(`${this.url}: ${e.message}`);
+    }
+    if (response.redirected && response.url) this.at = response.url;
+    if (RETRY.has(response.status)) {
+      await response.body?.cancel();
+      throw new Transient(response.status, response.headers.get("Retry-After"));
+    }
+    if (response.status === 200 || response.status === 206) {
+      const encoding = response.headers.get("Content-Encoding");
+      if (encoding !== null && encoding.trim().toLowerCase() !== "identity") {
+        await response.body?.cancel();
+        throw new HttpResolutionError(`${this.url}: response has Content-Encoding ${JSON.stringify(encoding)}`);
+      }
+      const etag = response.headers.get("ETag");
+      if (etag !== null && etag.includes(",")) {
+        await response.body?.cancel();
+        throw new HttpResolutionError(`${this.url}: more than one ETag field`);
+      }
+      this.etags.saw(etag);
+    }
+    return response;
+  }
+  async body(response) {
+    return new Uint8Array(await response.arrayBuffer());
+  }
+  async retry(f) {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await f();
+      } catch (e) {
+        if (e instanceof RefkvError || e instanceof HttpResolutionError || e.name === "AbortError") throw e;
+        const last = attempt >= this.attempts - 1;
+        if (e instanceof Transient) {
+          if (last) throw new HttpResolutionError(`${this.url}: HTTP ${e.status} after ${this.attempts} attempts`);
+          await this.wait(attempt, e.retryAfter);
+        } else {
+          if (last) {
+            if (e instanceof NoResponse) {
+              const failed = await noResponse(this.url, e.error);
+              failed.message += causeOf(e.error);
+              throw failed;
+            }
+            throw new HttpResolutionError(`${this.url}: ${e.message}${causeOf(e)}`);
+          }
+          await this.wait(attempt, null);
+        }
+      }
+    }
+  }
+  async wait(attempt, retryAfter) {
+    let delay = this.baseDelay * 2 ** attempt * (0.5 + Math.random());
+    if (retryAfter !== null) {
+      const s = retryAfter.trim();
+      if (/^\d+$/.test(s)) delay = Math.max(delay, Number(s));
+      else {
+        const when = Date.parse(s);
+        if (!Number.isNaN(when)) delay = Math.max(delay, (when - Date.now()) / 1e3);
+      }
+    }
+    this.retries++;
+    await new Promise((resolve) => setTimeout(resolve, Math.min(delay, 120) * 1e3));
+  }
+  async read(offset, length) {
+    if (length === 0) return new Uint8Array();
+    const h = this.head;
+    if (h && offset >= h.offset && offset + length <= h.offset + h.data.length) {
+      return h.data.subarray(offset - h.offset, offset - h.offset + length);
+    }
+    return this.single(offset, offset + length);
+  }
+  single(a, b, signal) {
+    return this.retry(async () => {
+      const response = await this.get(`bytes=${a}-${b - 1}`, signal);
+      if (response.status !== 206) {
+        await response.body?.cancel();
+        throw new HttpResolutionError(`${this.url}: HTTP ${response.status} for [${a}, ${b})`);
+      }
+      const crange = response.headers.get("Content-Range");
+      const body = await this.body(response);
+      const m = crange?.trim().match(/^bytes (\d+)-(\d+)\/(\d+|\*)$/i);
+      const hidden = crange === null && response.type === "cors";
+      if (body.length !== b - a || !hidden && (!m || Number(m[1]) !== a || Number(m[2]) !== b - 1)) {
+        throw new HttpResolutionError(`${this.url}: HTTP 206 with Content-Range ${JSON.stringify(crange)}, ${body.length} bytes for [${a}, ${b})`);
+      }
+      return body;
+    });
+  }
+  async fetch(spans, signal) {
+    if (spans.length === 1) return [await this.single(spans[0][0], spans[0][1], signal)];
+    const range = "bytes=" + spans.map(([a, b]) => `${a}-${b - 1}`).join(",");
+    let got;
+    try {
+      const response = await this.get(range, signal);
+      const ctype = response.headers.get("Content-Type") ?? "";
+      if (response.status !== 206 || !/multipart\/byteranges/i.test(ctype)) {
+        await response.body?.cancel();
+        return null;
+      }
+      got = multipartParts(await this.body(response), ctype);
+    } catch (e) {
+      if (e instanceof RefkvError || e instanceof HttpResolutionError || e.name === "AbortError") throw e;
+      return null;
+    }
+    if (got === null) return null;
+    return spans.map(([a, b]) => {
+      const data = got.get(`${a}-${b}`);
+      if (data === void 0) throw new HttpResolutionError(`${this.url}: the multipart answer lacks [${a}, ${b})`);
+      return data;
+    });
+  }
+};
+function causeOf(e) {
+  const cause = e.cause;
+  return cause ? ` (${cause.code ?? cause.message ?? String(cause)})` : "";
+}
+function indexOf(hay, needle, from) {
+  outer: for (let i = from; i + needle.length <= hay.length; i++) {
+    for (let j = 0; j < needle.length; j++) if (hay[i + j] !== needle[j]) continue outer;
+    return i;
+  }
+  return -1;
+}
+var latin1 = (b) => Array.from(b, (c) => String.fromCharCode(c)).join("");
+function multipartParts(body, ctype) {
+  const m = ctype.match(/boundary=("?)([^";]+)\1/i);
+  const out2 = /* @__PURE__ */ new Map();
+  if (!m) return out2;
+  const sep = new TextEncoder().encode(`--${m[2].trim()}`);
+  const crlf2 = new TextEncoder().encode("\r\n\r\n");
+  let pos = 0;
+  for (; ; ) {
+    const k = indexOf(body, sep, pos);
+    if (k < 0 || body[k + sep.length] === 45 && body[k + sep.length + 1] === 45) return out2;
+    const headEnd = indexOf(body, crlf2, k);
+    if (headEnd < 0) return out2;
+    let start;
+    let end = 0;
+    for (const line of latin1(body.subarray(k + sep.length, headEnd)).split("\r\n")) {
+      const i = line.indexOf(":");
+      if (i < 0 || line.slice(0, i).trim().toLowerCase() !== "content-range") continue;
+      const r = line.slice(i + 1).trim().match(/^bytes (\d+)-(\d+)\//i);
+      if (r) [start, end] = [Number(r[1]), Number(r[2]) + 1];
+    }
+    if (start === void 0) return out2;
+    const at = headEnd + 4;
+    if (at + end - start > body.length) return out2;
+    out2.set(`${start}-${end}`, body.slice(at, at + end - start));
+    pos = at + end - start;
+  }
+}
 
 // src/zarrify/ir/store.ts
 var utf85 = new TextEncoder();
@@ -1907,7 +2313,9 @@ async function zarrifyStoreProfile(store) {
   try {
     const chosen = chooseProfile(store);
     if (chosen === "safe") return { format: "safe", ...await zarrifyStoreIr("safe", store) };
+    if (chosen === "safetensors") return { format: "safetensors", ...await zarrifyStoreIr("safetensors", store) };
     if (chosen === "n5") return { format: "n5", ...await zarrifyStoreIr("n5", store) };
+    if (chosen === "precomputed") return { format: "precomputed", ...await zarrifyStoreIr("precomputed", store) };
     const desc = await zarrifyStoreIr("zarr2", store);
     return { format: desc.summary.format === "ome-zarr" ? "ome-zarr" : "zarr2", ...desc };
   } finally {

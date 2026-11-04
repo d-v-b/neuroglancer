@@ -23,6 +23,16 @@
  * - `Accept-Encoding` is a forbidden request header. Browsers send
  *   `Accept-Encoding: identity` on their own for requests with a `Range`
  *   header, and the response's `Content-Encoding` is still checked here.
+ * - An object stored with a `Content-Encoding` cannot be read, however its
+ *   source is pinned, since `fetch` will not give its stored bytes. Sent a
+ *   `Range` with `Accept-Encoding: identity`, Chromium fails the request
+ *   (`ERR_CONTENT_DECODING_FAILED`, which a script sees as "Failed to fetch"),
+ *   and Firefox and WebKit decode what they received, so that the body is not
+ *   the range asked for, and for a range of part of the object is a truncated
+ *   stream's output. Cross-origin the header is usually hidden too. So this
+ *   reader does not make [refkv's exception](https://github.com/d-v-b/refkv/blob/main/spec/refkv.md#52-reading-over-http)
+ *   for a range whose total is the `size` pin, which that rule says of `fetch`,
+ *   and refuses: by the header where it shows, else by the body's length.
  * - `fetch` follows redirects itself (up to 20), re-sending the request
  *   headers, so the 5-redirect limit of §6.2 cannot be enforced. A redirect
  *   to a non-http(s) URL is refused by the browser.
@@ -95,7 +105,10 @@ export async function readHttpRange(
     response = await fetch(url, { headers, signal, redirect: "follow" });
   } catch (e) {
     signal?.throwIfAborted();
-    throw new HttpResolutionError(`${url}: ${(e as Error).message}`);
+    throw new HttpResolutionError(
+      `${url}: ${(e as Error).message} (Chromium says so too of an object ` +
+        "stored with a Content-Encoding, which a browser cannot read by range)",
+    );
   }
   const fail = (message: string): never => {
     throw new HttpResolutionError(`${url}: ${message}`);
@@ -162,7 +175,10 @@ export async function readHttpRange(
     // the object's size is unknown, so a `size` pin fails (spec §6.1)
     // unless the caller skips it.
     if (body.length !== end - start) {
-      fail(`206 of ${body.length} bytes for [${start}, ${end})`);
+      fail(
+        `206 of ${body.length} bytes for [${start}, ${end}), as a browser ` +
+          "gives for an object stored with a Content-Encoding",
+      );
     }
     return { data: body, size: undefined, sizeHidden: true };
   }

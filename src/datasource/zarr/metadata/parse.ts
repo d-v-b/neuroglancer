@@ -322,7 +322,7 @@ export function parseV3Metadata(
     );
 
     const codecs = verifyObjectProperty(obj, "codecs", (value) =>
-      parseCodecChainSpec(value, { dataType, chunkShape }, float64),
+      parseCodecChainSpec(value, { dataType, chunkShape, fillValue }, float64),
     );
     if (chunkGrid !== undefined && codecs.shardingInfo !== undefined) {
       throw new Error(

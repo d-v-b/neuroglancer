@@ -60,6 +60,7 @@ Supported codecs:
 - blosc
 - bytes
 - gzip
+- refkv.precomputed
 - sharding_indexed
 - transpose
 - zstd

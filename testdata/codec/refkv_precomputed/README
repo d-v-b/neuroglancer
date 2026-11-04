@@ -1,0 +1,5 @@
+Inputs of tests/codec/refkv_precomputed.browser_test.ts: refkv's synthetic
+Neuroglancer precomputed volumes (https://github.com/d-v-b/refkv, fixtures/,
+MIT OR Apache-2.0), zarrified by refkv and written out as plain Zarr v3 stores,
+with the values refkv's Python codec reads from each array, by generate.py, from
+d-v-b/refkv#203 (b69ff005).
