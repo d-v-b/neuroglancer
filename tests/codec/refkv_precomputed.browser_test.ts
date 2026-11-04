@@ -21,11 +21,11 @@
 import { expect, test, vi } from "vitest";
 import type { ChunkManager } from "#src/chunk_manager/backend.js";
 import "#src/datasource/zarr/codec/resolvers.js";
-import "#src/datasource/zarr/codec/refkv_precomputed/decode.js";
 import {
   applySharding,
   decodeArray,
 } from "#src/datasource/zarr/codec/decode.js";
+import { checkLabelStream } from "#src/datasource/zarr/codec/refkv_precomputed/decode.js";
 import type { ArrayMetadata } from "#src/datasource/zarr/metadata/index.js";
 import { parseV3Metadata } from "#src/datasource/zarr/metadata/parse.js";
 import type {
@@ -201,7 +201,14 @@ async function expected(
 
 test("reads each array as refkv's Python codec does", async () => {
   for (const [volume, array, tolerance] of [
+    // a chunk clipped along x and z, and one stored in gzip
+    ["precomputed_compresso", "0", 0],
+    // in a shard, labels past 2^32
+    ["precomputed_crackle", "0", 0],
     ["precomputed_float32", "0", 0],
+    ["precomputed_jxl", "0", 0],
+    // a lossy image: jxl-oxide rounds other than as libjxl does, by at most 1
+    ["precomputed_jxl", "1", 1],
     ["precomputed_png", "0", 0],
     // a chunk past the grid along x and clipped ones; one is missing
     ["precomputed_raw_clipped", "0", 0],
@@ -506,6 +513,47 @@ test("refuses a PNG of several 16-bit channels", async () => {
   await expect(
     decode(metadata, (await get(`${volume}/0/c/0/0/0`))!),
   ).rejects.toThrow("a PNG of 2 channels of 16 bits is not supported");
+});
+
+test("refuses a compresso stream of another shape than its chunk's", async () => {
+  const volume = "precomputed_compresso";
+  const { metadata } = await arrayMetadata(volume);
+  const chunk = (await get(`${volume}/0/c/0/0/0`))!;
+  // the chunk after it along x, clipped to 2 voxels of 4
+  new DataView(chunk.buffer).setUint32(0, 1, true);
+  await expect(decode(metadata, chunk)).rejects.toThrow(
+    "a compresso stream holds 4 x 4 x 2 voxels of 4 bytes, not 2 x 4 x 2 of 4",
+  );
+});
+
+test("refuses a crackle stream of another voxel width", () => {
+  const header = new Uint8Array(29);
+  const view = new DataView(header.buffer);
+  view.setUint16(5, 3, true); // 2^3 bytes a voxel
+  [4, 4, 4].forEach((n, i) => view.setUint32(7 + i * 4, n, true));
+  expect(() => checkLabelStream(header, "crackle", [4, 4, 4], 4)).toThrow(
+    "a crackle stream holds 4 x 4 x 4 voxels of 8 bytes, not 4 x 4 x 4 of 4",
+  );
+});
+
+test("refuses a label stream with no header", () => {
+  expect(() =>
+    checkLabelStream(new Uint8Array(8), "compresso", [4, 4, 4], 4),
+  ).toThrow("a compresso stream of 8 bytes has no header");
+});
+
+test("refuses a JPEG XL of another shape than its chunk's", async () => {
+  const volume = "precomputed_jxl";
+  const { json } = await arrayMetadata(volume);
+  // as many voxels as the chunk's image of 16 x 16 x 2, in another shape
+  json.shape = [2, 8, 32];
+  json.chunk_grid.configuration.chunk_shape = [2, 8, 32];
+  json.codecs[0].configuration.size = [32, 8, 2];
+  json.codecs[0].configuration.chunk_size = [32, 8, 2];
+  const metadata = parseV3Metadata(json, "array") as ArrayMetadata;
+  await expect(
+    decode(metadata, (await get(`${volume}/0/c/0/0/0`))!),
+  ).rejects.toThrow("a JPEG XL of 16 x 32 is not one of 32 x 16");
 });
 
 test("refuses a compressed_segmentation stream cut short", async () => {
