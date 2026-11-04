@@ -57,3 +57,48 @@ or the browser refuses the request. If ``Content-Range`` is not exposed, a
 ``206`` response is accepted when its body has exactly the requested
 length. Other schemes (``gs:``, ``s3:``, ...) are read
 through Neuroglancer's own key-value stores, without pins.
+
+Objects stored with a ``Content-Encoding``
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+An object uploaded with a ``Content-Encoding`` cannot be read through a
+reference, and a read of one fails rather than give other bytes. A reference is
+to the object's stored bytes, and a browser will not give those to a script:
+
+- Chromium fails a ``Range`` request answered with such a response
+  (``ERR_CONTENT_DECODING_FAILED``), which reaches a script as ``Failed to
+  fetch``, so the error message names this as a possible cause;
+- Firefox and WebKit decode the response, whose length then differs from the
+  range asked for, which is refused; for a range of part of the object what
+  they decode is a truncated stream.
+
+`refkv's reader rule <https://github.com/d-v-b/refkv/blob/main/spec/refkv.md#52-reading-over-http>`__
+lets other readers accept such a range when its total equals a ``size`` pin,
+and says that a reader using ``fetch`` does not. It also forbids the one
+request a browser could read such an object with, a request for the whole
+object without ``Range``. Neuroglancer's own ``precomputed://`` data source
+makes that request, so a Neuroglancer precomputed volume stored this way (such
+as Harris15) can be viewed there, and through this adapter only once its
+objects are stored without the coding. An object stored coded but served
+without the header is read as bytes, and the ``refkv.precomputed`` codec
+takes off its gzip or Zstandard coding.
+
+Merged reads
+------------
+
+Reads of one ``url`` source that wait at the same time are merged into one
+request, whichever values they belong to, following `refkv's rules
+<https://github.com/d-v-b/refkv/blob/main/spec/refkv.md#63-resolving-a-reference>`__:
+a read waits 2 ms, and a request covers gaps of at most 64 KiB and at most 4
+times the bytes its reads ask for plus 64 KiB. Reads of two entries of the
+source table are not merged. Pins are checked on the shared response. If a
+shared request fails, each of its reads is made on its own, so that only the
+reads that fail by themselves fail.
+
+A read also waits, for up to 1 s, for any request in flight within 64 KiB of
+it, and a read inside a request in flight joins it. Reads far from any request
+do not wait.
+
+Cancelling a read rejects it at once. Its request is aborted when no read
+still needs it, or when the reads left no longer justify its length by the
+limit above; those reads then wait to be merged again.

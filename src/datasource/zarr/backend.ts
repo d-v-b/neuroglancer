@@ -36,6 +36,7 @@ import "#src/datasource/zarr/codec/n5_default/decode.js";
 import "#src/datasource/zarr/codec/numcodecs_shuffle/decode.js";
 import "#src/datasource/zarr/codec/refkv_fits_tiles/decode.js";
 import "#src/datasource/zarr/codec/refkv_grib/decode.js";
+import "#src/datasource/zarr/codec/refkv_precomputed/decode.js";
 import "#src/datasource/zarr/codec/refkv_skip/decode.js";
 import "#src/datasource/zarr/codec/refkv_stream/decode.js";
 import "#src/datasource/zarr/codec/sharding_indexed/decode.js";
@@ -175,6 +176,7 @@ export class ZarrVolumeChunkSource extends WithParameters(
       codecs = parseCodecChainSpec(metadata.chunkGrid!.codecs, {
         dataType: metadata.dataType,
         chunkShape,
+        fillValue: metadata.fillValue,
       });
       this.codecsByChunkShape.set(key, codecs);
     }

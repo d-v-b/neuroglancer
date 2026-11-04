@@ -19,9 +19,13 @@
 import "#src/kvstore/http/register_frontend.js";
 import "#src/kvstore/refkv/register_frontend.js";
 import { createHash } from "node:crypto";
+import * as fs from "node:fs";
+import type * as http from "node:http";
+import * as path from "node:path";
 import { expect, test } from "vitest";
 import "#src/datasource/zarr/codec/resolvers.js";
 import "#src/datasource/zarr/codec/refkv_grib/decode.js";
+import "#src/datasource/zarr/codec/refkv_precomputed/decode.js";
 import { decodeArray } from "#src/datasource/zarr/codec/decode.js";
 import type { ArrayMetadata } from "#src/datasource/zarr/metadata/index.js";
 import { parseV3Metadata } from "#src/datasource/zarr/metadata/parse.js";
@@ -33,7 +37,32 @@ import { httpServerFixture } from "#tests/fixtures/http_server.js";
 import { TEST_DATA_DIR } from "#tests/kvstore/test_data.js";
 import { sharedKvStoreContext } from "#tests/kvstore/test_util.js";
 
-const serverFixture = httpServerFixture(constantFixture(TEST_DATA_DIR));
+// S3's ListObjectsV2 of the bucket `/refkv/`, which is how refkv lists a store
+function listObjects(req: http.IncomingMessage, res: http.ServerResponse) {
+  const { pathname, searchParams } = new URL(req.url!, "http://localhost");
+  if (pathname !== "/refkv/" || searchParams.get("list-type") !== "2") {
+    res.emit("next");
+    return;
+  }
+  const prefix = searchParams.get("prefix")!;
+  const bucket = path.join(TEST_DATA_DIR, "refkv");
+  const contents = fs
+    .readdirSync(path.join(bucket, prefix), { recursive: true })
+    .map((name) => `${prefix}${String(name).replaceAll(path.sep, "/")}`)
+    .filter((key) => fs.statSync(path.join(bucket, key)).isFile())
+    .map(
+      (key) =>
+        `<Contents><Key>${key}</Key><Size>${fs.statSync(path.join(bucket, key)).size}</Size></Contents>`,
+    );
+  res.writeHead(200, { "Content-Type": "application/xml" });
+  res.end(
+    `<ListBucketResult><IsTruncated>false</IsTruncated>${contents.join("")}</ListBucketResult>`,
+  );
+}
+
+const serverFixture = httpServerFixture(constantFixture(TEST_DATA_DIR), [
+  listObjects,
+]);
 
 async function url(file: string, key = "") {
   return (await serverFixture.serverUrl()) + `refkv/${file}|refkv:${key}`;
@@ -91,6 +120,55 @@ test("zarrifies a file and reads its chunks from the file", async () => {
       );
     }
   }
+});
+
+test("zarrifies a precomputed store and reads its chunks from its objects", async () => {
+  for (const [store, chunk, position, object] of [
+    ["precomputed_float32/", "0/c/0/0/0", [0, 0, 0], "0/0-2_0-2_0-2"],
+    ["precomputed_float32/", "0/c/0/0/1", [1, 0, 0], "0/2-4_0-2_0-2"],
+    // a whole shard, the box of chunks it holds
+    ["precomputed_sharded_raw/", "1/c/0/0/0", [0, 0, 0], "b/0.shard"],
+  ] as const) {
+    const root = JSON.parse(
+      new TextDecoder().decode(await read(store, "zarr.json")),
+    );
+    expect(root.attributes.refkv_zarrified.profile, store).toBe("precomputed");
+    // the chunk's position on the grid, a literal, and then the object
+    const value = await read(store, chunk);
+    expect(
+      Array.from(new Uint32Array(value.slice(0, 12).buffer)),
+      chunk,
+    ).toEqual(position);
+    expect(value.slice(12), chunk).toEqual(
+      new Uint8Array(
+        fs.readFileSync(path.join(TEST_DATA_DIR, "refkv", store, object)),
+      ),
+    );
+  }
+});
+
+test("decodes a refkv.precomputed chunk of a zarrified store", async () => {
+  const store = "precomputed_float32/";
+  const json = JSON.parse(
+    new TextDecoder().decode(await read(store, "0/zarr.json")),
+  );
+  expect(json.codecs[0].name).toBe("refkv.precomputed");
+  const meta = parseV3Metadata(json, "array") as ArrayMetadata;
+  const values = await decodeArray(
+    meta.codecs,
+    await read(store, "0/c/0/0/0"),
+    new AbortController().signal,
+  );
+  // raw and little-endian, x fastest in the object as in the array's [z, y, x]
+  const object = fs.readFileSync(
+    path.join(TEST_DATA_DIR, "refkv", store, "0/0-2_0-2_0-2"),
+  );
+  expect(values).toBeInstanceOf(Float32Array);
+  expect(Array.from(values as Float32Array)).toEqual(
+    Array.from(
+      new Float32Array(object.buffer, object.byteOffset, object.byteLength / 4),
+    ),
+  );
 });
 
 test("rejects a file of no supported format", async () => {

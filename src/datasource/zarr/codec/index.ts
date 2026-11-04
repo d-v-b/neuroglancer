@@ -48,6 +48,9 @@ export interface CodecArrayInfo {
   dataType: DataType;
   // Specifies the chunk shape, indexed by logical dimension.
   chunkShape: number[];
+
+  // The array's fill value, for a codec whose chunks do not cover their shape.
+  fillValue?: number | bigint;
 }
 
 export interface CodecArrayLayoutInfo {
