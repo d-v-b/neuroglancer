@@ -82,3 +82,23 @@ as Harris15) can be viewed there, and through this adapter only once its
 objects are stored without the coding. An object stored coded but served
 without the header is read as bytes, and the ``refkv.precomputed`` codec
 takes off its gzip or Zstandard coding.
+
+Merged reads
+------------
+
+Reads of one ``url`` source that wait at the same time are merged into one
+request, whichever values they belong to, following `refkv's rules
+<https://github.com/d-v-b/refkv/blob/main/spec/refkv.md#63-resolving-a-reference>`__:
+a read waits 2 ms, and a request covers gaps of at most 64 KiB and at most 4
+times the bytes its reads ask for plus 64 KiB. Reads of two entries of the
+source table are not merged. Pins are checked on the shared response. If a
+shared request fails, each of its reads is made on its own, so that only the
+reads that fail by themselves fail.
+
+A read also waits, for up to 1 s, for any request in flight within 64 KiB of
+it, and a read inside a request in flight joins it. Reads far from any request
+do not wait.
+
+Cancelling a read rejects it at once. Its request is aborted when no read
+still needs it, or when the reads left no longer justify its length by the
+limit above; those reads then wait to be merged again.

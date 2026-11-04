@@ -38,6 +38,7 @@ import type {
 import { readFileHandle } from "#src/kvstore/index.js";
 import { encodePathForUrl } from "#src/kvstore/url.js";
 import { HttpResolutionError, readHttpRange } from "#src/kvstore/vzip/http.js";
+import { MERGE_GAP, SharedReads } from "#src/kvstore/vzip/merge.js";
 import type { VzipEntry, VzipMetadata } from "#src/kvstore/vzip/metadata.js";
 import {
   INDEX_KEY,
@@ -60,13 +61,6 @@ import { defaultStringCompare } from "#src/util/string.js";
 
 /** Largest value this reader assembles in memory (spec §10). */
 const MAX_REQUEST_BYTES = 1 << 30;
-
-/**
- * Reads of the same url source at most this far apart are combined into one
- * request (spec §6.2 allows it). A Concat of many short ranges, such as one
- * per image row, would otherwise cost one request per range.
- */
-export const MERGE_GAP = 1 << 16;
 
 function makeReader(base: FileHandle) {
   return async (
@@ -141,6 +135,7 @@ const pageCache = new WeakMap<
   Map<number, Promise<Map<string, VzipEntry>>>
 >();
 const referenceCache = new WeakMap<VzipEntry, VzipReference>();
+const sharedReadsCache = new WeakMap<VzipMetadata, SharedReads>();
 
 export class VzipKvStore implements KvStore {
   constructor(
@@ -313,17 +308,29 @@ export class VzipKvStore implements KvStore {
     return body.subarray(start, end);
   }
 
-  /** Bytes `[start, end)` of the source value of `range` (spec §6, §8.3). */
+  /** The merged reads of the archive's url sources, across its stores. */
+  private getSharedReads(metadata: VzipMetadata) {
+    let sharedReads = sharedReadsCache.get(metadata);
+    if (sharedReads === undefined) {
+      sharedReads = new SharedReads((source, start, end, options) =>
+        this.readSource(metadata, source, start, end, options),
+      );
+      sharedReadsCache.set(metadata, sharedReads);
+    }
+    return sharedReads;
+  }
+
+  /** Bytes `[start, end)` of a source's value (spec §6, §8.3). */
   private async readSource(
     metadata: VzipMetadata,
-    range: VzipRange,
+    sourceIndex: number,
     start: number,
     end: number,
     options: Partial<ProgressOptions>,
   ): Promise<Uint8Array> {
-    const source = metadata.sources[range.source];
+    const source = metadata.sources[sourceIndex];
     const resolution = (message: string): never => {
-      throw new VzipError("resolution", `source ${range.source}: ${message}`);
+      throw new VzipError("resolution", `source ${sourceIndex}: ${message}`);
     };
     if (source.kind === "data") {
       if (end > source.data.length) {
@@ -461,14 +468,21 @@ export class VzipKvStore implements KvStore {
           pieces.push(
             metadata.sources[range.source].kind === "url"
               ? read
-              : this.readSource(metadata, range, read.start, read.end, options),
+              : this.readSource(
+                  metadata,
+                  range.source,
+                  read.start,
+                  read.end,
+                  options,
+                ),
           );
         }
       }
       pos += size;
     }
     // Combine nearby reads of each url source into runs, fetch each run once,
-    // and slice the reads back out of it.
+    // with the reads of other values waiting at the same time, and slice the
+    // reads back out of it.
     const reads = pieces.filter((p): p is Read => !(p instanceof Promise));
     const sorted = [...reads].sort(
       (x, y) => x.range.source - y.range.source || x.start - y.start,
@@ -489,10 +503,10 @@ export class VzipKvStore implements KvStore {
       }
       runOf.set(read, runs[runs.length - 1]);
     }
+    const sharedReads = this.getSharedReads(metadata);
     for (const run of runs) {
-      run.data = this.readSource(
-        metadata,
-        run.read.range,
+      run.data = sharedReads.read(
+        run.read.range.source,
         run.read.start,
         run.end,
         options,
