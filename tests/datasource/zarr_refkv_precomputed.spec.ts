@@ -99,6 +99,19 @@ test("reads a chunk of the volume, a shard's box a sharded array's chunk", () =>
       [16, 128, 128],
       undefined,
     ],
+    [
+      { ...VOLUME, encoding: "compresso" },
+      { dataType: "uint32" },
+      [16, 128, 128],
+      undefined,
+    ],
+    [
+      { ...VOLUME, encoding: "crackle", sharding: SHARDING },
+      { dataType: "uint64", chunkShape: [256, 2048, 4096] },
+      [16, 128, 128],
+      [16, 16, 32],
+    ],
+    [{ ...VOLUME, encoding: "jxl" }, {}, [16, 128, 128], undefined],
   ] as const) {
     const { codecs } = parse(configuration as any, options as any);
     expect(codecs.layoutInfo[0].readChunkShape).toEqual(readChunkShape);
@@ -107,9 +120,11 @@ test("reads a chunk of the volume, a shard's box a sharded array's chunk", () =>
 });
 
 test("rejects an encoding with no decoder", () => {
-  expect(() => parse({ ...VOLUME, encoding: "jxl" })).toThrow(
-    'the encoding "jxl" has no decoder',
-  );
+  for (const encoding of ["fpzip", "zfpc", "kempressed"]) {
+    expect(() => parse({ ...VOLUME, encoding })).toThrow(
+      `the encoding "${encoding}" has no decoder`,
+    );
+  }
 });
 
 test("rejects an unknown configuration member", () => {
@@ -159,6 +174,36 @@ test("rejects png of another data type", () => {
   expect(() =>
     parse({ ...VOLUME, encoding: "png" }, { dataType: "float32" }),
   ).toThrow("png holds uint8 or uint16 in at most 4 channels, not float32");
+});
+
+test("rejects compresso of another data type", () => {
+  expect(() =>
+    parse({ ...VOLUME, encoding: "compresso" }, { dataType: "int32" }),
+  ).toThrow("compresso holds uint8 to uint64 in 1 channel, not int32 in 1");
+});
+
+test("rejects crackle of another number of channels", () => {
+  expect(() =>
+    parse(
+      { ...VOLUME, encoding: "crackle" },
+      { shape: [2, 100, 100, 100], chunkShape: [2, 16, 128, 128] },
+    ),
+  ).toThrow("crackle holds uint8 to uint64 in 1 channel, not uint8 in 2");
+});
+
+test("rejects jxl of another data type", () => {
+  expect(() =>
+    parse({ ...VOLUME, encoding: "jxl" }, { dataType: "uint16" }),
+  ).toThrow("jxl holds uint8 in 1 channel, not uint16 in 1");
+});
+
+test("rejects jxl of another number of channels", () => {
+  expect(() =>
+    parse(
+      { ...VOLUME, encoding: "jxl" },
+      { shape: [3, 100, 100, 100], chunkShape: [3, 16, 128, 128] },
+    ),
+  ).toThrow("jxl holds uint8 in 1 channel, not uint8 in 3");
 });
 
 test("rejects compressed_segmentation of another data type", () => {
