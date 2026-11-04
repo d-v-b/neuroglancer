@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2023 Google Inc.
+ * Copyright 2026 Google Inc.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -14,75 +14,87 @@
  * limitations under the License.
  */
 
-import { describe, expect, test } from "vitest";
-import { unpackBits } from "#src/datasource/zarr/codec/packbits/decode.js";
-import { parseCodecChainSpec } from "#src/datasource/zarr/codec/resolve.js";
-import "#src/datasource/zarr/codec/packbits/resolve.js";
-import { DataType } from "#src/util/data_type.js";
+import { expect, test } from "vitest";
+import { decodePackBits } from "#src/datasource/zarr/codec/packbits/decode.js";
 
-describe("packbits", () => {
-  test("reads each element's bits, least significant first", () => {
-    // refkv's pack(), which zarr-extensions' order defines
-    expect(Array.from(unpackBits(Uint8Array.of(0x21, 0x0f), 3, 4, 0))).toEqual([
-      1, 2, 15,
-    ]);
-    expect(Array.from(unpackBits(Uint8Array.of(0b101), 3, 1, 0))).toEqual([
-      1, 0, 1,
-    ]);
-    // bits that cross a byte
-    expect(
-      Array.from(unpackBits(Uint8Array.of(0x3f, 0x10, 0xa8), 4, 6, 0)),
-    ).toEqual([0x3f, 0, 1, 0x2a]);
-    // shifted to first_bit
-    expect(Array.from(unpackBits(Uint8Array.of(0x21), 2, 4, 2))).toEqual([
-      4, 8,
-    ]);
-  });
+function fromBase64(s: string): Uint8Array<ArrayBuffer> {
+  return Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+}
 
-  test("refuses a chunk shorter than its elements", () => {
-    expect(() => unpackBits(Uint8Array.of(1), 3, 4, 0)).toThrow(
-      "fewer than the 2 of 3 elements of 4 bits",
-    );
-  });
+// Written by imagecodecs 2026.8.16's `packbits_encode`, or given by hand, with what
+// its `packbits_decode` returns.
+const CASES = [
+  {
+    name: "empty",
+    encoded: "",
+    expected: "",
+  },
+  {
+    name: "runs and literals",
+    encoded: "/GEEYmNkZWb8Zw==",
+    expected: "YWFhYWFiY2RlZmdnZ2dn",
+  },
+  {
+    name: "one byte",
+    encoded: "AHg=",
+    expected: "eA==",
+  },
+  {
+    name: "long run",
+    encoded: "gXqBeoF6jXo=",
+    expected:
+      "enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6eno=",
+  },
+  {
+    name: "long literal",
+    encoded:
+      "f7Wn90aDsswNfqUL7suYAvs4jpNHlw7QCgHa5vJJxjcMvWi3MztVnJGBMcOQXIaPvsOLW2H/u1kuHRXgzjpC7VFwW6cgIsnYYST9ivNbMvTp/22Uuv2KaJpYhPAsTKhq8PKoWLHm/971sOfDF0gikRpVVXCOZCsGszwOPRpWSGR+f/J6LwtDyqSec12HZMQPM/pA6+iwjJehfGQxG7rfjsS1o6dFq/bskM+KIXCXgtOMIR4uBuE+ZiPZk+6jiRUbacR+4woZxQm58Yz2KyTgoxoE6fxX9gGQjW+XiVDMrUSMNn6dugEDgGTAkLQg8li1kQVKxsmnBBpfI7mfIumMU77nK8vJDyewzJvWj5uwluhHQzJHyPaAEzA+W9W+fiyzzqviB/UWEA6Ysw7v1h+q",
+    expected:
+      "taf3RoOyzA1+pQvuy5gC+ziOk0eXDtAKAdrm8knGNwy9aLczO1WckYExw5Bcho++w4tbYf+7WS4dFeDOOkLtUXBbpyAiydhhJP2K81sy9On/bZS6/YpomliE8CxMqGrw8qhYseb/3vWw58MXSCKRGlVVcI5kKwazPA49GlZIZH7yei8LQ8qknnNdh2TEDzP6QOvosIyXoXxkMRu6347EtaOnRav27JDPiiFwl4LTjCEeLgbhPmYj2ZPuo4kVG2nEfuMKGcUJufGM9isk4KMaBOn8V/YBkI1vl4lQzK1EjDZ+nboBA4BkwJC0IPJYtZEFSsbJpwQaXyO5nyLpjFO+58vJDyewzJvWj5uwluhHQzJHyPaAEzA+W9W+fiyzzqviB/UWEA6Ysw7v1h+q",
+  },
+  {
+    name: "mixed",
+    encoded:
+      "AAH+AAYBAgAAAgAB/QIAAP8C/gEFAAIBAgIB/gD/Af8ABQEAAAEAAf4CAQAB/gIEAQICAQD9Av8B/wADAgEBAv8BAgIAAv4BAAD/Af8A/gH/AgQBAgAAAv0BBAIAAgIA/wIDAQAAAf8CCgACAQIBAAECAgAB/wL/AQgAAQIAAgAAAgH/AP4CAAD+Av8BCAACAAEBAgEAAv8ACgECAAIAAgACAQEC/wEIAAEAAQIAAgIB/wANAgEAAgACAAEBAAECAAL/AP8CFAABAAIBAAEAAQIBAAEAAQACAAEBAv8A/gIBAAL9AP4B/gL/AP8C/wAFAQIAAgIA/QEBAAH9Av4ACwIBAAIBAgEBAgACAP8C/gEFAgECAQEC/gAAAf8A/gL/AQECAf4ABQEAAAECAP8CAAH/Av4A/wEAAv8A/gL/AP8B/gAFAQIAAQAB/wD+AgQAAgIBAvwB/QAAAf4CCAABAgEBAgECAP8C/wAGAgAAAQIBAv8A/gL/AAkBAAEAAgEAAQEA/wIBAQL/AP4CAAA=",
+    expected:
+      "AQAAAAECAAACAAECAgICAAICAQEBAAIBAgIBAAAAAQEAAAEAAAEAAQICAgABAgICAQICAQACAgICAQEAAAIBAQIBAQIAAgEBAQABAQAAAQEBAgIBAgAAAgEBAQECAAICAAICAQAAAQICAAIBAgEAAQICAAECAgEBAAECAAIAAAIBAAACAgIAAgICAQEAAgABAQIBAAIAAAECAAIAAgACAQECAQEAAQABAgACAgEAAAIBAAIAAgABAQABAgACAAACAgABAAIBAAEAAQIBAAEAAQACAAEBAgAAAgICAAIAAAAAAQEBAgICAAACAgAAAQIAAgIAAQEBAQABAgICAgAAAAIBAAIBAgEBAgACAAICAQEBAgECAQECAAAAAQAAAgICAQECAQAAAAEAAAECAAICAQICAAAAAQECAAACAgIAAAEBAAAAAQIAAQABAAACAgIAAgIBAgEBAQEBAAAAAAECAgIAAQIBAQIBAgACAgAAAgAAAQIBAgAAAgICAAABAAEAAgEAAQEAAgIBAgAAAgICAA==",
+  },
+  {
+    name: "the TIFF 6.0 example, with no-ops",
+    encoded: "/qoCgAAq/aoDgAAqIveq",
+    expected: "qqqqgAAqqqqqqoAAKiKqqqqqqqqqqqqq",
+  },
+  {
+    name: "the code -128 is a no-op",
+    encoded: "gP5BgA==",
+    expected: "QUFB",
+  },
+  {
+    name: "a final lone 0 is ignored",
+    encoded: "/kEA",
+    expected: "QUFB",
+  },
+];
 
-  function resolve(configuration: object, elementBits?: number) {
-    return parseCodecChainSpec([{ name: "packbits", configuration }], {
-      dataType: DataType.UINT8,
-      chunkShape: [3],
-      elementBits,
-    });
+test("decodes as imagecodecs does, with or without a size hint", () => {
+  for (const { encoded, expected } of CASES) {
+    const bytes = fromBase64(expected);
+    const stream = fromBase64(encoded);
+    expect(decodePackBits(stream)).toEqual(bytes);
+    expect(decodePackBits(stream, bytes.length)).toEqual(bytes);
+    // A hint that is too small only makes the output grow.
+    expect(decodePackBits(stream, 1)).toEqual(bytes);
   }
+});
 
-  test("takes a bool's one bit and a uint8's eight as the defaults", () => {
-    expect(resolve({}, 1)[1].configuration).toEqual({
-      paddingEncoding: 0,
-      firstBit: 0,
-      numBits: 1,
-    });
-    expect(resolve({ last_bit: 3 })[1].configuration).toEqual({
-      paddingEncoding: 0,
-      firstBit: 0,
-      numBits: 4,
-    });
-    expect(resolve({ last_bit: 3 }).encodedSize[0]).toBe(2);
-  });
+test("rejects a literal that overruns the stream", () => {
+  expect(() => decodePackBits(Uint8Array.of(0x01, 0x41))).toThrow(
+    /a literal of 2 bytes at offset 0 overruns the stream of 2 bytes/,
+  );
+});
 
-  test("refuses a bit range outside the data type", () => {
-    expect(() => resolve({ last_bit: 3 }, 1)).toThrow("not a range");
-  });
-
-  test("refuses an unknown padding encoding", () => {
-    expect(() => resolve({ padding_encoding: "other" })).toThrow(
-      "Invalid padding_encoding",
-    );
-  });
-
-  test("refuses another data type", () => {
-    expect(() =>
-      parseCodecChainSpec([{ name: "packbits" }], {
-        dataType: DataType.UINT16,
-        chunkShape: [3],
-      }),
-    ).toThrow("packbits supports uint8 and bool, not uint16");
-  });
+test("rejects a run with no byte to repeat", () => {
+  expect(() => decodePackBits(Uint8Array.of(0xfe))).toThrow(
+    /a run at offset 0 has no byte to repeat/,
+  );
 });

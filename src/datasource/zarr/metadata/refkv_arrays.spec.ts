@@ -17,7 +17,7 @@
 import { describe, expect, test } from "vitest";
 import "#src/datasource/zarr/codec/dicomrle/decode.js";
 import "#src/datasource/zarr/codec/jpegls/decode.js";
-import "#src/datasource/zarr/codec/packbits/decode.js";
+import "#src/datasource/zarr/codec/zarr_packbits/decode.js";
 import "#src/datasource/zarr/codec/resolvers.js";
 import { decodeArray } from "#src/datasource/zarr/codec/decode.js";
 import type { ArrayMetadata } from "#src/datasource/zarr/metadata/index.js";

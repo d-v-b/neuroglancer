@@ -354,6 +354,7 @@ export function parseV3Metadata(
       chunkShape,
       chunkGrid,
       dataType,
+      float64,
       fillValue,
       dimensionNames,
       dimensionUnits,

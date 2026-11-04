@@ -22,9 +22,12 @@
 
 import "#src/datasource/zarr/codec/blosc/resolve.js";
 import "#src/datasource/zarr/codec/bytes/resolve.js";
+import "#src/datasource/zarr/codec/ccittfax4/resolve.js";
 import "#src/datasource/zarr/codec/crc32c/resolve.js";
 import "#src/datasource/zarr/codec/delta/resolve.js";
 import "#src/datasource/zarr/codec/dicomrle/resolve.js";
+import "#src/datasource/zarr/codec/eer/resolve.js";
+import "#src/datasource/zarr/codec/floatpred/resolve.js";
 import "#src/datasource/zarr/codec/gzip/resolve.js";
 import "#src/datasource/zarr/codec/jpeg/resolve.js";
 import "#src/datasource/zarr/codec/jpeg2k/resolve.js";
@@ -38,6 +41,7 @@ import "#src/datasource/zarr/codec/numcodecs_lz4/resolve.js";
 import "#src/datasource/zarr/codec/numcodecs_quantize/resolve.js";
 import "#src/datasource/zarr/codec/numcodecs_shuffle/resolve.js";
 import "#src/datasource/zarr/codec/packbits/resolve.js";
+import "#src/datasource/zarr/codec/packints/resolve.js";
 import "#src/datasource/zarr/codec/refkv_fits_tiles/resolve.js";
 import "#src/datasource/zarr/codec/refkv_grib/resolve.js";
 import "#src/datasource/zarr/codec/refkv_precomputed/resolve.js";
@@ -45,4 +49,5 @@ import "#src/datasource/zarr/codec/refkv_skip/resolve.js";
 import "#src/datasource/zarr/codec/refkv_stream/resolve.js";
 import "#src/datasource/zarr/codec/sharding_indexed/resolve.js";
 import "#src/datasource/zarr/codec/transpose/resolve.js";
+import "#src/datasource/zarr/codec/zarr_packbits/resolve.js";
 import "#src/datasource/zarr/codec/zstd/resolve.js";

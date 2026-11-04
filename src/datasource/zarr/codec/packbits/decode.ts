@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2023 Google Inc.
+ * Copyright 2026 Google Inc.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -15,57 +15,66 @@
  */
 
 import { registerCodec } from "#src/datasource/zarr/codec/decode.js";
-import type { CodecArrayInfo } from "#src/datasource/zarr/codec/index.js";
 import { CodecKind } from "#src/datasource/zarr/codec/index.js";
 import type { Configuration } from "#src/datasource/zarr/codec/packbits/resolve.js";
-import { PaddingEncoding } from "#src/datasource/zarr/codec/packbits/resolve.js";
 
 /**
- * The first `count` elements of `numBits` bits each of `encoded`, least
- * significant bit first, each shifted to `firstBit`.
+ * Decodes one PackBits stream. With `sizeHint`, the output is first allocated
+ * with that size; it grows as needed, and is returned whatever its size, which
+ * the next codec of the chain checks. Like imagecodecs, it ignores a final 0
+ * byte that has no literal after it, as well as the code -128 (the byte 128).
  */
-export function unpackBits(
+export function decodePackBits(
   encoded: Uint8Array,
-  count: number,
-  numBits: number,
-  firstBit: number,
+  sizeHint?: number,
 ): Uint8Array<ArrayBuffer> {
-  const needed = Math.ceil((count * numBits) / 8);
-  if (encoded.length < needed) {
-    throw new Error(
-      `packbits: a chunk of ${encoded.length} bytes, fewer than the ${needed} of ` +
-        `${count} elements of ${numBits} bits`,
-    );
+  let out = new Uint8Array(Math.max(16, sizeHint ?? encoded.length * 2));
+  let outLength = 0;
+  const ensure = (n: number) => {
+    if (outLength + n <= out.length) return;
+    let size = out.length * 2;
+    while (size < outLength + n) size *= 2;
+    const grown = new Uint8Array(size);
+    grown.set(out.subarray(0, outLength));
+    out = grown;
+  };
+  const end = encoded.length;
+  for (let i = 0; i < end; ) {
+    const code = encoded[i++];
+    if (code === 128) continue;
+    if (code < 128) {
+      const n = code + 1;
+      if (i + n > end) {
+        if (code === 0) break;
+        throw new Error(
+          `imagecodecs_packbits: a literal of ${n} bytes at offset ${i - 1} ` +
+            `overruns the stream of ${end} bytes`,
+        );
+      }
+      ensure(n);
+      out.set(encoded.subarray(i, i + n), outLength);
+      outLength += n;
+      i += n;
+    } else {
+      if (i === end) {
+        throw new Error(
+          `imagecodecs_packbits: a run at offset ${i - 1} has no byte to repeat`,
+        );
+      }
+      const n = 257 - code;
+      ensure(n);
+      out.fill(encoded[i++], outLength, outLength + n);
+      outLength += n;
+    }
   }
-  const mask = (1 << numBits) - 1;
-  const out = new Uint8Array(count);
-  let bit = 0;
-  for (let i = 0; i < count; ++i, bit += numBits) {
-    const byte = bit >>> 3;
-    const word = encoded[byte] | (encoded[byte + 1] << 8);
-    out[i] = ((word >>> (bit & 7)) & mask) << firstBit;
-  }
-  return out;
+  return outLength === out.length ? out : out.slice(0, outLength);
 }
 
 registerCodec({
-  name: "packbits",
-  kind: CodecKind.arrayToBytes,
-  async decode(
-    configuration: Configuration,
-    decodedArrayInfo: CodecArrayInfo,
-    encoded,
-    signal: AbortSignal,
-  ) {
+  name: "imagecodecs_packbits",
+  kind: CodecKind.bytesToBytes,
+  async decode(configuration: Configuration, encoded, signal: AbortSignal) {
     signal.throwIfAborted();
-    const { paddingEncoding, numBits, firstBit } = configuration;
-    let data: Uint8Array = encoded;
-    if (paddingEncoding === PaddingEncoding.FIRST_BYTE) {
-      data = data.subarray(1);
-    } else if (paddingEncoding === PaddingEncoding.LAST_BYTE) {
-      data = data.subarray(0, data.length - 1);
-    }
-    const count = decodedArrayInfo.chunkShape.reduce((a, b) => a * b, 1);
-    return unpackBits(data, count, numBits, firstBit);
+    return decodePackBits(encoded, configuration.decodedSize);
   },
 });
