@@ -34,6 +34,7 @@ import "#src/datasource/zarr/codec/jpegxr/resolve.js";
 import "#src/datasource/zarr/codec/ljpeg/resolve.js";
 import "#src/datasource/zarr/codec/lzw/resolve.js";
 import "#src/datasource/zarr/codec/n5_default/resolve.js";
+import "#src/datasource/zarr/codec/numcodecs_bz2/resolve.js";
 import "#src/datasource/zarr/codec/numcodecs_fixedscaleoffset/resolve.js";
 import "#src/datasource/zarr/codec/numcodecs_lz4/resolve.js";
 import "#src/datasource/zarr/codec/numcodecs_quantize/resolve.js";
