@@ -48,13 +48,25 @@ import {
 
 const NAME = "refkv.precomputed";
 
-export type Encoding = "raw" | "jpeg" | "png" | "compressed_segmentation";
+export type Encoding =
+  | "raw"
+  | "jpeg"
+  | "png"
+  | "compressed_segmentation"
+  | "compresso"
+  | "crackle"
+  | "jxl";
 
+// refkv's layout also presents fpzip, zfpc and kempressed, which have no decoder
+// here.
 const ENCODINGS: readonly string[] = [
   "raw",
   "jpeg",
   "png",
   "compressed_segmentation",
+  "compresso",
+  "crackle",
+  "jxl",
 ];
 
 const MEMBERS = new Set([
@@ -166,6 +178,24 @@ function checkEncoding(
     if (blockSize === undefined) {
       throw new Error(
         `${NAME}: compressed_segmentation needs compressed_segmentation_block_size`,
+      );
+    }
+  } else if (encoding === "compresso" || encoding === "crackle") {
+    if (
+      (dataType !== DataType.UINT8 &&
+        dataType !== DataType.UINT16 &&
+        dataType !== DataType.UINT32 &&
+        dataType !== DataType.UINT64) ||
+      channels !== 1
+    ) {
+      throw new Error(
+        `${NAME}: ${encoding} holds uint8 to uint64 in 1 channel, not ${type} in ${channels}`,
+      );
+    }
+  } else if (encoding === "jxl") {
+    if (dataType !== DataType.UINT8 || channels !== 1) {
+      throw new Error(
+        `${NAME}: jxl holds uint8 in 1 channel, not ${type} in ${channels}`,
       );
     }
   }
