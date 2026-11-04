@@ -240,11 +240,16 @@ export function parseV3Metadata(
       "data_type",
       (x) => x === "float64",
     );
+    // A bool array is shown as uint8, its values 0 and 1 (Neuroglancer has no
+    // boolean data type).
+    const bool = verifyObjectProperty(obj, "data_type", (x) => x === "bool");
     const dataType = float64
       ? DataType.FLOAT32
-      : verifyObjectProperty(obj, "data_type", (x) =>
-          verifyEnumString(x, DataType, /^[a-z0-9]+$/),
-        );
+      : bool
+        ? DataType.UINT8
+        : verifyObjectProperty(obj, "data_type", (x) =>
+            verifyEnumString(x, DataType, /^[a-z0-9]+$/),
+          );
 
     const { chunkShape, chunkGrid } = verifyObjectProperty(
       obj,
@@ -318,11 +323,22 @@ export function parseV3Metadata(
     const fillValue = verifyObjectProperty(obj, "fill_value", (value) =>
       float64
         ? Math.fround(parseFloat64FillValue(value))
-        : parseFillValue(dataType, value),
+        : bool
+          ? Number(value)
+          : parseFillValue(dataType, value),
     );
 
     const codecs = verifyObjectProperty(obj, "codecs", (value) =>
-      parseCodecChainSpec(value, { dataType, chunkShape, fillValue }, float64),
+      parseCodecChainSpec(
+        value,
+        {
+          dataType,
+          chunkShape,
+          fillValue,
+          ...(bool ? { elementBits: 1 } : {}),
+        },
+        float64,
+      ),
     );
     if (chunkGrid !== undefined && codecs.shardingInfo !== undefined) {
       throw new Error(

@@ -130,7 +130,9 @@ function fakeSource() {
 
 /** Bytes whose values say where in the source they came from. */
 function bytes(start: number, end: number) {
-  return Uint8Array.from({ length: end - start }, (_, i) => (start + i) % 251);
+  const out = new Uint8Array(end - start);
+  for (let i = 0; i < out.length; ++i) out[i] = (start + i) % 251;
+  return out;
 }
 
 function aborted() {

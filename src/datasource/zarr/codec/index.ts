@@ -51,6 +51,10 @@ export interface CodecArrayInfo {
 
   // The array's fill value, for a codec whose chunks do not cover their shape.
   fillValue?: number | bigint;
+
+  // The bits of an element in memory, where the data type has fewer than its
+  // bytes hold: 1 for a `bool` array, which is shown as `uint8`.
+  elementBits?: number;
 }
 
 export interface CodecArrayLayoutInfo {
