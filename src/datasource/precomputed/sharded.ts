@@ -66,7 +66,7 @@ type MinishardIndexCache = SimpleAsyncCache<
   DecodedMinishardIndex | undefined
 >;
 
-function decodeFileHandle(handle: FileHandle, encoding: DataEncoding) {
+export function decodeFileHandle(handle: FileHandle, encoding: DataEncoding) {
   if (encoding === DataEncoding.GZIP) {
     handle = new GzipFileHandle(handle, "gzip");
   }
@@ -95,75 +95,14 @@ function makeMinishardIndexCache(
         ".shard";
 
       const shardFileHandle = new KvStoreFileHandle(base.store, shardPath);
-
-      // Retrive minishard index start/end offsets.
-      const shardIndexSize = BigInt(16) << BigInt(sharding.minishardBits);
-
-      // Multiply minishard by 16.
-      const shardIndexStart = minishard << 4n;
-      const response = await readFileHandle(shardFileHandle, {
-        ...progressOptions,
-        byteRange: { offset: Number(shardIndexStart), length: 16 },
-        strictByteRange: true,
-      });
-      if (response === undefined) {
-        return { data: undefined, size: 0 };
-      }
-      const shardIndexResponse = await response.response.arrayBuffer();
-      const shardIndexDv = new DataView(shardIndexResponse);
-      let minishardStartOffset = shardIndexDv.getBigUint64(
-        0,
-        /*littleEndian=*/ true,
+      const minishardIndex = await readMinishardIndex(
+        shardFileHandle,
+        minishard,
+        sharding,
+        progressOptions,
       );
-      let minishardEndOffset = shardIndexDv.getBigUint64(
-        8,
-        /*littleEndian=*/ true,
-      );
-      if (minishardStartOffset === minishardEndOffset) {
+      if (minishardIndex === undefined) {
         return { data: undefined, size: 0 };
-      }
-      // The start/end offsets in the shard index are relative to the end of the shard
-      // index.
-      minishardStartOffset += shardIndexSize;
-      minishardEndOffset += shardIndexSize;
-
-      const minishardIndexBuffer = await (
-        await readFileHandle(
-          decodeFileHandle(
-            new FileByteRangeHandle(shardFileHandle, {
-              offset: Number(minishardStartOffset),
-              length: Number(minishardEndOffset - minishardStartOffset),
-            }),
-            sharding.minishardIndexEncoding,
-          ),
-          {
-            ...progressOptions,
-            strictByteRange: true,
-            throwIfMissing: true,
-          },
-        )
-      ).response.arrayBuffer();
-      if (minishardIndexBuffer.byteLength % 24 !== 0) {
-        throw new Error(
-          `Invalid minishard index length: ${minishardIndexBuffer.byteLength}`,
-        );
-      }
-      const minishardIndex = new BigUint64Array(minishardIndexBuffer);
-      convertEndian64(minishardIndex, Endianness.LITTLE);
-
-      const minishardIndexSize = minishardIndex.byteLength / 24;
-      let prevEntryKey = 0n;
-      // Offsets in the minishard index are relative to the end of the shard index.
-      let prevStart = shardIndexSize;
-      for (let i = 0; i < minishardIndexSize; ++i) {
-        const entryKey = prevEntryKey + minishardIndex[i];
-        prevEntryKey = minishardIndex[i] = entryKey;
-        const start = prevStart + minishardIndex[minishardIndexSize + i];
-        minishardIndex[minishardIndexSize + i] = start;
-        const size = minishardIndex[2 * minishardIndexSize + i];
-        const end = start + size;
-        prevStart = end;
-        minishardIndex[2 * minishardIndexSize + i] = end;
       }
       return {
         data: { data: minishardIndex, shardPath },
@@ -173,11 +112,108 @@ function makeMinishardIndexCache(
   });
 }
 
-function findMinishardEntry(
-  minishardIndex: DecodedMinishardIndex,
+/**
+ * Reads the index of one minishard from `shardFileHandle`, after its 16 bytes
+ * of the shard index, and undoes its delta coding: the keys, then the
+ * chunks' start offsets, then their end offsets, each relative to the shard's
+ * start. Returns undefined if the shard is missing or the minishard is empty.
+ */
+export async function readMinishardIndex(
+  shardFileHandle: FileHandle,
+  minishard: bigint,
+  sharding: Pick<
+    ShardingParameters,
+    "minishardBits" | "minishardIndexEncoding"
+  >,
+  progressOptions: Partial<ProgressOptions>,
+): Promise<BigUint64Array<ArrayBuffer> | undefined> {
+  // Retrive minishard index start/end offsets.
+  const shardIndexSize = BigInt(16) << BigInt(sharding.minishardBits);
+
+  // Multiply minishard by 16.
+  const shardIndexStart = minishard << 4n;
+  const response = await readFileHandle(shardFileHandle, {
+    ...progressOptions,
+    byteRange: { offset: Number(shardIndexStart), length: 16 },
+    strictByteRange: true,
+  });
+  if (response === undefined) {
+    return undefined;
+  }
+  const shardIndexResponse = await response.response.arrayBuffer();
+  const shardIndexDv = new DataView(shardIndexResponse);
+  let minishardStartOffset = shardIndexDv.getBigUint64(
+    0,
+    /*littleEndian=*/ true,
+  );
+  let minishardEndOffset = shardIndexDv.getBigUint64(8, /*littleEndian=*/ true);
+  if (minishardStartOffset === minishardEndOffset) {
+    return undefined;
+  }
+  if (minishardEndOffset < minishardStartOffset) {
+    throw new Error(
+      `Invalid minishard index range: [${minishardStartOffset}, ${minishardEndOffset})`,
+    );
+  }
+  // The start/end offsets in the shard index are relative to the end of the shard
+  // index.
+  minishardStartOffset += shardIndexSize;
+  minishardEndOffset += shardIndexSize;
+
+  const minishardIndexBuffer = await (
+    await readFileHandle(
+      decodeFileHandle(
+        new FileByteRangeHandle(
+          shardFileHandle,
+          checkedByteRange(minishardStartOffset, minishardEndOffset),
+        ),
+        sharding.minishardIndexEncoding,
+      ),
+      {
+        ...progressOptions,
+        strictByteRange: true,
+        throwIfMissing: true,
+      },
+    )
+  ).response.arrayBuffer();
+  if (minishardIndexBuffer.byteLength % 24 !== 0) {
+    throw new Error(
+      `Invalid minishard index length: ${minishardIndexBuffer.byteLength}`,
+    );
+  }
+  const minishardIndex = new BigUint64Array(minishardIndexBuffer);
+  convertEndian64(minishardIndex, Endianness.LITTLE);
+
+  const minishardIndexSize = minishardIndex.byteLength / 24;
+  let prevEntryKey = 0n;
+  // Offsets in the minishard index are relative to the end of the shard index.
+  let prevStart = shardIndexSize;
+  for (let i = 0; i < minishardIndexSize; ++i) {
+    const entryKey = prevEntryKey + minishardIndex[i];
+    prevEntryKey = minishardIndex[i] = entryKey;
+    const start = prevStart + minishardIndex[minishardIndexSize + i];
+    minishardIndex[minishardIndexSize + i] = start;
+    const size = minishardIndex[2 * minishardIndexSize + i];
+    const end = start + size;
+    prevStart = end;
+    minishardIndex[2 * minishardIndexSize + i] = end;
+  }
+  return minishardIndex;
+}
+
+// A range of a shard. Past 2^53 a Number would name other bytes than the index
+// does.
+function checkedByteRange(start: bigint, end: bigint): ByteRange {
+  if (end > BigInt(Number.MAX_SAFE_INTEGER) || end < start) {
+    throw new Error(`Invalid byte range in shard: [${start}, ${end})`);
+  }
+  return { offset: Number(start), length: Number(end - start) };
+}
+
+export function findMinishardEntry(
+  minishardIndexData: BigUint64Array,
   key: bigint,
 ): ByteRange | undefined {
-  const minishardIndexData = minishardIndex.data;
   const minishardIndexSize = minishardIndexData.length / 3;
   for (let i = 0; i < minishardIndexSize; ++i) {
     if (minishardIndexData[i] !== key) {
@@ -186,10 +222,7 @@ function findMinishardEntry(
     const startOffset = minishardIndexData[minishardIndexSize + i];
     const endOffset = minishardIndexData[2 * minishardIndexSize + i];
 
-    return {
-      offset: Number(startOffset),
-      length: Number(endOffset - startOffset),
-    };
+    return checkedByteRange(startOffset, endOffset);
   }
   return undefined;
 }
@@ -230,7 +263,7 @@ export class ShardedKvStore
       progressOptions,
     );
     if (minishardIndex === undefined) return undefined;
-    const minishardEntry = findMinishardEntry(minishardIndex, key);
+    const minishardEntry = findMinishardEntry(minishardIndex.data, key);
     if (minishardEntry === undefined) return undefined;
     return {
       minishardEntry,

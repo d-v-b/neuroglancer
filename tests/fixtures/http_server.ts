@@ -22,6 +22,11 @@ import { tempDirectoryFixture } from "#tests/fixtures/temp_directory.js";
 
 export function httpServerFixture(
   rootDirectory: Fixture<string> = tempDirectoryFixture(),
+  // handlers run before the file server: each calls `res.emit("next")` to pass
+  before: ((
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ) => void)[] = [],
 ): { serverUrl: Fixture<string>; rootDirectory: Fixture<string> } {
   return {
     serverUrl: fixture(async (stack) => {
@@ -30,6 +35,7 @@ export function httpServerFixture(
         createServer({
           root: resolvedRootDirectory,
           cache: -1,
+          before,
         }) as any
       ).server;
       stack.defer(async () => {

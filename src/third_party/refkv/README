@@ -1,7 +1,6 @@
 refkv_embed.js and refkv_ir.wasm are built from refkv
-(https://github.com/d-v-b/refkv) commit 18d72f8d (branch feat/grib,
-d-v-b/refkv#166), MIT OR Apache-2.0 (LICENSE-MIT here; Apache-2.0 is
-Neuroglancer's own license):
+(https://github.com/d-v-b/refkv) commit e10e93ed (d-v-b/refkv#203), MIT OR
+Apache-2.0 (LICENSE-MIT here; Apache-2.0 is Neuroglancer's own license):
 
     just js::wasm          # rust/refkv-ir as refkv_ir.wasm (wasm32)
     node js/build.mjs      # js/src/embed.ts bundled as refkv_embed.js

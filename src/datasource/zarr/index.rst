@@ -114,6 +114,14 @@ Supported codecs:
   truncated or padded with zeros to the chunk's shape)
 - numcodecs.shuffle (numcodecs' byte shuffle, as zarr-python 3 names it)
 - numcodecs.zlib (zlib streams, as zarr-python 3 names numcodecs' Zlib)
+- refkv.precomputed (a chunk or a whole shard of a Neuroglancer precomputed
+  volume, as refkv writes them: raw, jpeg, png and compressed_segmentation
+  chunks, clipped ones filled with the fill value, a shard's chunks read through
+  its index as the precomputed data source reads them. It refuses what it
+  cannot decode as refkv's Python codec does: a chunk stored in brotli, a JPEG
+  with subsampled chroma or of other than 8 bits, and a PNG of several 16-bit
+  channels. Other JPEGs may differ from libjpeg's by 1 level, as those of the
+  precomputed data source do)
 - sharding_indexed
 - transpose
 - zlib
