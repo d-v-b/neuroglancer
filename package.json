@@ -86,11 +86,13 @@
     "yauzl": "^3.2.0"
   },
   "dependencies": {
+    "@jsquash/webp": "^1.5.0",
     "codemirror": "^5.61.1",
     "core-js": "^3.46.0",
     "crc-32": "^1.2.2",
     "gl-matrix": "3.1.0",
     "ikonate": "github:mikolajdobrucki/ikonate#a86b4107c6ec717e7877f880a930d1ccf0b59d89",
+    "lerc": "^4.3.0",
     "lodash-es": "^4.17.21",
     "msgpackr": "^1.11.5",
     "nifti-reader-js": "^0.8.0",

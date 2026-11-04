@@ -112,6 +112,20 @@ Supported codecs:
   components of 2 to 16 bits interleaved in one scan, decoded to ``uint8``
   for up to 8 bits and ``uint16`` otherwise; the chunk shape is as for
   imagecodecs_jpeg2k)
+- imagecodecs_jpegxl (decoding of lossless JPEG XL images of one frame, of 1, 3
+  or 4 components of ``uint8``, ``uint16`` or ``float32`` samples; lossy images
+  are refused, because jxl-oxide's samples for them differ slightly from libjxl's;
+  the chunk shape is as for imagecodecs_jpeg2k)
+- imagecodecs_lerc (LERC 2 blobs of any data type LERC has, with values of masked
+  pixels as stored; a chunk's shape must end in ``[height, width]``, ``[height,
+  width, depth]`` for a blob of several values per pixel, or ``[bands, height,
+  width]`` for a blob of several bands, as imagecodecs reads them, with all other
+  dimensions 1. A float64 array is shown as ``float32``, its values rounded to
+  nearest)
+- imagecodecs_webp (WebP images, lossy or lossless, of ``uint8`` arrays whose
+  shape ends in ``[height, width, 3]`` or ``[height, width, 4]``, with all other
+  dimensions 1, unassociated alpha, and alpha 255 for an image without any;
+  ``hasalpha``, if given, must agree with the shape)
 - n5_default (one N5 default-mode block per chunk, header included, its
   body encoded with the inner codecs; edge blocks of another size are
   truncated or padded with zeros to the chunk's shape)

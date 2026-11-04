@@ -15,6 +15,7 @@
  */
 import type { DecodedImage } from "#src/async_computation/decode_png_request.js";
 import { asyncComputation } from "#src/async_computation/index.js";
+import type { DecodedJxlSamples } from "#src/sliceview/jxl/index.js";
 
 export const decodeJxl =
   asyncComputation<
@@ -25,3 +26,12 @@ export const decodeJxl =
       bytesPerPixel: number,
     ) => DecodedImage
   >("decodeJxl");
+
+export const decodeJxlSamples =
+  asyncComputation<
+    (
+      data: Uint8Array,
+      bytesPerSample: number,
+      isFloat: boolean,
+    ) => DecodedJxlSamples
+  >("decodeJxlSamples");

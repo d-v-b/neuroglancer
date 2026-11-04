@@ -29,7 +29,9 @@ import {
 import "#src/datasource/zarr/codec/gzip/decode.js";
 import "#src/datasource/zarr/codec/jpeg/decode.js";
 import "#src/datasource/zarr/codec/jpeg2k/decode.js";
+import "#src/datasource/zarr/codec/jpegxl/decode.js";
 import "#src/datasource/zarr/codec/jpegxr/decode.js";
+import "#src/datasource/zarr/codec/lerc/decode.js";
 import "#src/datasource/zarr/codec/ljpeg/decode.js";
 import "#src/datasource/zarr/codec/lzw/decode.js";
 import "#src/datasource/zarr/codec/n5_default/decode.js";
@@ -41,6 +43,7 @@ import "#src/datasource/zarr/codec/refkv_skip/decode.js";
 import "#src/datasource/zarr/codec/refkv_stream/decode.js";
 import "#src/datasource/zarr/codec/sharding_indexed/decode.js";
 import "#src/datasource/zarr/codec/transpose/decode.js";
+import "#src/datasource/zarr/codec/webp/decode.js";
 import type { CodecChainSpec } from "#src/datasource/zarr/codec/index.js";
 import "#src/datasource/zarr/codec/resolvers.js";
 import { parseCodecChainSpec } from "#src/datasource/zarr/codec/resolve.js";

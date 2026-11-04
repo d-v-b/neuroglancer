@@ -164,3 +164,106 @@ export async function decompressJxl(
     }
   }
 }
+
+export interface DecodedJxlSamples {
+  width: number;
+  height: number;
+  numComponents: number;
+  // Samples interleaved by pixel, row-major, in native byte order.
+  data: Uint8Array<ArrayBuffer>;
+}
+
+const SAMPLE_KINDS = [
+  { bits: 8, isFloat: false, kind: 0, name: "uint8" },
+  { bits: 16, isFloat: false, kind: 1, name: "uint16" },
+  { bits: 32, isFloat: true, kind: 2, name: "float32" },
+];
+
+const INFO_FIELDS = 7;
+
+/**
+ * Decodes a JPEG XL image of one frame to samples of `bytesPerSample` bytes,
+ * floating-point or not, exactly as stored: unlike `decompressJxl`, this does
+ * not scale them to 8 bits. Only lossless streams are accepted, because jxl-oxide
+ * renders lossy ones (XYB-encoded, or VarDCT) up to a few levels from what
+ * libjxl does, so that the same chunk would read differently elsewhere.
+ */
+export async function decompressJxlSamples(
+  buffer: Uint8Array,
+  bytesPerSample: number,
+  isFloat: boolean,
+): Promise<DecodedJxlSamples> {
+  const sampleKind = SAMPLE_KINDS.find(
+    (x) => x.bits === bytesPerSample * 8 && x.isFloat === isFloat,
+  );
+  if (sampleKind === undefined) {
+    throw new Error(
+      `jxl: unsupported samples of ${bytesPerSample} bytes, ${isFloat ? "float" : "integer"}`,
+    );
+  }
+  const { exports } = await getJxlModulePromise();
+  const { malloc, free, decode_samples, memory } = exports as unknown as {
+    malloc(size: number): number;
+    free(ptr: number, size: number): void;
+    decode_samples(
+      ptr: number,
+      size: number,
+      kind: number,
+      info: number,
+    ): number;
+    memory: WebAssembly.Memory;
+  };
+  checkHeader(buffer);
+  const infoBytes = INFO_FIELDS * 4;
+  const inputPtr = malloc(buffer.byteLength);
+  const infoPtr = malloc(infoBytes + 4);
+  // Rust's allocator aligns to the alignment `malloc` asks of it, which is 1.
+  const alignedInfoPtr = (infoPtr + 3) & ~3;
+  new Uint8Array(memory.buffer).set(buffer, inputPtr);
+  let outputPtr = 0;
+  let outputBytes = 0;
+  try {
+    outputPtr = decode_samples(
+      inputPtr,
+      buffer.byteLength,
+      sampleKind.kind,
+      alignedInfoPtr,
+    );
+    if (outputPtr === 0) throw new Error("jxl: Decoding failed.");
+    // `memory.buffer` is re-read here because decoding may have grown it.
+    const [
+      width,
+      height,
+      numComponents,
+      bits,
+      isFloatStream,
+      exact,
+      keyframes,
+    ] = new Uint32Array(memory.buffer, alignedInfoPtr, INFO_FIELDS);
+    outputBytes = width * height * numComponents * bytesPerSample;
+    if (keyframes !== 1) {
+      throw new Error(`jxl: image of ${keyframes} frames, not 1`);
+    }
+    if (exact !== 1) {
+      throw new Error(
+        "jxl: lossy images are not supported, whose samples may differ from libjxl's",
+      );
+    }
+    if (bits !== sampleKind.bits || (isFloatStream === 1) !== isFloat) {
+      throw new Error(
+        `jxl: image of ${bits}-bit ${isFloatStream === 1 ? "float" : "integer"} ` +
+          `samples is not ${sampleKind.name}`,
+      );
+    }
+    return {
+      width,
+      height,
+      numComponents,
+      data: new Uint8Array(memory.buffer, outputPtr, outputBytes).slice(),
+    };
+  } finally {
+    free(inputPtr, buffer.byteLength);
+    free(infoPtr, infoBytes + 4);
+    if (outputPtr !== 0) free(outputPtr, outputBytes);
+  }
+}
