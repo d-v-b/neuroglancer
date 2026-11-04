@@ -213,6 +213,8 @@ dependencies = [
 name = "jxl-wasm"
 version = "1.0.0"
 dependencies = [
+ "jxl-frame",
+ "jxl-image",
  "jxl-oxide",
 ]
 

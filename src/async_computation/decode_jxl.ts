@@ -14,9 +14,15 @@
  * limitations under the License.
  */
 
-import { decodeJxl } from "#src/async_computation/decode_jxl_request.js";
+import {
+  decodeJxl,
+  decodeJxlSamples,
+} from "#src/async_computation/decode_jxl_request.js";
 import { registerAsyncComputation } from "#src/async_computation/handler.js";
-import { decompressJxl } from "#src/sliceview/jxl/index.js";
+import {
+  decompressJxl,
+  decompressJxlSamples,
+} from "#src/sliceview/jxl/index.js";
 
 registerAsyncComputation(
   decodeJxl,
@@ -33,5 +39,13 @@ registerAsyncComputation(
       bytesPerPixel,
     );
     return { value: result, transfer: [result.uint8Array.buffer] };
+  },
+);
+
+registerAsyncComputation(
+  decodeJxlSamples,
+  async (data: Uint8Array, bytesPerSample: number, isFloat: boolean) => {
+    const result = await decompressJxlSamples(data, bytesPerSample, isFloat);
+    return { value: result, transfer: [result.data.buffer] };
   },
 );
