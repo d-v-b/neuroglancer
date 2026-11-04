@@ -137,7 +137,7 @@ const CASES = [
   },
 ];
 
-// `distance=1.0`, so XYB-encoded, whose samples jxl-oxide renders up to 2 levels
+// `distance=1.0`, so XYB-encoded, whose samples jxl-oxide renders a few levels
 // from what libjxl does.
 const LOSSY =
   "/wpYMJAUNwIAEwgBALgBZxMoAQBQoTLKuMHLuZ4vP3RYTNu4ztBW2xaWJIqMY5N0AocksQLiboA7AJCgmBfOWRkGeIAiqJACeTAUGxnFyBijYlQUIzkZGVcyLBuZ83A+/TDqmN8wgyuBKgIlrs2K/GXIRaNEzWN2am+aoG4=";
