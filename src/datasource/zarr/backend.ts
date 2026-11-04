@@ -33,6 +33,7 @@ import "#src/datasource/zarr/codec/jpegxr/decode.js";
 import "#src/datasource/zarr/codec/ljpeg/decode.js";
 import "#src/datasource/zarr/codec/lzw/decode.js";
 import "#src/datasource/zarr/codec/n5_default/decode.js";
+import "#src/datasource/zarr/codec/numcodecs_bz2/decode.js";
 import "#src/datasource/zarr/codec/numcodecs_shuffle/decode.js";
 import "#src/datasource/zarr/codec/refkv_fits_tiles/decode.js";
 import "#src/datasource/zarr/codec/refkv_grib/decode.js";
