@@ -18,17 +18,27 @@ import { registerCodec } from "#src/datasource/zarr/codec/decode.js";
 import { CodecKind } from "#src/datasource/zarr/codec/index.js";
 import type { Configuration } from "#src/datasource/zarr/codec/refkv_skip/resolve.js";
 
-/** `encoded` without its first `length` bytes, which it must have. */
+/**
+ * `encoded` without its first `length` bytes, which it must have, and, with
+ * `keep`, without any after the `keep` bytes that follow them, which it must have too.
+ */
 export function skip(
   encoded: Uint8Array<ArrayBuffer>,
   length: number,
+  keep?: number,
 ): Uint8Array<ArrayBuffer> {
   if (encoded.length < length) {
     throw new Error(
       `refkv.skip: a chunk of ${encoded.length} bytes, fewer than the ${length} it skips`,
     );
   }
-  return encoded.subarray(length);
+  if (keep === undefined) return encoded.subarray(length);
+  if (encoded.length < length + keep) {
+    throw new Error(
+      `refkv.skip: a chunk of ${encoded.length} bytes, fewer than the ${length + keep} it keeps up to`,
+    );
+  }
+  return encoded.subarray(length, length + keep);
 }
 
 registerCodec({
@@ -36,6 +46,6 @@ registerCodec({
   kind: CodecKind.bytesToBytes,
   async decode(configuration: Configuration, encoded, signal: AbortSignal) {
     signal;
-    return skip(encoded, configuration.length);
+    return skip(encoded, configuration.length, configuration.keep);
   },
 });

@@ -35,6 +35,46 @@ test("drops the bytes before a chunk's own", () => {
   }
 });
 
+test("stops after the bytes it keeps", () => {
+  for (const [length, keep, encoded, decoded] of [
+    [2, 3, [9, 9, 1, 2, 3, 8, 8], [1, 2, 3]],
+    [0, 3, [1, 2, 3, 8], [1, 2, 3]],
+    [2, 3, [9, 9, 1, 2, 3], [1, 2, 3]],
+    [2, 0, [9, 9, 1], []],
+  ] as const) {
+    expect(Array.from(skip(Uint8Array.from(encoded), length, keep))).toEqual(
+      decoded,
+    );
+  }
+});
+
+test("rejects a chunk shorter than it keeps", () => {
+  expect(() => skip(Uint8Array.from([9, 9, 1]), 2, 3)).toThrow(
+    "fewer than the 5 it keeps up to",
+  );
+});
+
+test("decodes a whole FITS file's array in a compressed file's chain", async () => {
+  // The codecs refkv gives an array of a `.fits.gz`: bytes, refkv.skip with keep, gzip.
+  const values = Uint8Array.from([0, 0, 0, 1, 0, 0, 0, 2]);
+  const file = new Uint8Array(32).fill(0x20);
+  file.set(values, 8);
+  const spec = parseCodecChainSpec(
+    [
+      { name: "bytes", configuration: { endian: "big" } },
+      { name: "refkv.skip", configuration: { length: 8, keep: 8 } },
+      { name: "gzip", configuration: { level: 1 } },
+    ],
+    { dataType: DataType.INT32, chunkShape: [2] },
+  );
+  const decoded = await decodeArray(
+    spec,
+    new Uint8Array(gzipSync(file)),
+    new AbortController().signal,
+  );
+  expect(Array.from(decoded as Int32Array)).toEqual([1, 2]);
+});
+
 test("resolves in a deflated .npz member's chain", () => {
   // The codecs refkv gives a deflated member: bytes, refkv.skip, gzip.
   const spec = parseCodecChainSpec(

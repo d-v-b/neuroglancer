@@ -10,6 +10,9 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 jxl-oxide = { version = "0.11.4", default-features = false }
+# Already dependencies of jxl-oxide, whose types `decode_samples` matches on.
+jxl-frame = "0.12"
+jxl-image = "0.12"
 
 [profile.release]
 lto = true
