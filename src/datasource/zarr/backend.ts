@@ -19,6 +19,7 @@ import "#src/datasource/zarr/codec/zstd/decode.js";
 import "#src/datasource/zarr/codec/bytes/decode.js";
 import "#src/datasource/zarr/codec/crc32c/decode.js";
 import "#src/datasource/zarr/codec/delta/decode.js";
+import "#src/datasource/zarr/codec/dicomrle/decode.js";
 
 import { WithParameters } from "#src/chunk_manager/backend.js";
 import { VolumeChunkSourceParameters } from "#src/datasource/zarr/base.js";
@@ -29,11 +30,13 @@ import {
 import "#src/datasource/zarr/codec/gzip/decode.js";
 import "#src/datasource/zarr/codec/jpeg/decode.js";
 import "#src/datasource/zarr/codec/jpeg2k/decode.js";
+import "#src/datasource/zarr/codec/jpegls/decode.js";
 import "#src/datasource/zarr/codec/jpegxr/decode.js";
 import "#src/datasource/zarr/codec/ljpeg/decode.js";
 import "#src/datasource/zarr/codec/lzw/decode.js";
 import "#src/datasource/zarr/codec/n5_default/decode.js";
 import "#src/datasource/zarr/codec/numcodecs_shuffle/decode.js";
+import "#src/datasource/zarr/codec/packbits/decode.js";
 import "#src/datasource/zarr/codec/refkv_fits_tiles/decode.js";
 import "#src/datasource/zarr/codec/refkv_grib/decode.js";
 import "#src/datasource/zarr/codec/refkv_precomputed/decode.js";
