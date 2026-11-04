@@ -17,6 +17,7 @@
 import "#src/datasource/zarr/codec/blosc/decode.js";
 import "#src/datasource/zarr/codec/zstd/decode.js";
 import "#src/datasource/zarr/codec/bytes/decode.js";
+import "#src/datasource/zarr/codec/ccittfax4/decode.js";
 import "#src/datasource/zarr/codec/crc32c/decode.js";
 import "#src/datasource/zarr/codec/delta/decode.js";
 
@@ -26,6 +27,8 @@ import {
   applySharding,
   decodeArray,
 } from "#src/datasource/zarr/codec/decode.js";
+import "#src/datasource/zarr/codec/eer/decode.js";
+import "#src/datasource/zarr/codec/floatpred/decode.js";
 import "#src/datasource/zarr/codec/gzip/decode.js";
 import "#src/datasource/zarr/codec/jpeg/decode.js";
 import "#src/datasource/zarr/codec/jpeg2k/decode.js";
@@ -37,6 +40,8 @@ import "#src/datasource/zarr/codec/numcodecs_fixedscaleoffset/decode.js";
 import "#src/datasource/zarr/codec/numcodecs_lz4/decode.js";
 import "#src/datasource/zarr/codec/numcodecs_quantize/decode.js";
 import "#src/datasource/zarr/codec/numcodecs_shuffle/decode.js";
+import "#src/datasource/zarr/codec/packbits/decode.js";
+import "#src/datasource/zarr/codec/packints/decode.js";
 import "#src/datasource/zarr/codec/refkv_fits_tiles/decode.js";
 import "#src/datasource/zarr/codec/refkv_grib/decode.js";
 import "#src/datasource/zarr/codec/refkv_precomputed/decode.js";
@@ -176,11 +181,15 @@ export class ZarrVolumeChunkSource extends WithParameters(
     const key = chunkShape.join();
     let codecs = this.codecsByChunkShape.get(key);
     if (codecs === undefined) {
-      codecs = parseCodecChainSpec(metadata.chunkGrid!.codecs, {
-        dataType: metadata.dataType,
-        chunkShape,
-        fillValue: metadata.fillValue,
-      });
+      codecs = parseCodecChainSpec(
+        metadata.chunkGrid!.codecs,
+        {
+          dataType: metadata.dataType,
+          chunkShape,
+          fillValue: metadata.fillValue,
+        },
+        metadata.float64,
+      );
       this.codecsByChunkShape.set(key, codecs);
     }
     return codecs;

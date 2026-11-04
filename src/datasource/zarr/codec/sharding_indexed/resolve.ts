@@ -52,7 +52,13 @@ export interface Configuration extends IndexConfiguration {
 registerCodec({
   name: "sharding_indexed",
   kind: CodecKind.arrayToBytes,
-  resolve(configuration: unknown, decodedArrayInfo: CodecArrayInfo) {
+  // If the sub-chunks' array -> bytes codec does: `parseCodecChainSpec` checks.
+  decodesFloat64AsFloat32: true,
+  resolve(
+    configuration: unknown,
+    decodedArrayInfo: CodecArrayInfo,
+    float64: boolean,
+  ) {
     verifyObject(configuration);
     const subChunkShape = verifyObjectProperty(
       configuration,
@@ -101,10 +107,14 @@ registerCodec({
       configuration,
       "codecs",
       (value) =>
-        parseCodecChainSpec(value, {
-          dataType: decodedArrayInfo.dataType,
-          chunkShape: subChunkShape,
-        }),
+        parseCodecChainSpec(
+          value,
+          {
+            dataType: decodedArrayInfo.dataType,
+            chunkShape: subChunkShape,
+          },
+          float64,
+        ),
     );
     return {
       configuration: {

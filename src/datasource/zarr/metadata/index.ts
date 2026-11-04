@@ -38,6 +38,9 @@ export interface ArrayMetadata {
   // Set for a rectilinear chunk grid, undefined for a regular one.
   chunkGrid?: RectilinearChunkGrid;
   dataType: DataType;
+  // Whether the array's data type is float64, shown as `dataType` float32 (see
+  // `parseCodecChainSpec`).
+  float64?: boolean;
   fillValue: number | bigint;
   dimensionNames: (string | null)[];
   dimensionUnits: (string | null)[];

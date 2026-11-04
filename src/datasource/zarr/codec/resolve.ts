@@ -79,9 +79,12 @@ export interface ArrayToBytesCodecResolver<Configuration>
   // so that the array is shown as float32 (Neuroglancer has no float64 data
   // type). A float64 array of any other codec is rejected.
   decodesFloat64AsFloat32?: boolean;
+  // `float64`: the array's data type is float64, and `decodedArrayInfo`'s
+  // dataType is float32 (see `decodesFloat64AsFloat32`).
   resolve(
     configuration: unknown,
     decodedArrayInfo: CodecArrayInfo,
+    float64: boolean,
   ): {
     configuration: Configuration;
     shardingInfo?: ShardingInfo;
@@ -187,7 +190,11 @@ export function parseCodecChainSpec(
       );
     }
     const { configuration, shardingInfo, encodedSize } =
-      arrayToBytesResolver.resolve(initialConfiguration, decodedArrayInfo);
+      arrayToBytesResolver.resolve(
+        initialConfiguration,
+        decodedArrayInfo,
+        float64,
+      );
     if (shardingInfo !== undefined) {
       if (i + 1 !== numCodecs) {
         throw new Error(
