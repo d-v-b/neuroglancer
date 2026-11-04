@@ -21,13 +21,22 @@ import { DataType } from "#src/util/data_type.js";
 
 test("gives stored / scale + offset in the array's data type", () => {
   for (const [stored, dataType, configuration, want] of [
-    [Int16Array.of(-4, 0, 6), DataType.FLOAT32, { scale: 4, offset: 1 }, [0, 1, 2.5]],
+    [
+      Int16Array.of(-4, 0, 6),
+      DataType.FLOAT32,
+      { scale: 4, offset: 1 },
+      [0, 1, 2.5],
+    ],
     [Uint8Array.of(10, 25), DataType.UINT16, { scale: 10, offset: 3 }, [4, 5]],
     [Uint8Array.of(7), DataType.INT32, { scale: 2, offset: -10 }, [-6]],
   ] as const) {
     expect(
       Array.from(
-        unscale(stored, dataType, configuration) as unknown as ArrayLike<number>,
+        unscale(
+          stored,
+          dataType,
+          configuration,
+        ) as unknown as ArrayLike<number>,
       ),
     ).toEqual(want);
   }

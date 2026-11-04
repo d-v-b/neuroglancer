@@ -25,14 +25,14 @@ test("decodes literals, long lengths and overlapping matches", () => {
     1, 2, 3, 4,
   ]);
   // one literal, then a match of offset 1 and 4 + 2 bytes, overlapping itself
-  expect(
-    Array.from(decodeLz4Block(block(0x12, 7, 1, 0, 0x00), 7)),
-  ).toEqual([7, 7, 7, 7, 7, 7, 7]);
+  expect(Array.from(decodeLz4Block(block(0x12, 7, 1, 0, 0x00), 7))).toEqual([
+    7, 7, 7, 7, 7, 7, 7,
+  ]);
   // a literal length of 15 + 1
   const literals = Array.from({ length: 16 }, (_, i) => i);
-  expect(
-    Array.from(decodeLz4Block(block(0xf0, 1, ...literals), 16)),
-  ).toEqual(literals);
+  expect(Array.from(decodeLz4Block(block(0xf0, 1, ...literals), 16))).toEqual(
+    literals,
+  );
   // an empty block
   expect(decodeLz4Block(block(0x00), 0).length).toBe(0);
 });
@@ -50,15 +50,21 @@ test("rejects literals past the output", () => {
 });
 
 test("rejects a truncated offset", () => {
-  expect(() => decodeLz4Block(block(0x10, 1, 1), 4)).toThrow(/inside an offset/);
+  expect(() => decodeLz4Block(block(0x10, 1, 1), 4)).toThrow(
+    /inside an offset/,
+  );
 });
 
 test("rejects an offset of zero", () => {
-  expect(() => decodeLz4Block(block(0x10, 1, 0, 0), 5)).toThrow(/an offset of 0/);
+  expect(() => decodeLz4Block(block(0x10, 1, 0, 0), 5)).toThrow(
+    /an offset of 0/,
+  );
 });
 
 test("rejects an offset before the output", () => {
-  expect(() => decodeLz4Block(block(0x10, 1, 2, 0), 5)).toThrow(/an offset of 2/);
+  expect(() => decodeLz4Block(block(0x10, 1, 2, 0), 5)).toThrow(
+    /an offset of 2/,
+  );
 });
 
 test("rejects a match past the output", () => {
