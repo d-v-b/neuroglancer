@@ -19,11 +19,13 @@ import { CodecKind } from "#src/datasource/zarr/codec/index.js";
 import type { Configuration } from "#src/datasource/zarr/codec/lzw/resolve.js";
 import { decodeTiffLzw } from "#src/util/lzw.js";
 
-registerCodec({
-  name: "imagecodecs_lzw",
-  kind: CodecKind.bytesToBytes,
-  async decode(configuration: Configuration, encoded, signal: AbortSignal) {
-    signal.throwIfAborted();
-    return decodeTiffLzw(encoded, configuration.decodedSize);
-  },
-});
+for (const name of ["imagecodecs_lzw", "refkv.tiff_lzw"]) {
+  registerCodec({
+    name,
+    kind: CodecKind.bytesToBytes,
+    async decode(configuration: Configuration, encoded, signal: AbortSignal) {
+      signal.throwIfAborted();
+      return decodeTiffLzw(encoded, configuration.decodedSize);
+    },
+  });
+}
