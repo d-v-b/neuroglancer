@@ -51,6 +51,10 @@ export interface CodecResolver {
 export interface ArrayToArrayCodecResolver<Configuration>
   extends CodecResolver {
   kind: CodecKind.arrayToArray;
+  // Whether decoding changes a chunk's values rather than only its layout, as
+  // a transpose does. Such a codec cannot come before a sharding codec: a
+  // shard's inner chunks are decoded by the inner chain alone, without it.
+  changesValues?: boolean;
   resolve(
     configuration: unknown,
     decodedArrayInfo: CodecArrayInfo,
@@ -174,6 +178,14 @@ export function parseCodecChainSpec(
         throw new Error(
           "bytes -> bytes codecs not supported following sharding codec",
         );
+      }
+      for (let j = 0; j < i; ++j) {
+        const { resolver } = codecSpecs[j];
+        if ((resolver as ArrayToArrayCodecResolver<unknown>).changesValues) {
+          throw new Error(
+            `${JSON.stringify(resolver.name)} codec not supported before sharding codec`,
+          );
+        }
       }
     }
     const layoutInfo = arrayToBytesResolver.getDecodedArrayLayoutInfo(

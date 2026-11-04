@@ -15,7 +15,8 @@
  */
 
 /**
- * @file The `imagecodecs_lzw` bytes-to-bytes codec: each chunk is one TIFF LZW
+ * @file The `imagecodecs_lzw` bytes-to-bytes codec, and `refkv.tiff_lzw`, as
+ * refkv names it in archives since d-v-b/refkv#90: each chunk is one TIFF LZW
  * stream (TIFF 6.0 section 13), as imagecodecs' `lzw_encode` writes it and as
  * the tiles and strips of LZW-compressed TIFF files (Akoya QPTIFF slides among
  * them) are stored. The codec has no configuration of its own; the resolved
@@ -32,14 +33,16 @@ export interface Configuration {
   decodedSize?: number;
 }
 
-registerCodec({
-  name: "imagecodecs_lzw",
-  kind: CodecKind.bytesToBytes,
-  resolve(
-    configuration: unknown,
-    decodedSize: number | undefined,
-  ): { configuration: Configuration } {
-    if (configuration !== undefined) verifyObject(configuration);
-    return { configuration: { decodedSize } };
-  },
-});
+for (const name of ["imagecodecs_lzw", "refkv.tiff_lzw"]) {
+  registerCodec({
+    name,
+    kind: CodecKind.bytesToBytes,
+    resolve(
+      configuration: unknown,
+      decodedSize: number | undefined,
+    ): { configuration: Configuration } {
+      if (configuration !== undefined) verifyObject(configuration);
+      return { configuration: { decodedSize } };
+    },
+  });
+}

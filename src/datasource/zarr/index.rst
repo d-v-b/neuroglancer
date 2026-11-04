@@ -98,6 +98,9 @@ Supported codecs:
   and JP2 files; a chunk's shape must end in ``[height, width]``, or
   ``[height, width, components]`` for multi-component images, with all other
   dimensions 1)
+- imagecodecs_delta (differences summed back along ``axis``, as TIFF's
+  horizontal predictor stores integer samples; ``dist`` must be 1, and it may
+  not come before a transpose or sharding_indexed codec)
 - imagecodecs_lzw (TIFF LZW streams, as the tiles and strips of LZW-compressed
   TIFF files are stored)
 - imagecodecs_jpegxr (decoding of JPEG XR files of gray, RGB, BGR, RGBA and
@@ -122,6 +125,7 @@ Supported codecs:
   with subsampled chroma or of other than 8 bits, and a PNG of several 16-bit
   channels. Other JPEGs may differ from libjpeg's by 1 level, as those of the
   precomputed data source do)
+- refkv.tiff_lzw (the same streams as imagecodecs_lzw, as refkv names them)
 - sharding_indexed
 - transpose
 - zlib
