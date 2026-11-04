@@ -43,9 +43,20 @@
  *   separate.
  * - a compressed_segmentation stream whose offsets run past its end, which
  *   the decoder would read as zeros.
+ * - a compresso or crackle stream whose header gives another shape or voxel
+ *   width than the chunk's, and a JPEG XL image of another size.
+ *
+ * A lossy JPEG XL may differ from libjxl's by 1 level, jxl-oxide's rounding, in
+ * refkv's fixture. One thing is not refused: a JPEG XL of 3 samples where the
+ * chunk holds 1, which `decompressJxl` cuts to the chunk's bytes, as it does for
+ * the precomputed data source, since its module does not say how many samples
+ * an image has.
  */
 
+import { decodeCompresso } from "#src/async_computation/decode_compresso_request.js";
+import { decodeCrackle } from "#src/async_computation/decode_crackle_request.js";
 import { decodeJpeg } from "#src/async_computation/decode_jpeg_request.js";
+import { decodeJxl } from "#src/async_computation/decode_jxl_request.js";
 import { decodePng } from "#src/async_computation/decode_png_request.js";
 import { decodeZstd } from "#src/async_computation/decode_zstd_request.js";
 import { requestAsyncComputation } from "#src/async_computation/request.js";
@@ -141,6 +152,34 @@ export async function removeContentCoding(
         data.length >= 4 &&
         new DataView(data.buffer, data.byteOffset).getUint32(0, true) ===
           channels
+      ) {
+        return data;
+      }
+      break;
+    case "compresso":
+      if (startsWith(data, 0x63, 0x70, 0x73, 0x6f)) return data;
+      break;
+    case "crackle":
+      if (startsWith(data, 0x63, 0x72, 0x6b, 0x6c)) return data;
+      break;
+    case "jxl":
+      if (
+        startsWith(data, 0xff, 0x0a) ||
+        startsWith(
+          data,
+          0,
+          0,
+          0,
+          0x0c,
+          0x4a,
+          0x58,
+          0x4c,
+          0x20,
+          0x0d,
+          0x0a,
+          0x87,
+          0x0a,
+        )
       ) {
         return data;
       }
@@ -265,6 +304,46 @@ export function checkCompressedSegmentation(
 }
 
 /**
+ * Refuses a compresso or crackle stream whose header does not give the chunk's
+ * shape and voxel width, which the decoders would give as bytes of another
+ * chunk. The decoders check the rest of the header.
+ */
+export function checkLabelStream(
+  data: Uint8Array,
+  encoding: "compresso" | "crackle",
+  [x, y, z]: number[],
+  bytesPerElement: number,
+) {
+  const headerBytes = encoding === "compresso" ? 12 : 19;
+  if (data.length < headerBytes) {
+    throw new Error(
+      `${NAME}: a ${encoding} stream of ${data.length} bytes has no header`,
+    );
+  }
+  const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+  const [width, sx, sy, sz] =
+    encoding === "compresso"
+      ? [
+          data[5],
+          view.getUint16(6, true),
+          view.getUint16(8, true),
+          view.getUint16(10, true),
+        ]
+      : [
+          2 ** (view.getUint16(5, true) & 3),
+          view.getUint32(7, true),
+          view.getUint32(11, true),
+          view.getUint32(15, true),
+        ];
+  if (sx !== x || sy !== y || sz !== z || width !== bytesPerElement) {
+    throw new Error(
+      `${NAME}: a ${encoding} stream holds ${sx} x ${sy} x ${sz} voxels of ` +
+        `${width} bytes, not ${x} x ${y} x ${z} of ${bytesPerElement}`,
+    );
+  }
+}
+
+/**
  * The values of a chunk of `[x, y, z]` voxels in `channels` channels, x
  * fastest and the channel slowest, at their own size: `[x, y, z]`, or the
  * chunk size for a raw chunk a writer padded.
@@ -344,6 +423,36 @@ async function decodeChunk(
         /*convertToGrayscale=*/ false,
       );
       return { values: view(uint8Array), size: [x, y, z] };
+    }
+    case "jxl": {
+      const { uint8Array, width, height } = await requestAsyncComputation(
+        decodeJxl,
+        signal,
+        [data.buffer],
+        data,
+        /*area=*/ x * y * z,
+        /*numComponents=*/ channels,
+        /*bytesPerPixel=*/ bytesPerElement,
+      );
+      if (width !== x || height !== y * z) {
+        throw new Error(
+          `${NAME}: a JPEG XL of ${width} x ${height} is not one of ${x} x ${y * z}`,
+        );
+      }
+      return { values: view(uint8Array), size: [x, y, z] };
+    }
+    case "compresso":
+    case "crackle": {
+      checkLabelStream(data, encoding, [x, y, z], bytesPerElement);
+      const decoded = await requestAsyncComputation(
+        encoding === "compresso" ? decodeCompresso : decodeCrackle,
+        signal,
+        [data.buffer],
+        data,
+      );
+      const values = view(decoded);
+      convertEndian(values, Endianness.LITTLE, bytesPerElement);
+      return { values, size: [x, y, z] };
     }
     case "compressed_segmentation": {
       if (data.length % 4 !== 0) {

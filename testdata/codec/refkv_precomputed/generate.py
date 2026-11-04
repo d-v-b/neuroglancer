@@ -27,8 +27,11 @@ FIXTURES = Path.cwd() / "fixtures" / "precomputed"
 URL = "https://example.test/precomputed/"
 VOLUMES = [
     "precomputed_codings_bare",
+    "precomputed_compresso",
+    "precomputed_crackle",
     "precomputed_float32",
     "precomputed_jpeg_rgb",
+    "precomputed_jxl",
     "precomputed_png",
     "precomputed_raw_clipped",
     "precomputed_segmentation",
