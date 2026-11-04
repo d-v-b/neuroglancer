@@ -98,6 +98,9 @@ Supported codecs:
   and JP2 files; a chunk's shape must end in ``[height, width]``, or
   ``[height, width, components]`` for multi-component images, with all other
   dimensions 1)
+- imagecodecs_delta (differences summed back along ``axis``, as TIFF's
+  horizontal predictor stores integer samples; ``dist`` must be 1, and it may
+  not come before a transpose or sharding_indexed codec)
 - imagecodecs_lzw (TIFF LZW streams, as the tiles and strips of LZW-compressed
   TIFF files are stored)
 - imagecodecs_jpegxr (decoding of JPEG XR files of gray, RGB, BGR, RGBA and
@@ -114,6 +117,7 @@ Supported codecs:
   truncated or padded with zeros to the chunk's shape)
 - numcodecs.shuffle (numcodecs' byte shuffle, as zarr-python 3 names it)
 - numcodecs.zlib (zlib streams, as zarr-python 3 names numcodecs' Zlib)
+- refkv.tiff_lzw (the same streams as imagecodecs_lzw, as refkv names them)
 - sharding_indexed
 - transpose
 - zlib

@@ -23,6 +23,7 @@
 import "#src/datasource/zarr/codec/blosc/resolve.js";
 import "#src/datasource/zarr/codec/bytes/resolve.js";
 import "#src/datasource/zarr/codec/crc32c/resolve.js";
+import "#src/datasource/zarr/codec/delta/resolve.js";
 import "#src/datasource/zarr/codec/gzip/resolve.js";
 import "#src/datasource/zarr/codec/jpeg/resolve.js";
 import "#src/datasource/zarr/codec/jpeg2k/resolve.js";
