@@ -55,6 +55,9 @@ export interface ArrayToArrayCodecResolver<Configuration>
   // a transpose does. Such a codec cannot come before a sharding codec: a
   // shard's inner chunks are decoded by the inner chain alone, without it.
   changesValues?: boolean;
+  // Whether the codec decodes a chunk of a float64 array to float32 values, as
+  // `ArrayToBytesCodecResolver.decodesFloat64AsFloat32` does.
+  decodesFloat64AsFloat32?: boolean;
   resolve(
     configuration: unknown,
     decodedArrayInfo: CodecArrayInfo,
@@ -115,7 +118,8 @@ export function registerCodec<Configuration>(
 
 // `float64`: the array's data type is float64, and `decodedArrayInfo`'s
 // dataType is float32, as its chunks are decoded (see
-// `ArrayToBytesCodecResolver.decodesFloat64AsFloat32`).
+// `ArrayToBytesCodecResolver.decodesFloat64AsFloat32`, and
+// `ArrayToArrayCodecResolver.decodesFloat64AsFloat32`).
 export function parseCodecChainSpec(
   obj: unknown,
   decodedArrayInfo: CodecArrayInfo,
@@ -166,7 +170,18 @@ export function parseCodecChainSpec(
   } = (() => {
     const { resolver, configuration: initialConfiguration } = codecSpecs[i];
     const arrayToBytesResolver = resolver as ArrayToBytesCodecResolver<unknown>;
-    if (float64 && !arrayToBytesResolver.decodesFloat64AsFloat32) {
+    const arrayToArrayDecodes = codecSpecs
+      .slice(0, i)
+      .some(
+        ({ resolver }) =>
+          (resolver as ArrayToArrayCodecResolver<unknown>)
+            .decodesFloat64AsFloat32,
+      );
+    if (
+      float64 &&
+      !arrayToBytesResolver.decodesFloat64AsFloat32 &&
+      !arrayToArrayDecodes
+    ) {
       throw new Error(
         `float64 arrays are not supported with the ${JSON.stringify(resolver.name)} codec`,
       );

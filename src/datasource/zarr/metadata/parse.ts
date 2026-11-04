@@ -233,7 +233,7 @@ export function parseV3Metadata(
         verifyOptionalFixedLengthArrayOfStringOrNull(names ?? undefined, rank),
     );
 
-    // A float64 array is shown as float32, when its array -> bytes codec
+    // A float64 array is shown as float32, when a codec of its chain
     // decodes it so (see `parseCodecChainSpec`).
     const float64 = verifyObjectProperty(
       obj,
