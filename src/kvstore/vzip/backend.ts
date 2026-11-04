@@ -20,6 +20,7 @@
  * objects. See the vzip specification, SPEC.md, revision 8.
  */
 
+import { buf as crc32cbuf } from "crc-32/crc32c.js";
 import { makeSimpleAsyncCache } from "#src/chunk_manager/generic_file_source.js";
 import type { SharedKvStoreContextCounterpart } from "#src/kvstore/backend.js";
 import { composeByteRangeRequest } from "#src/kvstore/byte_range/file_handle.js";
@@ -262,6 +263,28 @@ export class VzipKvStore implements KvStore {
     return size;
   }
 
+  /**
+   * The bytes that resolving `[start, end)` of a value holds in memory: a range
+   * with a crc32c is read whole, so a small window can need far more than it
+   * returns.
+   */
+  private static bytesNeeded(
+    reference: VzipReference,
+    start: number,
+    end: number,
+  ): number {
+    let total = 0;
+    let pos = 0;
+    for (const range of reference) {
+      const size = Number(rangeSize(range));
+      const lo = Math.max(start, pos);
+      const hi = Math.min(end, pos + size);
+      if (lo < hi) total += range.crc32c !== undefined ? size : hi - lo;
+      pos += size;
+    }
+    return total;
+  }
+
   /** The (inflated) body of a bytes entry, or a window of a STORED one. */
   private async readBody(
     entry: VzipEntry,
@@ -450,6 +473,10 @@ export class VzipKvStore implements KvStore {
     }
     type Read = { range: VzipRange; start: number; end: number };
     const pieces: (Promise<Uint8Array> | Read)[] = [];
+    // The part of each piece that the window takes. A range with a crc32c is
+    // read whole, and checked before that part is taken (spec §6.3
+    // <https://github.com/d-v-b/refkv/blob/main/spec/refkv.md#63-resolving-a-reference>).
+    const cuts: { range: VzipRange; from: number; to: number }[] = [];
     let pos = 0;
     for (const range of reference) {
       const size = toSafeNumber(rangeSize(range), "range size");
@@ -458,13 +485,13 @@ export class VzipKvStore implements KvStore {
       if (lo < hi) {
         if (range.data !== undefined) {
           pieces.push(Promise.resolve(range.data.subarray(lo - pos, hi - pos)));
+          cuts.push({ range, from: 0, to: hi - lo });
         } else {
           const offset = toSafeNumber(range.offset, "range offset");
-          const read = {
-            range,
-            start: offset + lo - pos,
-            end: offset + hi - pos,
-          };
+          const [a, b] =
+            range.crc32c !== undefined ? [0, size] : [lo - pos, hi - pos];
+          const read = { range, start: offset + a, end: offset + b };
+          cuts.push({ range, from: lo - pos - a, to: hi - pos - a });
           pieces.push(
             metadata.sources[range.source].kind === "url"
               ? read
@@ -512,7 +539,7 @@ export class VzipKvStore implements KvStore {
         options,
       );
     }
-    const parts = await Promise.all(
+    const whole = await Promise.all(
       pieces.map(async (p) => {
         if (p instanceof Promise) return p;
         const run = runOf.get(p)!;
@@ -520,6 +547,21 @@ export class VzipKvStore implements KvStore {
         return (await run.data!).subarray(from, from + (p.end - p.start));
       }),
     );
+    const parts = whole.map((data, i) => {
+      const { range, from, to } = cuts[i];
+      if (range.crc32c !== undefined) {
+        const actual = crc32cbuf(data) >>> 0;
+        if (actual !== range.crc32c) {
+          throw new VzipError(
+            "resolution",
+            `source ${range.source}: the bytes read do not match the range's ` +
+              `crc32c ${range.crc32c} (got ${actual}): the source changed ` +
+              "since the archive was written",
+          );
+        }
+      }
+      return data.subarray(from, to);
+    });
     const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
     let o = 0;
     for (const p of parts) {
@@ -559,10 +601,11 @@ export class VzipKvStore implements KvStore {
       const reference = this.getReference(entry);
       size = toSafeNumber(VzipKvStore.valueSize(reference), "value size");
       ({ start, end } = window(size, options.byteRange));
-      if (end - start > MAX_REQUEST_BYTES) {
+      const needed = VzipKvStore.bytesNeeded(reference, start, end);
+      if (needed > MAX_REQUEST_BYTES) {
         throw new VzipError(
           "request",
-          `request of ${end - start} bytes exceeds the limit`,
+          `request of ${needed} bytes exceeds the limit`,
         );
       }
       data = await this.readReference(metadata, reference, start, end, options);

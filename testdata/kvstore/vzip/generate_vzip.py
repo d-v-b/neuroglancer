@@ -14,10 +14,10 @@
 # limitations under the License.
 """Generates the vzip test archives.
 
-Uses the reference vzip writer from the repository containing this fork
-(`src/vzip`). From the repository root:
+Uses the reference writer of refkv (https://github.com/d-v-b/refkv). From a
+checkout of it:
 
-    uv run python neuroglancer/testdata/kvstore/vzip/generate_vzip.py
+    uv run python <neuroglancer>/testdata/kvstore/vzip/generate_vzip.py
 """
 
 from __future__ import annotations
@@ -26,8 +26,9 @@ import io
 import struct
 from pathlib import Path
 
-from vzip.archive import VZipWriter
-from vzip.pb import Range, Source
+from refkv.pb import Range, Source
+from refkv.policy import crc32c
+from refkv.vzip.archive import VZipWriter
 
 HERE = Path(__file__).parent
 FILES = HERE.parent / "files"  # the files the generic kvstore tests expect
@@ -135,6 +136,55 @@ def write_rows() -> None:
     (HERE / "rows.vzip").write_bytes(buf.getvalue())
 
 
+def write_checksums() -> None:
+    """checksums.vzip: ranges with a crc32c that holds and one that does not
+    (https://github.com/d-v-b/refkv/blob/main/spec/refkv.md#42-range). "abc" is at
+    offsets 12 and 20 of files.blob, and "bar" at 43."""
+    buf = io.BytesIO()
+    w = VZipWriter(buf)
+    blob = w.url("files.blob")
+    abc = crc32c(b"abc")
+
+    def url(offset: int, data: bytes, crc: int | None = None) -> Range:
+        crc = crc32c(data) if crc is None else crc
+        return Range(source=blob, offset=offset, length=len(data), crc32c=crc)
+
+    # The CRC-32C check value, so the test data does not rest on the writer's CRC.
+    check = w.blob(b"123456789")
+    w.add_ranges("data", [Range(source=check, offset=0, length=9, crc32c=0xE3069283)])
+    w.add_ranges("data_bad", [Range(source=check, offset=0, length=9, crc32c=1)])
+    hidden = w.internal(w.add_hidden("abc", b"abc", compress=True))
+    w.add_ranges("key", [Range(source=hidden, offset=0, length=3, crc32c=abc)])
+    w.add_ranges("key_bad", [Range(source=hidden, offset=0, length=3, crc32c=1)])
+    w.add_ranges("url", [url(12, b"abc")])
+    w.add_ranges("url_bad", [url(12, b"abc", 1)])
+    # The three ranges lie close enough to share one read, the middle one unchecked.
+    w.add_ranges(
+        "shared",
+        [
+            url(12, b"abc"),
+            Range(source=blob, offset=20, length=3),
+            url(43, b"bar"),
+        ],
+    )
+    w.add_ranges(
+        "shared_bad",
+        [url(12, b"abc", 1), Range(source=blob, offset=20, length=3), url(43, b"bar")],
+    )
+    w.add_ranges("concat_bad", [Range(data=b"hi"), url(12, b"abc", 1)])
+    w.add_ranges("too_long", [Range(source=blob, offset=0, length=1 << 31, crc32c=0)])
+    # Malformed payloads, which the writer refuses: a literal range with a
+    # crc32c, and a crc32c past 2^32 - 1.
+    for key, payload in [
+        ("literal", b"\x2a\x01x\x30\x01"),
+        ("crc32c_too_large", b"\x20\x01\x30\x80\x80\x80\x80\x10"),
+    ]:
+        w._entry(key, b"", struct.pack("<HH", 0x7A76, len(payload)) + payload)
+        w._ref_names.add(key)
+    w.close()
+    (HERE / "checksums.vzip").write_bytes(buf.getvalue())
+
+
 def write_future_version() -> None:
     buf = io.BytesIO()
     w = VZipWriter(buf)
@@ -168,6 +218,7 @@ if __name__ == "__main__":
     write_pins(layout)
     write_errors()
     write_rows()
+    write_checksums()
     write_future_version()
     write_ome_zarr()
     print("wrote", sorted(p.name for p in HERE.glob("*.vzip")), "and simple_0.5.vzip")

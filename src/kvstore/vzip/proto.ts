@@ -137,6 +137,8 @@ export interface VzipRange {
   offset: bigint;
   length: bigint;
   data: Uint8Array | undefined;
+  // The CRC-32C of a source range's bytes, unsigned.
+  crc32c: number | undefined;
 }
 
 export interface VzipConcat {
@@ -154,11 +156,13 @@ export function decodeRange(buf: Uint8Array): VzipRange {
   let offset = 0n;
   let length = 0n;
   let data: Uint8Array | undefined;
+  let crc32c: number | undefined;
   for (const { number, value } of knownFields(buf, {
     1: VARINT,
     3: VARINT,
     4: VARINT,
     5: LEN,
+    6: VARINT,
   })) {
     switch (number) {
       case 1:
@@ -173,6 +177,9 @@ export function decodeRange(buf: Uint8Array): VzipRange {
       case 5:
         data = value as Uint8Array;
         break;
+      case 6:
+        crc32c = uint32(value as bigint);
+        break;
     }
   }
   if (data !== undefined && (source !== 0 || offset !== 0n || length !== 0n)) {
@@ -180,10 +187,13 @@ export function decodeRange(buf: Uint8Array): VzipRange {
       "literal range with non-zero source/offset/length",
     );
   }
+  if (data !== undefined && crc32c !== undefined) {
+    throw new VzipMalformedError("literal range with a crc32c");
+  }
   if (offset + length > MAX_UINT64) {
     throw new VzipMalformedError("offset + length exceeds 2^64 - 1");
   }
-  return { source, offset, length, data };
+  return { source, offset, length, data, crc32c };
 }
 
 /**

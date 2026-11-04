@@ -205,6 +205,112 @@ test("nearby ranges of a url source are fetched in one request", async () => {
   }
 });
 
+describe("a range with a crc32c", () => {
+  async function readWindow(
+    key: string,
+    byteRange?: { offset: number; length: number },
+  ) {
+    const { kvStoreContext } = await sharedKvStoreContext();
+    const response = await kvStoreContext.read(
+      await url("checksums.vzip", key),
+      { byteRange, throwIfMissing: true },
+    );
+    return response.response.text();
+  }
+
+  test.for([
+    // The check value of CRC-32C, in a data source.
+    ["data", undefined, "123456789", []],
+    ["data", { offset: 2, length: 3 }, "345", []],
+    ["key", undefined, "abc", []],
+    ["url", undefined, "abc", ["bytes=12-14"]],
+    // A partial window still reads the whole range.
+    ["url", { offset: 1, length: 1 }, "b", ["bytes=12-14"]],
+    // A shared read is cut up before the checks.
+    ["shared", undefined, "abcabcbar", ["bytes=12-45"]],
+    ["shared", { offset: 2, length: 2 }, "ca", ["bytes=12-20"]],
+    // An unchecked range is read only as far as the window needs.
+    ["shared", { offset: 4, length: 1 }, "b", ["bytes=21-21"]],
+    ["shared", { offset: 7, length: 1 }, "a", ["bytes=43-45"]],
+    // A range the window does not touch is neither read nor checked.
+    ["shared_bad", { offset: 3, length: 3 }, "abc", ["bytes=20-22"]],
+    ["concat_bad", { offset: 0, length: 2 }, "hi", []],
+  ] as const)("%s, window %o", async ([key, byteRange, expected, requests]) => {
+    const spy = vi.spyOn(globalThis, "fetch");
+    try {
+      expect(await readWindow(key, byteRange)).toEqual(expected);
+      const blobRanges = spy.mock.calls
+        .filter(([input]) =>
+          String(input instanceof Request ? input.url : input).endsWith(
+            "/files.blob",
+          ),
+        )
+        .map(([, init]) => new Headers(init?.headers).get("Range"));
+      expect(blobRanges).toEqual(requests);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  test.for(["data_bad", "key_bad", "url_bad", "shared_bad", "concat_bad"])(
+    "%s fails to read",
+    async (key) => {
+      await expect(readWindow(key)).rejects.toThrow(
+        /vzip resolution error.*crc32c/,
+      );
+    },
+  );
+
+  test("a bad checksum fails a window of unchanged bytes", async () => {
+    await expect(
+      readWindow("url_bad", { offset: 1, length: 1 }),
+    ).rejects.toThrow(/vzip resolution error.*crc32c/);
+  });
+
+  test("a bad checksum fails only the reads that need its range", async () => {
+    const results = await Promise.allSettled([
+      readWindow("url"),
+      readWindow("url_bad"),
+      readWindow("shared"),
+    ]);
+    expect(results.map((r) => r.status)).toEqual([
+      "fulfilled",
+      "rejected",
+      "fulfilled",
+    ]);
+  });
+
+  test("a literal range with a crc32c is malformed", async () => {
+    await expect(readWindow("literal")).rejects.toThrow(
+      /vzip payload error.*literal range with a crc32c/,
+    );
+  });
+
+  test("a crc32c past 2^32 - 1 is malformed", async () => {
+    await expect(readWindow("crc32c_too_large")).rejects.toThrow(
+      /vzip payload error.*uint32 exceeds/,
+    );
+  });
+
+  test("a range too long to read whole fails before any read", async () => {
+    const spy = vi.spyOn(globalThis, "fetch");
+    try {
+      await expect(
+        readWindow("too_long", { offset: 0, length: 1 }),
+      ).rejects.toThrow(/vzip request error/);
+      expect(
+        spy.mock.calls.filter(([input]) =>
+          String(input instanceof Request ? input.url : input).endsWith(
+            "/files.blob",
+          ),
+        ),
+      ).toEqual([]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
+
 describe("errors", () => {
   test("bytes entry", async () => {
     expect(await read("errors.vzip", "ok")).toEqual("fine");
