@@ -87,6 +87,7 @@ kvstore<root-kvstores>` with zero or more other
 
    zip/index
    vzip/index
+   phkv/index
    refkv/index
    ocdbt/index
    icechunk/index
