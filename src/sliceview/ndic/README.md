@@ -9,3 +9,7 @@ of [nd-image-codecs](https://github.com/fideus-labs/nd-image-codecs) (MIT, see `
 - Rebuild with `./build.sh`.
 - `ndic_zarr_bg.wasm` is 504,626 bytes, sha256 `0a52563eb0ab1bb7aa11991ce579b6856f98ff3852619a7e302cb0117c2d176f`.
 - The module also exports the `nd_zfp` codec and the encoders; Neuroglancer uses only `htj2k_decode` and `nd_lift_decode`.
+- `imagecodecs_htj2k` chunks (one bare HTJ2K codestream each) are decoded by wrapping the codestream in a minimal
+  `ndht` container (`wrapHtj2kCodestream` in `index.ts`) and calling `htj2k_decode`. The decoder reads reversible 5/3,
+  single-component, single-tile codestreams, with or without TLM/PLT markers, including streams cut down to a lower
+  resolution; lossy (9/7) streams are rejected.

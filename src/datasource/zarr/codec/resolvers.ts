@@ -30,6 +30,7 @@ import "#src/datasource/zarr/codec/eer/resolve.js";
 import "#src/datasource/zarr/codec/floatpred/resolve.js";
 import "#src/datasource/zarr/codec/gzip/resolve.js";
 import "#src/datasource/zarr/codec/htj2k/resolve.js";
+import "#src/datasource/zarr/codec/imagecodecs_htj2k/resolve.js";
 import "#src/datasource/zarr/codec/jpeg/resolve.js";
 import "#src/datasource/zarr/codec/jpeg2k/resolve.js";
 import "#src/datasource/zarr/codec/jpegls/resolve.js";

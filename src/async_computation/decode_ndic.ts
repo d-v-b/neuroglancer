@@ -16,11 +16,13 @@
 
 import {
   decodeNdicHtj2k,
+  decodeNdicHtj2kCodestream,
   decodeNdicLift,
 } from "#src/async_computation/decode_ndic_request.js";
 import { registerAsyncComputation } from "#src/async_computation/handler.js";
 import {
   decodeHtj2kChunk,
+  decodeHtj2kCodestream,
   decodeNdLiftChunk,
 } from "#src/sliceview/ndic/index.js";
 
@@ -41,6 +43,14 @@ registerAsyncComputation(
     configuration: unknown,
   ) => {
     const result = await decodeNdLiftChunk(data, shape, dtype, configuration);
+    return { value: result, transfer: [result.buffer] };
+  },
+);
+
+registerAsyncComputation(
+  decodeNdicHtj2kCodestream,
+  async (data: Uint8Array, shape: number[], dtype: string) => {
+    const result = await decodeHtj2kCodestream(data, shape, dtype);
     return { value: result, transfer: [result.buffer] };
   },
 );

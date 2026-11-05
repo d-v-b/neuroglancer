@@ -36,3 +36,8 @@ export const decodeNdicLift =
       configuration: unknown,
     ) => Uint8Array<ArrayBuffer>
   >("decodeNdicLift");
+
+/** Decodes a bare HTJ2K codestream (an `imagecodecs_htj2k` chunk) to little-endian samples of `dtype`. */
+export const decodeNdicHtj2kCodestream = asyncComputation<
+  (data: Uint8Array, shape: number[], dtype: string) => Uint8Array<ArrayBuffer>
+>("decodeNdicHtj2kCodestream");

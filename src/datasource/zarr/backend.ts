@@ -32,6 +32,7 @@ import "#src/datasource/zarr/codec/eer/decode.js";
 import "#src/datasource/zarr/codec/floatpred/decode.js";
 import "#src/datasource/zarr/codec/gzip/decode.js";
 import "#src/datasource/zarr/codec/htj2k/decode.js";
+import "#src/datasource/zarr/codec/imagecodecs_htj2k/decode.js";
 import "#src/datasource/zarr/codec/jpeg/decode.js";
 import "#src/datasource/zarr/codec/jpeg2k/decode.js";
 import "#src/datasource/zarr/codec/jpegls/decode.js";

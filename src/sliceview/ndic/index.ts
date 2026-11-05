@@ -73,3 +73,79 @@ export async function decodeNdLiftChunk(
     JSON.stringify(configuration),
   ) as Uint8Array<ArrayBuffer>;
 }
+
+function readUint32(data: Uint8Array, offset: number) {
+  return (
+    ((data[offset] << 24) |
+      (data[offset + 1] << 16) |
+      (data[offset + 2] << 8) |
+      data[offset + 3]) >>>
+    0
+  );
+}
+
+/**
+ * Wraps one bare HTJ2K codestream (as `imagecodecs_htj2k` stores a chunk) in the smallest nd-image-codecs
+ * `htj2k` container: the `ndht` header, with no plane index, followed by the codestream. `shape` is the
+ * chunk shape, whose leading entries must be 1 and whose last two entries must match the codestream's
+ * height and width.
+ */
+export function wrapHtj2kCodestream(
+  codestream: Uint8Array,
+  shape: readonly number[],
+): Uint8Array<ArrayBuffer> {
+  if (codestream[0] !== 0xff || codestream[1] !== 0x4f) {
+    throw new Error("HTJ2K codestream does not start with an SOC marker");
+  }
+  let width: number | undefined;
+  let height: number | undefined;
+  let levels: number | undefined;
+  for (let pos = 2; pos + 4 <= codestream.length; ) {
+    const marker = (codestream[pos] << 8) | codestream[pos + 1];
+    if (marker === 0xff90) break; // SOT: the main header is over
+    if (marker === 0xff51) {
+      // SIZ: Rsiz, Xsiz, Ysiz, XOsiz, YOsiz, ...
+      width =
+        readUint32(codestream, pos + 6) - readUint32(codestream, pos + 14);
+      height =
+        readUint32(codestream, pos + 10) - readUint32(codestream, pos + 18);
+    } else if (marker === 0xff52) {
+      // COD: Scod, progression, layers, MCT, then the decomposition levels.
+      levels = codestream[pos + 9];
+    }
+    pos += 2 + ((codestream[pos + 2] << 8) | codestream[pos + 3]);
+  }
+  if (width === undefined || height === undefined || levels === undefined) {
+    throw new Error("HTJ2K codestream has no SIZ or COD marker segment");
+  }
+  const rank = shape.length;
+  if (
+    rank < 2 ||
+    shape[rank - 2] !== height ||
+    shape[rank - 1] !== width ||
+    !shape.slice(0, rank - 2).every((n) => n === 1)
+  ) {
+    throw new Error(
+      `HTJ2K image of shape [${height}, ${width}] does not fill a chunk of shape [${shape}]`,
+    );
+  }
+  const headerSize = 8 + 4 * rank;
+  const container = new Uint8Array(headerSize + codestream.length);
+  container.set([0x6e, 0x64, 0x68, 0x74, 1, 0, levels, rank]); // "ndht", version 1, no index
+  const view = new DataView(container.buffer);
+  shape.forEach((n, i) => view.setUint32(8 + 4 * i, n, true));
+  container.set(codestream, headerSize);
+  return container;
+}
+
+/**
+ * Decodes one bare HTJ2K codestream (reversible 5/3, one component, one tile) to little-endian samples of
+ * `dtype`, as stored by the `imagecodecs_htj2k` Zarr codec.
+ */
+export async function decodeHtj2kCodestream(
+  codestream: Uint8Array,
+  shape: readonly number[],
+  dtype: string,
+): Promise<Uint8Array<ArrayBuffer>> {
+  return decodeHtj2kChunk(wrapHtj2kCodestream(codestream, shape), shape, dtype);
+}
