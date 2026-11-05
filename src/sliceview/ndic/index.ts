@@ -55,9 +55,55 @@ export async function decodeHtj2kChunk(
 }
 
 /**
+ * Clamps `wide` (little-endian int32 samples) to the range of `dtype` and returns them as that type's
+ * little-endian bytes. Only the integer types `nd_lift` handles (up to 32 bits) are supported.
+ */
+function saturate(
+  wide: Uint8Array,
+  dtype: string,
+): Uint8Array<ArrayBuffer> | undefined {
+  const values = new Int32Array(
+    wide.buffer,
+    wide.byteOffset,
+    wide.byteLength / 4,
+  );
+  const clamp = <
+    T extends Uint8Array | Int8Array | Uint16Array | Int16Array | Uint32Array,
+  >(
+    out: T,
+    min: number,
+    max: number,
+  ) => {
+    for (let i = 0; i < values.length; ++i) {
+      out[i] = Math.min(max, Math.max(min, values[i]));
+    }
+    return new Uint8Array(out.buffer as ArrayBuffer);
+  };
+  switch (dtype) {
+    case "uint8":
+      return clamp(new Uint8Array(values.length), 0, 255);
+    case "int8":
+      return clamp(new Int8Array(values.length), -128, 127);
+    case "uint16":
+      return clamp(new Uint16Array(values.length), 0, 65535);
+    case "int16":
+      return clamp(new Int16Array(values.length), -32768, 32767);
+    case "uint32":
+      return clamp(new Uint32Array(values.length), 0, 0x7fffffff);
+    default:
+      return undefined;
+  }
+}
+
+/**
  * Inverts an `nd_lift` transform: `chunk` holds the widened (little-endian int32) coefficient array of
  * shape `shape`; the result holds samples of `dtype` in C order. `configuration` is the codec's Zarr v3
  * configuration object.
+ *
+ * nd-image-codecs rejects a chunk whose restored values do not fit `dtype`, as a check for corruption. A
+ * chunk that holds a low-pass band of the data, such as the planes of a coarser level made from a
+ * lifted chunk, can leave the range by a few levels where the data steps to zero (a 5/3 low-pass
+ * overshoots), so this decoder, made for display, saturates those values instead of failing the chunk.
  */
 export async function decodeNdLiftChunk(
   chunk: Uint8Array,
@@ -66,12 +112,27 @@ export async function decodeNdLiftChunk(
   configuration: unknown,
 ): Promise<Uint8Array<ArrayBuffer>> {
   await ensureInitialized();
-  return nd_lift_decode(
-    chunk,
-    Uint32Array.from(shape),
-    dtype,
-    JSON.stringify(configuration),
-  ) as Uint8Array<ArrayBuffer>;
+  const shapeArray = Uint32Array.from(shape);
+  const configurationJson = JSON.stringify(configuration);
+  try {
+    return nd_lift_decode(
+      chunk,
+      shapeArray,
+      dtype,
+      configurationJson,
+    ) as Uint8Array<ArrayBuffer>;
+  } catch (e) {
+    if (!String(e).includes("does not narrow back to")) throw e;
+    const wide = nd_lift_decode(
+      chunk,
+      shapeArray,
+      "int32",
+      configurationJson,
+    ) as Uint8Array<ArrayBuffer>;
+    const clamped = saturate(wide, dtype);
+    if (clamped === undefined) throw e;
+    return clamped;
+  }
 }
 
 function readUint32(data: Uint8Array, offset: number) {

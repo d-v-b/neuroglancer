@@ -290,3 +290,30 @@ test("rejects an nd_lift configuration with an unsupported version or dimension"
     ),
   ).toThrow(/nd_lift dimension 3 is outside \[0, 3\)/);
 });
+
+function asUint16(b: Uint8Array) {
+  return new Uint16Array(b.buffer, b.byteOffset, b.byteLength / 2);
+}
+
+test("nd_lift saturates restored values that leave the array's range instead of failing the chunk", async () => {
+  // A low-pass band of data that steps to zero undershoots below zero, and a bright one can overshoot the maximum.
+  const coefficients = new Int32Array([5, -3, 70000, 9, 1, 2, 3, 4]);
+  const bytes = new Uint8Array(coefficients.buffer);
+  const none = { version: "0.1", transforms: [] };
+  const u16 = await decodeNdLiftChunk(bytes, [2, 2, 2], "uint16", none);
+  expect(asUint16(u16)).toEqual(new Uint16Array([5, 0, 65535, 9, 1, 2, 3, 4]));
+  const u8 = await decodeNdLiftChunk(bytes, [2, 2, 2], "uint8", none);
+  expect(u8).toEqual(new Uint8Array([5, 0, 255, 9, 1, 2, 3, 4]));
+  const i16 = await decodeNdLiftChunk(bytes, [2, 2, 2], "int16", none);
+  expect(new Int16Array(i16.buffer, i16.byteOffset, 8)).toEqual(
+    new Int16Array([5, -3, 32767, 9, 1, 2, 3, 4]),
+  );
+  // Values that fit are returned unchanged.
+  const fits = await decodeNdLiftChunk(
+    new Uint8Array(new Int32Array([1, 2, 3, 4, 5, 6, 7, 8]).buffer),
+    [2, 2, 2],
+    "uint16",
+    none,
+  );
+  expect(asUint16(fits)).toEqual(new Uint16Array([1, 2, 3, 4, 5, 6, 7, 8]));
+});
