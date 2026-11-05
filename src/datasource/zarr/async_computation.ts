@@ -8,5 +8,6 @@ import "#src/async_computation/decode_jpegxr.js";
 import "#src/async_computation/decode_jxl.js";
 import "#src/async_computation/decode_lerc.js";
 import "#src/async_computation/decode_ljpeg.js";
+import "#src/async_computation/decode_ndic.js";
 import "#src/async_computation/decode_png.js";
 import "#src/async_computation/decode_webp.js";

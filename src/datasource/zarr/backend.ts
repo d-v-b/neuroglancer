@@ -31,6 +31,7 @@ import {
 import "#src/datasource/zarr/codec/eer/decode.js";
 import "#src/datasource/zarr/codec/floatpred/decode.js";
 import "#src/datasource/zarr/codec/gzip/decode.js";
+import "#src/datasource/zarr/codec/htj2k/decode.js";
 import "#src/datasource/zarr/codec/jpeg/decode.js";
 import "#src/datasource/zarr/codec/jpeg2k/decode.js";
 import "#src/datasource/zarr/codec/jpegls/decode.js";
@@ -40,6 +41,7 @@ import "#src/datasource/zarr/codec/lerc/decode.js";
 import "#src/datasource/zarr/codec/ljpeg/decode.js";
 import "#src/datasource/zarr/codec/lzw/decode.js";
 import "#src/datasource/zarr/codec/n5_default/decode.js";
+import "#src/datasource/zarr/codec/nd_lift/decode.js";
 import "#src/datasource/zarr/codec/numcodecs_bz2/decode.js";
 import "#src/datasource/zarr/codec/numcodecs_fixedscaleoffset/decode.js";
 import "#src/datasource/zarr/codec/numcodecs_lz4/decode.js";
