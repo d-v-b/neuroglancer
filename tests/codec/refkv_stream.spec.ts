@@ -58,13 +58,13 @@ test("rejects a stream format it does not decode", () => {
       [
         {
           name: "refkv.stream",
-          configuration: { format: "aac", setup: "EZA=" },
+          configuration: { format: "opus" },
         },
       ],
       { dataType: DataType.FLOAT32, chunkShape: [1024, 2] },
     ),
   ).toThrow(
-    "aac streams are not decoded, only h264, hevc, av1 and vp9 video and mp3 and flac audio",
+    "opus streams are not decoded, only h264, hevc, av1 and vp9 video and mp3, aac and flac audio",
   );
 });
 

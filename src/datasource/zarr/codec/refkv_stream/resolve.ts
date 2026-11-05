@@ -25,7 +25,9 @@
  * and the inner chunks of a FLAC file's samples
  * ([spec/zarrify/flac.md, section 4.1](https://github.com/d-v-b/refkv/blob/main/spec/zarrify/flac.md#41-the-array)).
  * The configuration is the stream's `format`, "h264", "hevc", "av1", "vp9",
- * "mp3" or "flac" ("aac" streams are not decoded). For the video formats, it
+ * "mp3", "aac" or "flac". For "aac", the `setup` is base64 of the
+ * AudioSpecificConfig, and a chunk's shape is `[samples, channels]`, of
+ * `float32`. For the video formats, it
  * also has the stream's `setup` (base64 of the avcC, hvcC, av1C or vpcC box's
  * payload) and the `plane` the array holds ("y", "u" or "v"), and a chunk's shape
  * is `[pictures, height, width]`, of `uint8` for 8 bits a sample, or `uint16` for
@@ -51,11 +53,17 @@ import {
 } from "#src/util/json.js";
 import type { Plane } from "#src/util/refkv_stream.js";
 import type { VideoFormat } from "#src/util/refkv_stream.js";
-import { base64Bytes, flacStream, PLANES } from "#src/util/refkv_stream.js";
+import {
+  aacStream,
+  base64Bytes,
+  flacStream,
+  PLANES,
+} from "#src/util/refkv_stream.js";
 
 export type Configuration =
   | { format: VideoFormat; setup: string; plane: Plane }
   | { format: "mp3" }
+  | { format: "aac"; setup: string }
   | { format: "flac"; setup: string };
 
 registerCodec({
@@ -79,6 +87,21 @@ registerCodec({
         );
       }
       return { configuration: { format } };
+    }
+    if (format === "aac") {
+      const setup = verifyObjectProperty(configuration, "setup", verifyString);
+      aacStream(base64Bytes(setup));
+      if (decodedArrayInfo.dataType !== DataType.FLOAT32) {
+        throw new Error(
+          `refkv.stream: aac samples are float32, not ${DataType[decodedArrayInfo.dataType].toLowerCase()}`,
+        );
+      }
+      if (decodedArrayInfo.chunkShape.length !== 2) {
+        throw new Error(
+          `refkv.stream: an aac chunk is [samples, channels], not ${JSON.stringify(decodedArrayInfo.chunkShape)}`,
+        );
+      }
+      return { configuration: { format, setup } };
     }
     if (format === "flac") {
       const setup = verifyObjectProperty(configuration, "setup", verifyString);
@@ -108,7 +131,7 @@ registerCodec({
       format !== "vp9"
     ) {
       throw new Error(
-        `refkv.stream: ${format} streams are not decoded, only h264, hevc, av1 and vp9 video and mp3 and flac audio`,
+        `refkv.stream: ${format} streams are not decoded, only h264, hevc, av1 and vp9 video and mp3, aac and flac audio`,
       );
     }
     const setup = verifyObjectProperty(configuration, "setup", verifyString);

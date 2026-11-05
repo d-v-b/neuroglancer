@@ -218,6 +218,69 @@ export function hevcProfile(hvcc: Uint8Array): string {
       : `profile ${profile}`;
 }
 
+/** What an AudioDecoder needs to know of an AAC stream, from its
+ * AudioSpecificConfig (ISO/IEC 14496-3, 1.6.2.1): its codec string, its sample
+ * rate, and the samples a frame decodes to for each channel. */
+export interface AacStream {
+  codec: string;
+  sampleRate: number;
+  samplesPerFrame: number;
+}
+
+const AAC_RATES = [
+  96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025,
+  8000, 7350,
+];
+
+/** An AAC-LC, HE-AAC or HE-AAC v2 stream's AudioSpecificConfig, as refkv's MP4
+ * profile reads it: HE-AAC signaled explicitly (object type 5 or 29 first) or
+ * backward-compatibly (after the config, the sync words 0x2B7 and 0x548). */
+export function aacStream(asc: Uint8Array): AacStream {
+  const r = new Bits(asc);
+  const fail = () =>
+    new Error(
+      "refkv.stream: the setup is not an AudioSpecificConfig this reads",
+    );
+  const objectType = () => {
+    const aot = r.bits(5);
+    return aot === 31 ? 32 + r.bits(6) : aot;
+  };
+  const sampleRate = () => {
+    const index = r.bits(4);
+    if (index === 15) return r.bits(24);
+    const rate = AAC_RATES[index];
+    if (rate === undefined) throw fail();
+    return rate;
+  };
+  let aot = objectType();
+  let rate = sampleRate();
+  const channelConfiguration = r.bits(4);
+  let ps = aot === 29;
+  const explicit = aot === 5 || ps;
+  let sbr = explicit ? sampleRate() : 0;
+  if (explicit) aot = objectType();
+  if (aot !== 2) throw fail();
+  r.bit(); // frameLengthFlag
+  const core = r.bit();
+  r.bit(); // extensionFlag
+  if (!explicit && !core && channelConfiguration !== 0) {
+    try {
+      if (r.bits(11) === 0x2b7 && r.bits(5) === 5 && r.bit() === 1) {
+        sbr = sampleRate();
+        ps = r.bits(11) === 0x548 && r.bit() === 1;
+      }
+    } catch {
+      // a config that ends after its fields, of AAC-LC
+    }
+  }
+  if (sbr !== 0) rate = sbr;
+  return {
+    codec: `mp4a.40.${ps ? 29 : sbr !== 0 ? 5 : 2}`,
+    sampleRate: rate,
+    samplesPerFrame: sbr !== 0 ? 2048 : 1024,
+  };
+}
+
 /** What an AudioDecoder needs to know of an MP3 stream, from a frame's
  * header: its sample rate, its channels, and the samples a frame decodes to
  * for each channel. */
@@ -399,7 +462,7 @@ class Bits {
   constructor(private b: Uint8Array) {}
   bit() {
     if (this.at >= this.b.length * 8) {
-      throw new Error("refkv.stream: the SPS ends early");
+      throw new Error("refkv.stream: the setup ends early");
     }
     const v = (this.b[this.at >> 3] >> (7 - (this.at & 7))) & 1;
     ++this.at;
