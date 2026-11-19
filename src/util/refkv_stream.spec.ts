@@ -397,6 +397,21 @@ describe("refkv.stream", () => {
     expect([shared.size, shared.bytes()]).toEqual([2, 16]);
     await shared.take("s", Uint8Array.from([5]), "y", decode(9));
     expect(shared.size).toBe(2);
+    // a decoding that fails for the request that started it (cancelled, say):
+    // that request rejects, and the one waiting on it decodes the chunk itself
+    const b = Uint8Array.from([6]);
+    const cancelled = async (): Promise<ChunkPlanes> => {
+      runs += 1;
+      throw new Error("aborted");
+    };
+    runs = 0;
+    const [first, second] = await Promise.allSettled([
+      shared.take("s", b, "y", cancelled),
+      shared.take("s", b, "u", decode(4)),
+    ]);
+    expect(first.status).toBe("rejected");
+    expect(second.status === "fulfilled" && second.value.length).toBe(4);
+    expect(runs).toBe(2);
   });
 
   test("rejects a header that ends inside a varint", () => {

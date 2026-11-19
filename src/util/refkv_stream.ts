@@ -880,7 +880,8 @@ function heldBytes(planes: ChunkPlanes | undefined) {
  * for when they are: a chunk's Y, U and V are one chunk's bytes, so reading
  * them decodes it once. A plane is given once; at most `limit` bytes are kept,
  * the oldest chunk dropped first. While a chunk decodes, a request for another
- * of its planes waits for that decoding. */
+ * of its planes waits for that decoding, and decodes the chunk itself if that
+ * decoding fails (as when the request that started it is cancelled). */
 export class SharedPlanes {
   private entries = new Map<string, Entry[]>();
   private order: Entry[] = [];
@@ -900,9 +901,11 @@ export class SharedPlanes {
       .get(key)
       ?.find((e) => e.setup === setup && sameBytes(e.bytes, bytes));
     if (found !== undefined) {
-      const decoded = await found.planes;
-      const data = decoded.data[plane];
-      if (data !== undefined) {
+      // A decoding that fails, perhaps because the request that started it
+      // was cancelled, is started again for this one, which may not be.
+      const decoded = await found.planes.catch(() => undefined);
+      const data = decoded?.data[plane];
+      if (decoded !== undefined && data !== undefined) {
         delete decoded.data[plane];
         if (heldBytes(decoded) === 0) this.drop(found);
         return data;
