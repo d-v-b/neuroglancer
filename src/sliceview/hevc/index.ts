@@ -132,10 +132,10 @@ export function decodeHevcWith(
   const total =
     nalUnits.reduce((n, u) => n + u.length, 0) +
     units.reduce((n, u) => n + u.length, 0);
-  // the input, then `more`, a picture's 5 fields and a plane's 4
-  const input = x.malloc(total + 40);
-  if (input === 0) throw new Error("refkv.stream: out of memory for HEVC");
-  const scratch = input + total + ((4 - (total % 4)) % 4);
+  // `more`, a picture's 5 fields and a plane's 4, then the input
+  const scratch = x.malloc(40 + total);
+  if (scratch === 0) throw new Error("refkv.stream: out of memory for HEVC");
+  const input = scratch + 40;
   const ctx = x.hevc_new();
   let planes: ChunkPlanes | undefined;
   try {
@@ -200,7 +200,16 @@ export function decodeHevcWith(
         const out = planes.data[plane];
         if (out === undefined) continue;
         const ptr = x.hevc_plane(img, channel, scratch + 24);
-        const [w, h, stride] = new Int32Array(x.memory.buffer, scratch + 24, 3);
+        const [w, h, stride, planeBits] = new Int32Array(
+          x.memory.buffer,
+          scratch + 24,
+          4,
+        );
+        if (planeBits !== depth) {
+          throw new Error(
+            `refkv.stream: an HEVC picture's ${plane} plane is of ${planeBits} bits, not its luma's ${depth}`,
+          );
+        }
         const [ph, pw] = planes.shapes[plane];
         if (w !== pw || h !== ph) {
           throw new Error(
@@ -242,7 +251,7 @@ export function decodeHevcWith(
     }
   } finally {
     if (ctx !== 0) x.hevc_free(ctx);
-    x.free(input);
+    x.free(scratch);
   }
   return planes ?? newChunkPlanes(frames, 0, 0, depth, chroma);
 }

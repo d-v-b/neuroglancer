@@ -32,7 +32,8 @@
  * value the browser rounded or clipped comes back a few levels off).
  *
  * HEVC is decoded by libde265 built to wasm (`#src/sliceview/hevc`), in
- * software, the same in every browser, its planes shared so too: WebCodecs'
+ * software, the same in every browser, in a worker of the async computation
+ * pool, its planes shared so too: WebCodecs'
  * HEVC is unfit for exact pixels. Measured on macOS against ffmpeg's decoding of refkv's fixtures and
  * of VideoToolbox's streams, WebKit 26 widens a limited-range stream and
  * Chrome 148 narrows a full-range one, either's chroma then up to 70 levels
@@ -77,11 +78,12 @@
  * gives them in its own format, which `copyFlacSamples` converts back.
  */
 
+import { decodeHevcChunk } from "#src/async_computation/decode_hevc_request.js";
+import { requestAsyncComputation } from "#src/async_computation/request.js";
 import { registerCodec } from "#src/datasource/zarr/codec/decode.js";
 import type { CodecArrayInfo } from "#src/datasource/zarr/codec/index.js";
 import { CodecKind } from "#src/datasource/zarr/codec/index.js";
 import type { Configuration } from "#src/datasource/zarr/codec/refkv_stream/resolve.js";
-import { decodeHevc } from "#src/sliceview/hevc/index.js";
 import { DataType } from "#src/util/data_type.js";
 import type {
   ChunkPlanes,
@@ -600,12 +602,15 @@ registerCodec({
             chroma,
           );
         }
-        signal.throwIfAborted();
-        const { units, positions } = parseStreamChunk(encoded);
-        return decodeHevc(
+        // in a worker of the pool, off this one: a chunk deep in a stack of
+        // few keyframes decodes every picture before it. The bytes are copied,
+        // not transferred, since `SHARED` keeps them to match later requests.
+        return requestAsyncComputation(
+          decodeHevcChunk,
+          signal,
+          undefined,
           base64Bytes(setup),
-          units,
-          positions,
+          encoded,
           frames,
           depth,
           chroma,
