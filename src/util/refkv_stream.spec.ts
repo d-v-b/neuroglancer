@@ -24,8 +24,7 @@ import {
   copyFlacSamples,
   copyPicture,
   flacStream,
-  hevcCodecString,
-  hevcStreamColor,
+  hvccNalUnits,
   mp3Stream,
   narrowRange,
   newChunkPlanes,
@@ -56,10 +55,7 @@ const fromHex = (h: string) =>
   Uint8Array.from(h.match(/../g)!, (b) => parseInt(b, 16));
 
 // hvcC payloads: refkv's (rust/refkv-ir/src/mp4.rs), x265's Main with three
-// temporal sub-layers and its Main 10 (BT.2020 matrix, limited range); and,
-// without their SEI arrays, x265's Main with sub-layers in full range and the
-// BT.709 matrix, and macOS VideoToolbox's Main in full range and BT.709, whose
-// SPS has short-term reference picture sets and scaling lists enabled
+// temporal sub-layers and its Main 10, each with a VPS, an SPS and a PPS
 const HVCC_SUB_LAYERS = fromHex(
   "0101600000009000000000001ef000fcfdf8f800001b03a00001001e40010c04" +
     "ffff01600000030090000003000003001e00009594aca5650240a10001002e42" +
@@ -71,16 +67,6 @@ const HVCC_MAIN10 = fromHex(
     "ffff02200000030090000003000003001e959409a10001002b42010102200000" +
     "030090000003000003001ea0208313659596e4caf016a1224120800000030080" +
     "00000504a2000100064401c173d089",
-);
-const X265_FULL_HVCC = fromBase64(
-  "AQFgAAAAkAAAAAAAHvAA/P34+AAAGwOgAAEAHkABDAT//wFgAAADAJAAAAMAAAMAHgAAlZSs" +
-    "pWUCQKEAAQAxQgEEAWAAAAMAkAAAAwAAAwAeAACgIIMWWVlKylZbkyvAW4CAgIIAAAMAAgAA" +
-    "AwAUEKIAAQAGRAHBc9CJ",
-);
-const VIDEOTOOLBOX_HVCC = fromBase64(
-  "AQFgAAAAsAAAAAAAHvAA/P34+AAADwOgAAEAGEABDAH//wFgAAADALAAAAMAAAMAHhcCQKEA" +
-    "AQAqQgEBAWAAAAMAsAAAAwAAAwAeoBQgQcGMTiBe5FkUv/Ln8T+sBbgQEAgEogABAAdEAcBy" +
-    "8FMk",
 );
 
 function chunk(): Uint8Array<ArrayBuffer> {
@@ -106,9 +92,13 @@ describe("refkv.stream", () => {
   // bits, as refkv writes each in its `setup`
   const AV1C = Uint8Array.of(0x81, 0x04, 0x4c, 0x00);
   const VPCC = Uint8Array.of(1, 0, 0, 0, 2, 10, 0xa2, 2, 2, 2, 0, 0);
-  const HVCC_FORMAT = new Uint8Array(23);
-  HVCC_FORMAT[16] = 0xfc | 2;
-  HVCC_FORMAT[17] = 0xf8 | 4;
+  const hvccFormat = (chromaFormat: number, depth: number) => {
+    const hvcc = new Uint8Array(23);
+    hvcc.set([1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xf0, 0, 0xfc]);
+    hvcc[16] = 0xfc | chromaFormat;
+    hvcc[17] = 0xf8 | (depth - 8);
+    return hvcc;
+  };
 
   test("the codec strings of AV1 and VP9", () => {
     expect(av1CodecString(AV1C)).toBe("av01.0.04M.10");
@@ -132,9 +122,18 @@ describe("refkv.stream", () => {
       depth: 10,
       chroma: "4:2:0",
     });
-    expect(streamFormat("hevc", HVCC_FORMAT, true)).toEqual({
+    expect(streamFormat("hevc", hvccFormat(2, 12), true)).toEqual({
       depth: 12,
       chroma: "4:2:2",
+    });
+    // an H5J file's channels: x265's Range Extensions, 4:0:0 of 12 bits
+    expect(streamFormat("hevc", hvccFormat(0, 12), true)).toEqual({
+      depth: 12,
+      chroma: "4:0:0",
+    });
+    expect(streamFormat("hevc", hvccFormat(1, 8), false)).toEqual({
+      depth: 8,
+      chroma: "4:2:0",
     });
     expect(streamFormat("av1", AV1C, true)).toEqual({
       depth: 10,
@@ -246,19 +245,25 @@ describe("refkv.stream", () => {
       "avc1.4d401e",
     );
 
-    // HEVC: the profile, the compatibility flags reversed (Main's 0x60000000
-    // is 6, Main 10's 0x20000000 is 4), tier and level, and the constraint
-    // bytes without the trailing zero ones; a profile space, the high tier and
-    // no constraint flags
-    expect(hevcCodecString(HVCC_SUB_LAYERS)).toBe("hvc1.1.6.L30.90");
-    expect(hevcCodecString(HVCC_MAIN10)).toBe("hvc1.2.4.L30.90");
-    expect(hevcCodecString(HVCC_MAIN10, "hev1")).toBe("hev1.2.4.L30.90");
-    expect(hevcCodecString(VIDEOTOOLBOX_HVCC)).toBe("hvc1.1.6.L30.B0");
-    const header = new Uint8Array(23);
-    header.set([1, 0x62, 0x40, 0, 0, 1, 0, 0, 0, 0, 0, 0, 120, 0xf0, 0, 0xfc]);
-    expect(hevcCodecString(header)).toBe("hvc1.A2.80000002.H120");
-    header.set([0x88, 0, 0, 0, 0, 0x0c], 6);
-    expect(hevcCodecString(header)).toBe("hvc1.A2.80000002.H120.88.0.0.0.0.C");
+    // HEVC: the NAL units' lengths' size and the parameter sets, VPS (type
+    // 32), SPS (33) and PPS (34), each without its 16-bit size
+    for (const hvcc of [HVCC_SUB_LAYERS, HVCC_MAIN10]) {
+      const { lengthSize, nalUnits } = hvccNalUnits(hvcc);
+      expect(lengthSize).toBe(4);
+      expect(nalUnits.map((u) => (u[0] >> 1) & 0x3f)).toEqual([32, 33, 34]);
+      expect(nalUnits[2].length).toBe(6);
+    }
+    expect(hvccNalUnits(hvccFormat(0, 12))).toEqual({
+      lengthSize: 1,
+      nalUnits: [],
+    });
+
+    // 4:0:0 planes: the luma alone
+    const gray = newChunkPlanes(2, 3, 2, 12, "4:0:0");
+    expect(gray.shapes.y).toEqual([2, 3]);
+    expect(Object.keys(gray.data)).toEqual(["y"]);
+    expect(gray.data.y).toBeInstanceOf(Uint16Array);
+    expect(gray.data.y!.length).toBe(12);
 
     // a 3 x 2 picture (chroma 2 x 1) with row padding, as I420 and as NV12,
     // at position 1 of a 2-picture chunk
@@ -347,19 +352,6 @@ describe("refkv.stream", () => {
       matrix: "smpte170m",
     });
     expect(streamColor(BFRAMES_AVCC)).toEqual({ fullRange: false });
-    expect(hevcStreamColor(HVCC_SUB_LAYERS)).toEqual({ fullRange: false });
-    expect(hevcStreamColor(HVCC_MAIN10)).toEqual({
-      fullRange: false,
-      matrix: "bt2020-ncl",
-    });
-    expect(hevcStreamColor(X265_FULL_HVCC)).toEqual({
-      fullRange: true,
-      matrix: "bt709",
-    });
-    expect(hevcStreamColor(VIDEOTOOLBOX_HVCC)).toEqual({
-      fullRange: true,
-      matrix: "bt709",
-    });
 
     // full-range planes (WebKit's, for a limited-range stream) narrowed back
     const wide = newChunkPlanes(1, 2, 2);
@@ -405,6 +397,21 @@ describe("refkv.stream", () => {
     expect([shared.size, shared.bytes()]).toEqual([2, 16]);
     await shared.take("s", Uint8Array.from([5]), "y", decode(9));
     expect(shared.size).toBe(2);
+    // a decoding that fails for the request that started it (cancelled, say):
+    // that request rejects, and the one waiting on it decodes the chunk itself
+    const b = Uint8Array.from([6]);
+    const cancelled = async (): Promise<ChunkPlanes> => {
+      runs += 1;
+      throw new Error("aborted");
+    };
+    runs = 0;
+    const [first, second] = await Promise.allSettled([
+      shared.take("s", b, "y", cancelled),
+      shared.take("s", b, "u", decode(4)),
+    ]);
+    expect(first.status).toBe("rejected");
+    expect(second.status === "fulfilled" && second.value.length).toBe(4);
+    expect(runs).toBe(2);
   });
 
   test("rejects a header that ends inside a varint", () => {
@@ -426,9 +433,44 @@ describe("refkv.stream", () => {
   });
 
   test("rejects a setup that is not an hvcC payload", () => {
-    expect(() => hevcCodecString(BFRAMES_AVCC)).toThrow(
+    expect(() => hvccNalUnits(BFRAMES_AVCC)).toThrow(
       "not an hvcC box's payload",
     );
+    expect(() => streamFormat("hevc", BFRAMES_AVCC, false)).toThrow(
+      "not an hvcC box's payload",
+    );
+  });
+
+  test("rejects an hvcC payload whose NAL units overrun it", () => {
+    expect(() =>
+      hvccNalUnits(HVCC_SUB_LAYERS.subarray(0, HVCC_SUB_LAYERS.length - 1)),
+    ).toThrow("NAL unit arrays overrun it");
+  });
+
+  test("rejects an hvcC payload of 3-byte NAL unit lengths", () => {
+    const hvcc = HVCC_SUB_LAYERS.slice();
+    hvcc[21] = (hvcc[21] & 0xfc) | 2;
+    expect(() => hvccNalUnits(hvcc)).toThrow("lengths are 3 bytes");
+  });
+
+  test("rejects HEVC of 4:4:4", () => {
+    const hvcc = HVCC_SUB_LAYERS.slice();
+    hvcc[16] |= 3;
+    expect(() => streamFormat("hevc", hvcc, false)).toThrow(
+      "HEVC of 4:4:4 is not decoded",
+    );
+  });
+
+  test("rejects a WebCodecs picture for 4:0:0 planes", () => {
+    expect(() =>
+      copyPicture(
+        "I420",
+        new Uint8Array(9),
+        [],
+        newChunkPlanes(1, 3, 2, 8, "4:0:0"),
+        0,
+      ),
+    ).toThrow("not 4:0:0 of 8 bits");
   });
 
   test("rejects a picture that is not 8-bit 4:2:0 or RGB", () => {

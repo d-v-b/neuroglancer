@@ -203,10 +203,11 @@ export function decodeRange(buf: Uint8Array): VzipRange {
 export function decodeReference(
   headerId: number,
   payload: Uint8Array,
+  maxPayload = MAX_PAYLOAD,
 ): VzipReference {
-  if (payload.length > MAX_PAYLOAD) {
+  if (payload.length > maxPayload) {
     throw new VzipMalformedError(
-      `reference payload of ${payload.length} bytes exceeds ${MAX_PAYLOAD}`,
+      `reference payload of ${payload.length} bytes exceeds ${maxPayload}`,
     );
   }
   if (headerId === 0x7a76) return [decodeRange(payload)];

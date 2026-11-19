@@ -29,7 +29,8 @@
  * AudioSpecificConfig, and a chunk's shape is `[samples, channels]`, of
  * `float32`. For the video formats, it
  * also has the stream's `setup` (base64 of the avcC, hvcC, av1C or vpcC box's
- * payload) and the `plane` the array holds ("y", "u" or "v"), and a chunk's shape
+ * payload) and the `plane` the array holds ("y", "u" or "v"; "y" alone of a
+ * 4:0:0 HEVC stream, such as an H5J file's channels), and a chunk's shape
  * is `[pictures, height, width]`, of `uint8` for 8 bits a sample, or `uint16` for
  * 10 or 12 (the sample's value, not scaled). For "mp3", a chunk's shape is
  * `[samples, channels]`, of `float32`. For "flac", the `setup` is base64 of
@@ -58,6 +59,7 @@ import {
   base64Bytes,
   flacStream,
   PLANES,
+  streamFormat,
 } from "#src/util/refkv_stream.js";
 
 export type Configuration =
@@ -156,6 +158,18 @@ registerCodec({
       throw new Error(
         `refkv.stream: a ${format} plane's chunk is [pictures, height, width], not ${JSON.stringify(decodedArrayInfo.chunkShape)}`,
       );
+    }
+    if (format === "hevc") {
+      const { chroma } = streamFormat(
+        format,
+        base64Bytes(setup),
+        dataType === DataType.UINT16,
+      );
+      if (chroma === "4:0:0" && plane !== "y") {
+        throw new Error(
+          `refkv.stream: a 4:0:0 HEVC stream has no ${plane} plane, only y`,
+        );
+      }
     }
     return { configuration: { format, setup, plane } };
   },

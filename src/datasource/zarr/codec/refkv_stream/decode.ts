@@ -15,7 +15,7 @@
  */
 
 /**
- * @file Decodes `refkv.stream` chunks of H.264, HEVC, AV1 and VP9 video with WebCodecs'
+ * @file Decodes `refkv.stream` chunks of H.264, AV1 and VP9 video with WebCodecs'
  * VideoDecoder, in the worker: the frames are fed in order, each tagged with
  * its index as its timestamp, which the decoder gives the picture it decodes
  * to; a picture is copied to its position in the chunk as the decoder gives
@@ -31,23 +31,21 @@
  * SPS (H.264 E.1), and a warning says once that the values are not exact (a
  * value the browser rounded or clipped comes back a few levels off).
  *
- * HEVC is shown only as the decoder gives it: 4:2:0 of the stream's bit depth
- * (I420P10 for 10 bits) in the stream's range, by its SPS (H.265 E.2), or not
- * at all. A browser's range conversion of HEVC is not invertible: measured
- * against ffmpeg's decoding of refkv's fixtures and of VideoToolbox's
- * streams, on macOS, WebKit 26 widens a limited-range stream and Chrome 148
- * narrows a full-range one, and either's chroma then differs from the
- * stream's by up to 70 levels, while each gives the stream's own range
- * exactly. WebCodecs decodes HEVC only where the platform has a decoder for it
- * (Chrome and Edge with a hardware decoder, Safari on Apple's platforms; not
- * Firefox), so the configuration is checked with
- * `VideoDecoder.isConfigSupported` first; a browser that cannot decode it, or
- * that converts its pictures (WebKit gives 10-bit pictures as 8-bit NV12, and
- * Chrome 10-bit ones in GPU memory of no format, which WebCodecs cannot copy),
- * fails with an error that says so. One difference shows in neither the
- * stream nor the picture: WebKit's chroma of x265's streams differs from the
- * stream's by up to 58 levels even in the stream's own range (its luma, and
- * VideoToolbox's streams, an iPhone's encoder, are exact).
+ * HEVC is decoded by libde265 built to wasm (`#src/sliceview/hevc`), in
+ * software, the same in every browser, in a worker of the async computation
+ * pool, its planes shared so too: WebCodecs'
+ * HEVC is unfit for exact pixels. Measured on macOS against ffmpeg's decoding of refkv's fixtures and
+ * of VideoToolbox's streams, WebKit 26 widens a limited-range stream and
+ * Chrome 148 narrows a full-range one, either's chroma then up to 70 levels
+ * off; WebKit's chroma of x265's streams is up to 58 levels off even in the
+ * stream's own range, which nothing in the picture shows; WebKit gives 10-
+ * and 12-bit pictures as 8-bit NV12, and Chrome gives pictures of more than 8
+ * bits or 4:2:2 or 4:0:0 in GPU memory of no format, which WebCodecs cannot
+ * copy; Firefox decodes no HEVC, and Chrome none without a hardware decoder.
+ * libde265 gives every plane of 4:0:0, 4:2:0 and 4:2:2 pictures of 8 to 16
+ * bits as the stream's (as ffmpeg's decoding of refkv's HEVC fixtures, and of
+ * Janelia's H5J stacks, sample for sample), at about 8 ms a 1216 x 568
+ * picture of 12 bits.
  *
  * AV1 and VP9 are decoded in software when the browser lets a page ask
  * (`prefer-software`), since Chrome's hardware path gives 10-bit pictures in GPU
@@ -58,9 +56,7 @@
  *
  * Measured on macOS against ffmpeg's decoding of refkv's fixtures, whole tracks
  * through `decodeVideo`: Chrome 148 gives exact planes of 10-bit H.264, of 8-
- * and 10-bit AV1, and of VP9 of 8, 10 and 12 bits and 4:2:0 and 4:2:2, and of HEVC
- * only 8-bit 4:2:0 (more bits or 4:2:2 come in GPU memory of no format, and it has
- * no software decoder to ask for). WebKit 26 gives exact planes of 8-bit AV1 and
+ * and 10-bit AV1, and of VP9 of 8, 10 and 12 bits and 4:2:0 and 4:2:2. WebKit 26 gives exact planes of 8-bit AV1 and
  * VP9, and converts or cannot copy the others; Firefox 150 gives RGB of 8-bit AV1
  * and VP9, up to 48 levels off at sharp edges, and decodes none of the others.
  *
@@ -82,6 +78,8 @@
  * gives them in its own format, which `copyFlacSamples` converts back.
  */
 
+import { decodeHevcChunk } from "#src/async_computation/decode_hevc_request.js";
+import { requestAsyncComputation } from "#src/async_computation/request.js";
 import { registerCodec } from "#src/datasource/zarr/codec/decode.js";
 import type { CodecArrayInfo } from "#src/datasource/zarr/codec/index.js";
 import { CodecKind } from "#src/datasource/zarr/codec/index.js";
@@ -104,9 +102,6 @@ import {
   copyFlacSamples,
   copyPicture,
   flacStream,
-  hevcCodecString,
-  hevcProfile,
-  hevcStreamColor,
   isExactFormat,
   isRgbFormat,
   mp3Stream,
@@ -137,11 +132,7 @@ function warnConverted(what: string) {
  * string. */
 const SUPPORTED = new Map<string, Promise<boolean>>();
 
-async function checkSupported(
-  config: VideoDecoderConfig,
-  what: string,
-  hevc: boolean,
-) {
+async function checkSupported(config: VideoDecoderConfig, what: string) {
   let supported = SUPPORTED.get(config.codec);
   if (supported === undefined) {
     supported = VideoDecoder.isConfigSupported(config).then(
@@ -152,18 +143,18 @@ async function checkSupported(
   }
   if (!(await supported)) {
     throw new Error(
-      `refkv.stream: this browser's VideoDecoder does not decode ${what} (${config.codec})` +
-        (hevc
-          ? "; WebCodecs decodes HEVC only where the platform has a decoder for it, such as Chrome or Edge with a hardware decoder, or Safari"
-          : ""),
+      `refkv.stream: this browser's VideoDecoder does not decode ${what} (${config.codec})`,
     );
   }
 }
 
+/** The video formats WebCodecs decodes here: all but HEVC. */
+export type WebCodecsFormat = Exclude<VideoFormat, "hevc">;
+
 /** A format's VideoDecoder configuration, by its decoder configuration
  * `description`, and its name in an error. */
 function videoConfig(
-  format: VideoFormat,
+  format: WebCodecsFormat,
   description: Uint8Array<ArrayBuffer>,
 ): [VideoDecoderConfig, string] {
   const optimizeForLatency = true;
@@ -172,15 +163,6 @@ function videoConfig(
       return [
         { codec: avcCodecString(description), description, optimizeForLatency },
         "H.264",
-      ];
-    case "hevc":
-      return [
-        {
-          codec: hevcCodecString(description),
-          description,
-          optimizeForLatency,
-        },
-        `HEVC ${hevcProfile(description)}`,
       ];
     case "av1":
       return [
@@ -208,7 +190,7 @@ function videoConfig(
  * sample and `chroma`, of the `format` stream whose decoder configuration is
  * `setup`. */
 export async function decodeVideo(
-  format: VideoFormat,
+  format: WebCodecsFormat,
   setup: string,
   encoded: Uint8Array<ArrayBuffer>,
   frames: number,
@@ -221,20 +203,18 @@ export async function decodeVideo(
   }
   const { units, positions } = parseStreamChunk(encoded);
   const description = base64Bytes(setup);
-  const hevc = format === "hevc";
   const [config, name] = videoConfig(format, description);
-  await checkSupported(config, name, hevc);
+  await checkSupported(config, name);
   let color: StreamColor = { fullRange: false };
   try {
-    if (format === "hevc") color = hevcStreamColor(description);
-    else if (format === "h264") color = streamColor(description);
+    if (format === "h264") color = streamColor(description);
     else if (format === "vp9")
       color = { fullRange: (description[6] & 1) === 1 };
   } catch {
     color = { fullRange: false };
   }
   // what only a decoder given as it is may show
-  const exactOnly = hevc || depth > 8 || chroma !== "4:2:0";
+  const exactOnly = depth > 8 || chroma !== "4:2:0";
   let planes: ChunkPlanes | undefined;
   let failure: unknown;
   const copies: Promise<void>[] = [];
@@ -251,7 +231,7 @@ export async function decodeVideo(
           try {
             if (frame.format === null) {
               throw new Error(
-                "refkv.stream: this browser's VideoDecoder gives pictures that WebCodecs cannot copy (of format null), as Chrome's does for HEVC of more than 8 bits or 4:2:2 on macOS",
+                "refkv.stream: this browser's VideoDecoder gives pictures that WebCodecs cannot copy (of format null)",
               );
             }
             const range = frame.colorSpace?.fullRange;
@@ -261,16 +241,6 @@ export async function decodeVideo(
             if (exactOnly && !isExactFormat(frame.format, depth, chroma)) {
               throw new Error(
                 `refkv.stream: this browser's VideoDecoder converts ${chroma} ${depth}-bit ${name} pictures to ${frame.format}; such a stream is shown only as the decoder gives it`,
-              );
-            }
-            if (
-              hevc &&
-              typeof range === "boolean" &&
-              range !== color.fullRange
-            ) {
-              const name = (full: boolean) => (full ? "full" : "limited");
-              throw new Error(
-                `refkv.stream: this browser's VideoDecoder converts HEVC pictures from ${name(color.fullRange)} range to ${name(range)}, which changes their chroma by up to tens of levels; HEVC is shown only as the decoder gives it`,
               );
             }
             const rect = frame.visibleRect!;
@@ -615,20 +585,37 @@ registerCodec({
       base64Bytes(configuration.setup),
       decodedArrayInfo.dataType === DataType.UINT16,
     );
+    const { format, setup } = configuration;
     const data: SampleArray = await SHARED.take(
-      configuration.setup,
+      setup,
       encoded,
       configuration.plane,
-      () =>
-        decodeVideo(
-          configuration.format,
-          configuration.setup,
+      () => {
+        if (format !== "hevc") {
+          return decodeVideo(
+            format,
+            setup,
+            encoded,
+            frames,
+            depth,
+            signal,
+            chroma,
+          );
+        }
+        // in a worker of the pool, off this one: a chunk deep in a stack of
+        // few keyframes decodes every picture before it. The bytes are copied,
+        // not transferred, since `SHARED` keeps them to match later requests.
+        return requestAsyncComputation(
+          decodeHevcChunk,
+          signal,
+          undefined,
+          base64Bytes(setup),
           encoded,
           frames,
           depth,
-          signal,
           chroma,
-        ),
+        );
+      },
     );
     if (data.length !== frames * height * width) {
       // no picture decoded (a chunk of zeros), or pictures of another size

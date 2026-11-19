@@ -144,11 +144,17 @@ Supported codecs:
   shape ends in ``[height, width, 3]`` or ``[height, width, 4]``, with all other
   dimensions 1, unassociated alpha, and alpha 255 for an image without any;
   ``hasalpha``, if given, must agree with the shape)
+- imagecodecs_lz4h5 (chunks of HDF5's LZ4 filter, 32004: their framing and LZ4
+  blocks, a block stored as it is when its stored length is the block's)
+- imagecodecs_lzf (a bare LZF stream, with ``header: false``, as HDF5's LZF
+  filter, 32000, writes it)
 - n5_default (one N5 default-mode block per chunk, header included, its
   body encoded with the inner codecs; edge blocks of another size are
   truncated or padded with zeros to the chunk's shape)
 - numcodecs.shuffle (numcodecs' byte shuffle, as zarr-python 3 names it)
 - numcodecs.zlib (zlib streams, as zarr-python 3 names numcodecs' Zlib)
+- refkv.h5_bitshuffle (chunks of HDF5's bitshuffle filter, 32008, with or
+  without its LZ4, as DECTRIS detectors write them)
 - refkv.precomputed (a chunk or a whole shard of a Neuroglancer precomputed
   volume, as refkv writes them: raw, jpeg, png, compressed_segmentation,
   compresso, crackle and jxl chunks, clipped ones filled with the fill value, a shard's chunks read through

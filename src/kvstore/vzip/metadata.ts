@@ -57,8 +57,10 @@ export class VzipError extends Error {
       | "resolution"
       | "request",
     message: string,
+    /** The binding whose store raised it: "vzip" or "phkv". */
+    format = "vzip",
   ) {
-    super(`vzip ${errorClass} error: ${message}`);
+    super(`${format} ${errorClass} error: ${message}`);
   }
 }
 
@@ -78,6 +80,12 @@ export interface VzipEntry {
   reference?: { headerId: number; payload: Uint8Array };
   // Set for an entry error (spec §8.4).
   error?: string;
+  // The CRC-32C of the value, for a phkv bytes record that has one (phkv spec §19.2).
+  crc32c?: number;
+  // The stored bytes of a phkv bytes record that is inline: already read with the record.
+  inline?: Uint8Array<ArrayBuffer>;
+  // A phkv record with the `hidden` flag: missing, as a vzip entry under `__vz__/` is.
+  hidden?: boolean;
 }
 
 export interface VzipMetadata {

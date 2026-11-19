@@ -1,0 +1,127 @@
+{
+ "mp4_hevc_aac/tracks_1_u": [
+  "f0",
+  "f4"
+ ],
+ "mp4_hevc_aac/tracks_1_v": [
+  "f0",
+  "f4"
+ ],
+ "mp4_hevc_aac/tracks_1_y": [
+  "f0",
+  "f4"
+ ],
+ "mp4_hevc_main10/tracks_1_u": [
+  "f0",
+  "f4"
+ ],
+ "mp4_hevc_main10/tracks_1_v": [
+  "f0",
+  "f4"
+ ],
+ "mp4_hevc_main10/tracks_1_y": [
+  "f0",
+  "f4"
+ ],
+ "mp4_hevc_12bit/tracks_1_u": [
+  "f0",
+  "f4"
+ ],
+ "mp4_hevc_12bit/tracks_1_v": [
+  "f0",
+  "f4"
+ ],
+ "mp4_hevc_12bit/tracks_1_y": [
+  "f0",
+  "f4"
+ ],
+ "mp4_hevc_422_8bit/tracks_1_u": [
+  "f0",
+  "f4"
+ ],
+ "mp4_hevc_422_8bit/tracks_1_v": [
+  "f0",
+  "f4"
+ ],
+ "mp4_hevc_422_8bit/tracks_1_y": [
+  "f0",
+  "f4"
+ ],
+ "mp4_hevc_422_12bit/tracks_1_u": [
+  "f0",
+  "f4"
+ ],
+ "mp4_hevc_422_12bit/tracks_1_v": [
+  "f0",
+  "f4"
+ ],
+ "mp4_hevc_422_12bit/tracks_1_y": [
+  "f0",
+  "f4"
+ ],
+ "mp4_hevc_gray10_groups/tracks_1_y": [
+  "f0",
+  "f4"
+ ],
+ "mp4_hevc_gray12/tracks_1_y": [
+  "f0",
+  "f4"
+ ],
+ "mp4_hevc_odd_size/tracks_1_u": [
+  "f0",
+  "f4"
+ ],
+ "mp4_hevc_odd_size/tracks_1_v": [
+  "f0",
+  "f4"
+ ],
+ "mp4_hevc_odd_size/tracks_1_y": [
+  "f0",
+  "f4"
+ ],
+ "mp4_hevc_open_gop/tracks_1_u": [
+  "f0",
+  "f4"
+ ],
+ "mp4_hevc_open_gop/tracks_1_v": [
+  "f0",
+  "f4"
+ ],
+ "mp4_hevc_open_gop/tracks_1_y": [
+  "f0",
+  "f4"
+ ],
+ "mp4_hevc_radl/tracks_1_u": [
+  "f0",
+  "f4"
+ ],
+ "mp4_hevc_radl/tracks_1_v": [
+  "f0",
+  "f4"
+ ],
+ "mp4_hevc_radl/tracks_1_y": [
+  "f0",
+  "f4"
+ ],
+ "mp4_hevc_long/tracks_1_u": [
+  "f0"
+ ],
+ "mp4_hevc_long/tracks_1_v": [
+  "f0"
+ ],
+ "mp4_hevc_long/tracks_1_y": [
+  "f0"
+ ],
+ "h5j_8bit/Channel_0_0": [
+  "f0",
+  "f4"
+ ],
+ "h5j_two_channels/Channel_0_0": [
+  "f0",
+  "f4"
+ ],
+ "h5j_two_channels/Channel_1_0": [
+  "f0",
+  "f4"
+ ]
+}
