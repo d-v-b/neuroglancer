@@ -16,9 +16,10 @@
 
 /**
  * @file What the `refkv.stream` codec needs besides a decoder: a chunk's
- * frames and their output positions, the WebCodecs codec string of an H.264
- * or HEVC stream, the copy of a decoded picture's planes into a chunk, and the
- * planes a decoding gave that were not asked for yet. A chunk is a varint
+ * frames and their output positions, the WebCodecs codec string of an H.264,
+ * AV1 or VP9 stream, the parameter sets of an HEVC stream, the copy of a
+ * decoded picture's planes into a chunk, and the planes a decoding gave that
+ * were not asked for yet. A chunk is a varint
  * count `n`, then for each frame a varint size and a zigzag varint of its
  * position less the previous frame's (the first's less -1), then the frames;
  * a frame at position -1 is decoded and dropped (refkv's spec/conventions.md, section 10
@@ -91,49 +92,6 @@ export function avcCodecString(avcc: Uint8Array): string {
   return `avc1.${hex(avcc[1])}${hex(avcc[2])}${hex(avcc[3])}`;
 }
 
-/** The WebCodecs codec string of an HEVC stream from its hvcC box's payload
- * (ISO/IEC 14496-15 E.3): `hvc1.` (or `hev1.`), then the general profile space
- * (none for 0, else "A" to "C") and profile, the profile compatibility flags
- * in reverse bit order in hex, the tier ("L" or "H") and level, and the
- * constraint flags' bytes in hex, without the trailing zero ones: x265's Main
- * at level 3 is `hvc1.1.6.L30.90`. */
-export function hevcCodecString(
-  hvcc: Uint8Array,
-  entry: "hvc1" | "hev1" = "hvc1",
-): string {
-  // version 1, and the reserved bits before min_spatial_segmentation_idc and
-  // parallelismType set
-  if (
-    hvcc.length < 23 ||
-    hvcc[0] !== 1 ||
-    (hvcc[13] & 0xf0) !== 0xf0 ||
-    (hvcc[15] & 0xfc) !== 0xfc
-  ) {
-    throw new Error("refkv.stream: the setup is not an hvcC box's payload");
-  }
-  const space = hvcc[1] >> 6;
-  const tier = (hvcc[1] >> 5) & 1;
-  const profile = hvcc[1] & 0x1f;
-  // general_profile_compatibility_flag[j], the j-th bit from the first
-  // byte's high bit, is bit j of the reversed value
-  let reversed = 0;
-  for (let j = 0; j < 32; ++j) {
-    if ((hvcc[2 + (j >> 3)] >> (7 - (j & 7))) & 1) reversed += 2 ** j;
-  }
-  const constraints = Array.from(hvcc.subarray(6, 12));
-  while (constraints.length > 0 && constraints[constraints.length - 1] === 0) {
-    constraints.pop();
-  }
-  const hex = (x: number) => x.toString(16).toUpperCase();
-  return [
-    entry,
-    `${["", "A", "B", "C"][space]}${profile}`,
-    hex(reversed),
-    `${tier ? "H" : "L"}${hvcc[12]}`,
-    ...constraints.map(hex),
-  ].join(".");
-}
-
 /** The WebCodecs codec string of an AV1 stream from its av1C box's payload
  * (AV1 ISOBMFF section 2.3.3): `av01.P.LLT.DD`, its profile, level, tier and bit
  * depth. */
@@ -173,7 +131,28 @@ export function vp9CodecString(vpcc: Uint8Array): string {
 }
 
 export type VideoFormat = "h264" | "hevc" | "av1" | "vp9";
-export type Chroma = "4:2:0" | "4:2:2";
+
+/** Checks that `hvcc` is an hvcC box's payload (ISO/IEC 14496-15 8.3.3.1):
+ * version 1, and the reserved bits before min_spatial_segmentation_idc and
+ * parallelismType set. */
+function checkHvcc(hvcc: Uint8Array) {
+  if (
+    hvcc.length < 23 ||
+    hvcc[0] !== 1 ||
+    (hvcc[13] & 0xf0) !== 0xf0 ||
+    (hvcc[15] & 0xfc) !== 0xfc
+  ) {
+    throw new Error("refkv.stream: the setup is not an hvcC box's payload");
+  }
+}
+/** A stream's chroma subsampling: 4:0:0 (luma alone) is HEVC's only. */
+export type Chroma = "4:0:0" | "4:2:0" | "4:2:2";
+
+const HEVC_CHROMA: Record<number, Chroma> = {
+  0: "4:0:0",
+  1: "4:2:0",
+  2: "4:2:2",
+};
 
 /** A video stream's bits a sample and chroma subsampling, by its decoder
  * configuration `setup`. An avcC box's are in its SPS: refkv writes uint16
@@ -186,11 +165,16 @@ export function streamFormat(
   switch (format) {
     case "h264":
       return { depth: wide ? 10 : 8, chroma: "4:2:0" };
-    case "hevc":
-      return {
-        depth: (setup[17] & 7) + 8,
-        chroma: (setup[16] & 3) === 2 ? "4:2:2" : "4:2:0",
-      };
+    case "hevc": {
+      checkHvcc(setup);
+      const chroma = HEVC_CHROMA[setup[16] & 3];
+      if (chroma === undefined) {
+        throw new Error(
+          "refkv.stream: HEVC of 4:4:4 is not decoded, only 4:0:0, 4:2:0 and 4:2:2",
+        );
+      }
+      return { depth: (setup[17] & 7) + 8, chroma };
+    }
     case "av1":
       return {
         depth: av1Depth(setup),
@@ -205,17 +189,6 @@ export function streamFormat(
         chroma: ((setup[6] >> 1) & 7) === 2 ? "4:2:2" : "4:2:0",
       };
   }
-}
-
-/** The general profile of an HEVC stream from its hvcC box's payload, by name
- * when it is Main or Main 10. */
-export function hevcProfile(hvcc: Uint8Array): string {
-  const profile = hvcc[1] & 0x1f;
-  return profile === 1
-    ? "Main"
-    : profile === 2
-      ? "Main 10"
-      : `profile ${profile}`;
 }
 
 /** What an AudioDecoder needs to know of an AAC stream, from its
@@ -449,8 +422,7 @@ const MATRICES: Record<number, string> = {
   9: "bt2020-ncl",
 };
 
-/** A stream's color signaling, from its first SPS's VUI (H.264 E.1, H.265
- * E.2): full range or not (limited when the VUI does not say), and its matrix,
+/** A stream's color signaling, from its first SPS's VUI (H.264 E.1): full range or not (limited when the VUI does not say), and its matrix,
  * if it names one this reader knows. */
 export interface StreamColor {
   fullRange: boolean;
@@ -507,8 +479,7 @@ function rbspBits(nal: Uint8Array, header: number) {
   return new Bits(Uint8Array.from(rbsp));
 }
 
-/** The color signaling at the start of an SPS's VUI, whose fields H.264 and
- * HEVC share up to the matrix. */
+/** The color signaling at the start of an SPS's VUI. */
 function vuiColor(r: Bits): StreamColor {
   if (r.bit() && r.bits(8) === 255) r.bits(32); // aspect ratio
   if (r.bit()) r.bit(); // overscan
@@ -572,109 +543,37 @@ export function streamColor(avcc: Uint8Array): StreamColor {
   return vuiColor(r);
 }
 
-/** The first SPS of an hvcC payload: its arrays follow the 23-byte header,
- * each a NAL unit type, a count and the units, each after its 16-bit size. */
-function hevcSps(hvcc: Uint8Array): Uint8Array | undefined {
+/** The NAL unit lengths' size of an HEVC stream whose hvcC payload is `hvcc`
+ * (ISO/IEC 14496-15 8.3.3.1), and its NAL units: its arrays follow the
+ * 23-byte header, each a NAL unit type, a count and the units, each after its
+ * 16-bit size. */
+export function hvccNalUnits(hvcc: Uint8Array): {
+  lengthSize: number;
+  nalUnits: Uint8Array[];
+} {
+  checkHvcc(hvcc);
+  const lengthSize = (hvcc[21] & 3) + 1;
+  if (lengthSize === 3) {
+    throw new Error("refkv.stream: an hvcC box's NAL unit lengths are 3 bytes");
+  }
+  const nalUnits: Uint8Array[] = [];
   let at = 23;
-  for (let a = 0; a < (hvcc[22] ?? 0) && at + 3 <= hvcc.length; ++a) {
-    const type = hvcc[at] & 0x3f;
+  const fail = () =>
+    new Error("refkv.stream: the hvcC box's NAL unit arrays overrun it");
+  for (let a = 0; a < hvcc[22]; ++a) {
+    if (at + 3 > hvcc.length) throw fail();
     const count = (hvcc[at + 1] << 8) | hvcc[at + 2];
     at += 3;
-    for (let k = 0; k < count && at + 2 <= hvcc.length; ++k) {
+    for (let k = 0; k < count; ++k) {
+      if (at + 2 > hvcc.length) throw fail();
       const length = (hvcc[at] << 8) | hvcc[at + 1];
       at += 2;
-      if (type === 33) return hvcc.subarray(at, at + length);
+      if (at + length > hvcc.length) throw fail();
+      nalUnits.push(hvcc.subarray(at, at + length));
       at += length;
     }
   }
-  return undefined;
-}
-
-/** The color signaling of the HEVC stream whose hvcC payload is `hvcc`, from
- * its first SPS (H.265 7.3.2.2.1). */
-export function hevcStreamColor(hvcc: Uint8Array): StreamColor {
-  const sps = hevcSps(hvcc);
-  if (sps === undefined) return LIMITED;
-  const r = rbspBits(sps, 2);
-  r.bits(4); // sps_video_parameter_set_id
-  const subLayers = r.bits(3); // sps_max_sub_layers_minus1
-  r.bit();
-  // profile_tier_level: the general profile and level, then the sub-layers'
-  r.bits(96);
-  const present: [number, number][] = [];
-  for (let i = 0; i < subLayers; ++i) present.push([r.bit(), r.bit()]);
-  if (subLayers > 0) r.bits(2 * (8 - subLayers));
-  for (const [profile, level] of present) {
-    if (profile) r.bits(88);
-    if (level) r.bits(8);
-  }
-  r.ue(); // sps_seq_parameter_set_id
-  if (r.ue() === 3) r.bit(); // chroma_format_idc, separate_colour_plane_flag
-  r.ue();
-  r.ue();
-  if (r.bit()) for (let i = 0; i < 4; ++i) r.ue(); // conformance window
-  r.ue(); // bit depths
-  r.ue();
-  const pocBits = r.ue() + 4; // log2_max_pic_order_cnt_lsb_minus4
-  for (let i = r.bit() ? 0 : subLayers; i <= subLayers; ++i) {
-    r.ue(); // sub-layer ordering
-    r.ue();
-    r.ue();
-  }
-  for (let i = 0; i < 6; ++i) r.ue(); // block sizes and transform depths
-  if (r.bit() && r.bit()) {
-    // scaling_list_data
-    for (let size = 0; size < 4; ++size) {
-      for (let matrix = 0; matrix < 6; matrix += size === 3 ? 3 : 1) {
-        if (!r.bit()) {
-          r.ue();
-          continue;
-        }
-        if (size > 1) r.se();
-        for (let i = 0; i < Math.min(64, 1 << (4 + (size << 1))); ++i) r.se();
-      }
-    }
-  }
-  r.bit(); // amp_enabled_flag
-  r.bit(); // sample_adaptive_offset_enabled_flag
-  if (r.bit()) {
-    // pcm
-    r.bits(8);
-    r.ue();
-    r.ue();
-    r.bit();
-  }
-  // st_ref_pic_set: a set predicted from the one before it has an entry for
-  // each of that one's pictures and itself, and as many pictures as it uses
-  const sets = r.ue();
-  const pictures: number[] = [];
-  for (let k = 0; k < sets; ++k) {
-    if (k > 0 && r.bit()) {
-      r.bit(); // delta_rps_sign
-      r.ue();
-      let used = 0;
-      for (let j = 0; j <= pictures[k - 1]; ++j) {
-        if (r.bit() || r.bit()) ++used; // used_by_curr_pic_flag, use_delta_flag
-      }
-      pictures.push(used);
-    } else {
-      const n = r.ue() + r.ue();
-      for (let j = 0; j < n; ++j) {
-        r.ue();
-        r.bit();
-      }
-      pictures.push(n);
-    }
-  }
-  if (r.bit()) {
-    // long-term reference pictures
-    const n = r.ue();
-    for (let i = 0; i < n; ++i) r.bits(pocBits + 1);
-  }
-  r.bit(); // sps_temporal_mvp_enabled_flag
-  r.bit(); // strong_intra_smoothing_enabled_flag
-  if (!r.bit()) return LIMITED; // vui_parameters_present_flag
-  return vuiColor(r);
+  return { lengthSize, nalUnits };
 }
 
 /** Converts a picture's full-range Y, U and V (a decoder's output for a
@@ -722,6 +621,16 @@ export function newChunkPlanes(
   const ch = chroma === "4:2:2" ? height : Math.ceil(height / 2);
   const array = (n: number) =>
     depth > 8 ? new Uint16Array(n) : new Uint8Array(n);
+  if (chroma === "4:0:0") {
+    // the luma alone: no u or v plane to give
+    return {
+      frames,
+      depth,
+      chroma,
+      shapes: { y: [height, width], u: [0, 0], v: [0, 0] },
+      data: { y: array(frames * width * height) },
+    };
+  }
   return {
     frames,
     depth,
@@ -770,6 +679,8 @@ function lumaWeights(matrix: string | null | undefined): [number, number] {
 /** The pixel formats of each chroma subsampling and bits a sample (more than 8
  * in the low bits of a little-endian 16-bit integer). */
 const YUV_FORMATS: Record<Chroma, Record<number, string[]>> = {
+  // no WebCodecs pixel format is luma alone
+  "4:0:0": {},
   "4:2:0": {
     8: ["I420", "I420A", "NV12"],
     10: ["I420P10", "I420AP10"],
@@ -861,6 +772,11 @@ export function copyPicture(
   if (position < 0 || position >= out.frames) {
     throw new Error(
       `refkv.stream: a picture at ${position} is outside the chunk's ${out.frames}`,
+    );
+  }
+  if (out.chroma === "4:0:0") {
+    throw new Error(
+      `refkv.stream: a picture decodes to ${format}, not 4:0:0 of ${out.depth} bits`,
     );
   }
   if (out.depth > 8) {
@@ -964,7 +880,8 @@ function heldBytes(planes: ChunkPlanes | undefined) {
  * for when they are: a chunk's Y, U and V are one chunk's bytes, so reading
  * them decodes it once. A plane is given once; at most `limit` bytes are kept,
  * the oldest chunk dropped first. While a chunk decodes, a request for another
- * of its planes waits for that decoding. */
+ * of its planes waits for that decoding, and decodes the chunk itself if that
+ * decoding fails (as when the request that started it is cancelled). */
 export class SharedPlanes {
   private entries = new Map<string, Entry[]>();
   private order: Entry[] = [];
@@ -984,9 +901,11 @@ export class SharedPlanes {
       .get(key)
       ?.find((e) => e.setup === setup && sameBytes(e.bytes, bytes));
     if (found !== undefined) {
-      const decoded = await found.planes;
-      const data = decoded.data[plane];
-      if (data !== undefined) {
+      // A decoding that fails, perhaps because the request that started it
+      // was cancelled, is started again for this one, which may not be.
+      const decoded = await found.planes.catch(() => undefined);
+      const data = decoded?.data[plane];
+      if (decoded !== undefined && data !== undefined) {
         delete decoded.data[plane];
         if (heldBytes(decoded) === 0) this.drop(found);
         return data;
