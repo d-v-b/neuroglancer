@@ -43,7 +43,9 @@ def files_blob() -> dict[str, tuple[int, int]]:
         key = path.relative_to(FILES).as_posix()
         layout[key] = (at, path.stat().st_size)
         at += path.stat().st_size + 5
-    assert at == (HERE / "files.blob").stat().st_size, "files.blob is not the one the layout says"
+    assert (
+        at == (HERE / "files.blob").stat().st_size
+    ), "files.blob is not the one the layout says"
     return layout
 
 
@@ -54,7 +56,13 @@ def write_files(name: str, layout: dict[str, tuple[int, int]], **options) -> Non
         for key, (offset, length) in layout.items():
             data = (FILES / key).read_bytes()
             if key == "a":  # Concat: a literal byte, then a url range
-                w.add_ranges(key, [Range(data=data[:1]), Range(source=blob, offset=offset + 1, length=length - 1)])
+                w.add_ranges(
+                    key,
+                    [
+                        Range(data=data[:1]),
+                        Range(source=blob, offset=offset + 1, length=length - 1),
+                    ],
+                )
             elif key == "c":  # a bytes value, stored as it is
                 w.add_bytes(key, data)
             elif key == "#":  # a bytes value, DEFLATE-compressed
@@ -62,7 +70,9 @@ def write_files(name: str, layout: dict[str, tuple[int, int]], **options) -> Non
             elif key == "empty":  # an empty Concat
                 w.add_ranges(key, [])
             elif key == "baz/x":  # a data source
-                w.add_ranges(key, [Range(source=w.blob(data), offset=0, length=len(data))])
+                w.add_ranges(
+                    key, [Range(source=w.blob(data), offset=0, length=len(data))]
+                )
             else:  # a url range
                 w.add_ref(key, "files.blob", offset, length)
 
