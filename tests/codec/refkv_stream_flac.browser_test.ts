@@ -17,7 +17,10 @@
 import { expect, test } from "vitest";
 import "#src/datasource/zarr/codec/resolvers.js";
 import { decodeArray } from "#src/datasource/zarr/codec/decode.js";
-import { decodeFlac } from "#src/datasource/zarr/codec/refkv_stream/decode.js";
+import {
+  decodeFlac,
+  flacDecodes33BitSide,
+} from "#src/datasource/zarr/codec/refkv_stream/decode.js";
 import { parseCodecChainSpec } from "#src/datasource/zarr/codec/resolve.js";
 import { DataType } from "#src/util/data_type.js";
 import { parseNpy } from "#src/util/npy.js";
@@ -96,8 +99,19 @@ async function readArray(name: string) {
   return { out: out!, shape };
 }
 
+// 32-bit stereo streams whose side channel takes 33 bits, which a browser
+// whose decoder loses such a channel refuses (`flacDecodes33BitSide`)
+const SIDE_33_BITS = new Set(["flac_bitwise_32"]);
+
 test("decodes refkv's flac shards to the stream's samples", async () => {
+  const exact33 = await flacDecodes33BitSide();
   for (const name of NAMES) {
+    if (SIDE_33_BITS.has(name) && !exact33) {
+      await expect(readArray(name)).rejects.toThrow(
+        /loses the 33-bit side channel of a 32-bit stereo stream/,
+      );
+      continue;
+    }
     const expected = parseNpy(await get(`${name}/expected.npy`));
     const { out, shape } = await readArray(name);
     expect([name, shape]).toEqual([name, expected.shape]);

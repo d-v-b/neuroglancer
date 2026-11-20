@@ -36,7 +36,10 @@ import { matchesTerms, matchPredicate } from "#src/ui/tool_query.js";
 import { animationFrameDebounce } from "#src/util/animation_frame_debounce.js";
 import type { Borrowed, Owned } from "#src/util/disposable.js";
 import { RefCounted } from "#src/util/disposable.js";
-import { getDropEffectFromModifiers } from "#src/util/drag_and_drop.js";
+import {
+  declareAllowedDropEffects,
+  getDropEffectFromModifiers,
+} from "#src/util/drag_and_drop.js";
 import type {
   ActionEvent,
   EventActionMap,
@@ -704,6 +707,7 @@ export class ToolBindingWidget<Context extends object> extends RefCounted {
     if (dragElement !== undefined) {
       dragElement.draggable = true;
       dragElement.addEventListener("dragstart", (event: DragEvent) => {
+        declareAllowedDropEffects(event, "copyMove");
         pushDragStatus(
           event,
           dragElement,
@@ -714,7 +718,7 @@ export class ToolBindingWidget<Context extends object> extends RefCounted {
         beginToolDrag(this);
         const { toolPaletteState } = this.localBinder.globalBinder;
         const self = this;
-        toolPaletteState.viewer.sidePanelManager.startDrag(
+        toolPaletteState.viewer.sidePanelManager?.startDrag(
           {
             dropAsNewPanel: (location, dropEffect) => {
               const palette = toolPaletteState.addNew({ location });
@@ -754,7 +758,7 @@ export class ToolBindingWidget<Context extends object> extends RefCounted {
         popDragStatus(event, dragElement, "drag");
         endToolDrag(this);
         const { toolPaletteState } = this.localBinder.globalBinder;
-        toolPaletteState.viewer.sidePanelManager.endDrag();
+        toolPaletteState.viewer.sidePanelManager?.endDrag();
         event.stopPropagation();
       });
     }

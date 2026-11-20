@@ -454,14 +454,67 @@ export async function decodeAac(
   );
 }
 
+// A 32-bit right/side FLAC stream of one frame of 16 samples, both subframes
+// verbatim, whose side channel takes 33 bits (RFC 9639's interchannel
+// decorrelation, <https://www.rfc-editor.org/rfc/rfc9639.html>), and its
+// samples, interleaved by channel, as ffmpeg decodes them. Some decoders
+// lose such a side channel (Chromium's, as Playwright 1.64 ships it, gives
+// the right channel for the left), so a 32-bit stereo stream is decoded only
+// where this frame decodes exactly.
+const FLAC_33_BIT_SIDE_SETUP =
+  "ZkxhQ4AAACIAEAAQAAAAAAAACsRD8AAAABAAAAAAAAAAAAAAAAAAAAAA";
+const FLAC_33_BIT_SIDE_FRAME =
+  "//hpngAP5AJ/////wAAAAH/////gAAAAG//////FIZdY63mixUAAAABf/////////IAAAAHQ" +
+  "AAAAJ/////H///9XAAAAVcRlNfwCgAAAAH////8AAAAA/////wAAAAEHW80VxSGXT0AAAADA" +
+  "AAAAAAAAB/////l////+gAAAAQAAACr////WO5rKByeh";
+const FLAC_33_BIT_SIDE_SAMPLES = [
+  2147483647, -2147483648, -2147483648, 2147483647, -1, 0, 0, -1, -2147483648,
+  1, -123456789, 123456789, 987654321, -987654321, -2147483648, 1073741824,
+  2147483647, -1073741824, -7, 7, 7, -7, -2147483648, 2147483646, 2147483647,
+  -2147483647, 2147483647, 42, -2147483648, -42, 3, 1000000007,
+];
+
+let flac33BitSide: Promise<boolean> | undefined;
+
+/** Whether this browser's FLAC decoder decodes a side channel of 33 bits (of
+ * a 32-bit stereo stream) exactly, found once by decoding a known frame. */
+export function flacDecodes33BitSide(): Promise<boolean> {
+  flac33BitSide ??= (async () => {
+    const frame = base64Bytes(FLAC_33_BIT_SIDE_FRAME);
+    // a refkv.stream chunk of the one frame, at position 0
+    // <https://github.com/d-v-b/refkv/blob/main/spec/conventions.md#type-streamchunk>
+    const head = [1, 0x80 | (frame.length & 0x7f), frame.length >> 7, 2];
+    const encoded = new Uint8Array(head.length + frame.length);
+    encoded.set(head);
+    encoded.set(frame, head.length);
+    try {
+      const out = await decodeFlac(
+        FLAC_33_BIT_SIDE_SETUP,
+        encoded,
+        new Int32Array(FLAC_33_BIT_SIDE_SAMPLES.length),
+        2,
+        new AbortController().signal,
+        false,
+      );
+      return FLAC_33_BIT_SIDE_SAMPLES.every((v, i) => out[i] === v);
+    } catch {
+      return false;
+    }
+  })();
+  return flac33BitSide;
+}
+
 /** The chunk's `[samples, channels]` integer samples of a FLAC stream,
- * interleaved by channel, in `out`. */
+ * interleaved by channel, in `out`. A 32-bit stereo stream is refused where
+ * the browser's decoder loses 33-bit side channels (`flacDecodes33BitSide`);
+ * `check` is false only for that test itself. */
 export async function decodeFlac<T extends FlacSamples>(
   setup: string,
   encoded: Uint8Array<ArrayBuffer>,
   out: T,
   channels: number,
   signal: AbortSignal,
+  check = true,
 ): Promise<T> {
   const samples = out.length / channels;
   const { units, positions } = parseStreamChunk(encoded);
@@ -474,6 +527,16 @@ export async function decodeFlac<T extends FlacSamples>(
   if (stream.channels !== channels) {
     throw new Error(
       `refkv.stream: the flac stream has ${stream.channels} channels, not the chunk's ${channels}`,
+    );
+  }
+  if (
+    check &&
+    stream.bitsPerSample === 32 &&
+    channels === 2 &&
+    !(await flacDecodes33BitSide())
+  ) {
+    throw new Error(
+      "refkv.stream: this browser's flac decoder loses the 33-bit side channel of a 32-bit stereo stream",
     );
   }
   // a frame's duration, in the microseconds of a timestamp: every frame but

@@ -22,6 +22,10 @@ import "#src/datasource/zarr/codec/crc32c/decode.js";
 import "#src/datasource/zarr/codec/delta/decode.js";
 import "#src/datasource/zarr/codec/dicomrle/decode.js";
 
+import "#src/datasource/zarr/codec/bytes/encode.js";
+import "#src/datasource/zarr/codec/gzip/encode.js";
+import "#src/datasource/zarr/codec/blosc/encode.js";
+
 import { WithParameters } from "#src/chunk_manager/backend.js";
 import { VolumeChunkSourceParameters } from "#src/datasource/zarr/base.js";
 import {
@@ -62,6 +66,7 @@ import "#src/datasource/zarr/codec/sharding_indexed/decode.js";
 import "#src/datasource/zarr/codec/transpose/decode.js";
 import "#src/datasource/zarr/codec/webp/decode.js";
 import "#src/datasource/zarr/codec/zarr_packbits/decode.js";
+import { encodeArray } from "#src/datasource/zarr/codec/encode.js";
 import type { CodecChainSpec } from "#src/datasource/zarr/codec/index.js";
 import "#src/datasource/zarr/codec/resolvers.js";
 import { parseCodecChainSpec } from "#src/datasource/zarr/codec/resolve.js";
@@ -76,15 +81,19 @@ import { WithSharedKvStoreContextCounterpart } from "#src/kvstore/backend.js";
 import { postProcessRawData } from "#src/sliceview/backend_chunk_decoders/postprocess.js";
 import type { VolumeChunk } from "#src/sliceview/volume/backend.js";
 import { VolumeChunkSource } from "#src/sliceview/volume/backend.js";
+import type { WritableVolumeChunkSource } from "#src/sliceview/volume/base.js";
 import type { TypedArray } from "#src/util/array.js";
 import { DATA_TYPE_BYTES, makeDataTypeArrayView } from "#src/util/data_type.js";
 import { registerSharedObject } from "#src/worker_rpc.js";
 
 @registerSharedObject()
-export class ZarrVolumeChunkSource extends WithParameters(
-  WithSharedKvStoreContextCounterpart(VolumeChunkSource),
-  VolumeChunkSourceParameters,
-) {
+export class ZarrVolumeChunkSource
+  extends WithParameters(
+    WithSharedKvStoreContextCounterpart(VolumeChunkSource),
+    VolumeChunkSourceParameters,
+  )
+  implements WritableVolumeChunkSource
+{
   private chunkKvStore = applySharding(
     this.chunkManager,
     this.parameters.metadata.codecs,
@@ -124,9 +133,26 @@ export class ZarrVolumeChunkSource extends WithParameters(
       );
     }
     chunk.chunkDataSize = this.spec.chunkDataSize;
-    const { parameters } = this;
     const { chunkGridPosition } = chunk;
-    const { metadata } = parameters;
+    const { chunkKvStore } = this;
+    const response = await chunkKvStore.kvStore.read(
+      this.getChunkStoreKey(chunkGridPosition),
+      { signal },
+    );
+    if (response !== undefined) {
+      const decoded = await decodeArray(
+        chunkKvStore.decodeCodecs,
+        new Uint8Array(await response.response.arrayBuffer()),
+        signal,
+      );
+      await postProcessRawData(chunk, signal, decoded);
+    }
+  }
+
+  // The key of the stored chunk at `chunkGridPosition` of a regular grid.
+  // Sharded stores use structured (non-string) keys, hence the unknown type.
+  private getChunkStoreKey(chunkGridPosition: Float32Array): unknown {
+    const { metadata } = this.parameters;
     const rank = this.spec.rank;
     const { physicalToLogicalDimension } = metadata.codecs.layoutInfo[0];
     const keyCoords = new Array<number>(rank);
@@ -144,20 +170,10 @@ export class ZarrVolumeChunkSource extends WithParameters(
           chunkShape[decodedDim],
       );
     }
-    const baseKey = this.getBaseKey(keyCoords);
-    const { chunkKvStore } = this;
-    const response = await chunkKvStore.kvStore.read(
-      chunkKvStore.getChunkKey(chunkGridPosition, baseKey),
-      { signal },
+    return this.chunkKvStore.getChunkKey(
+      chunkGridPosition,
+      this.getBaseKey(keyCoords),
     );
-    if (response !== undefined) {
-      const decoded = await decodeArray(
-        chunkKvStore.decodeCodecs,
-        new Uint8Array(await response.response.arrayBuffer()),
-        signal,
-      );
-      await postProcessRawData(chunk, signal, decoded);
-    }
   }
 
   private getBaseKey(keyCoords: readonly number[]) {
@@ -339,5 +355,51 @@ export class ZarrVolumeChunkSource extends WithParameters(
       ? spec.chunkDataSize
       : size;
     await postProcessRawData(chunk, signal, data);
+  }
+
+  async writeChunk(
+    chunkGridPosition: Float32Array,
+    chunkDataSize: Uint32Array,
+    data: ArrayBufferView,
+  ): Promise<void> {
+    if (
+      this.parameters.metadata.chunkGrid !== undefined ||
+      this.spansReadChunks
+    ) {
+      throw new Error(
+        "ZarrVolumeChunkSource.writeChunk: writing is not supported for " +
+          "rectilinear chunk grids or chunks assembled from several stored chunks",
+      );
+    }
+    const { kvStore, decodeCodecs } = this.chunkKvStore;
+    if (!kvStore.write) {
+      throw new Error(
+        "ZarrVolumeChunkSource.writeChunk: underlying kvStore is not writable",
+      );
+    }
+
+    // Never write a body whose element count does not match the chunk. A
+    // zero-length view here means the underlying buffer was detached (its
+    // ArrayBuffer transferred to the frontend); writing it would durably
+    // corrupt the stored object (e.g. a 20-byte gzip of an empty stream).
+    const expectedElements = chunkDataSize.reduce((a, b) => a * b, 1);
+    const actualElements = (data as unknown as { length: number }).length;
+    if (expectedElements === 0 || actualElements !== expectedElements) {
+      throw new Error(
+        `ZarrVolumeChunkSource.writeChunk: refusing to write chunk with ` +
+          `${actualElements} elements (expected ${expectedElements}); ` +
+          `buffer detached or chunk size invalid.`,
+      );
+    }
+
+    const encoded = await encodeArray(
+      decodeCodecs,
+      data as ArrayBufferView<ArrayBufferLike>,
+      new AbortController().signal,
+    );
+
+    const key = this.getChunkStoreKey(chunkGridPosition);
+    const arrayBuffer = new Uint8Array(encoded).buffer;
+    await kvStore.write!(key, arrayBuffer);
   }
 }

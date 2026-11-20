@@ -45,6 +45,7 @@ import { createSteppedCssGradient } from "#src/util/color.js";
 import { RefCounted } from "#src/util/disposable.js";
 import { updateChildren } from "#src/util/dom.js";
 import { emptyToUndefined } from "#src/util/json.js";
+import { hasCommandOrControl } from "#src/util/platform.js";
 import type { Trackable } from "#src/util/trackable.js";
 import { CheckboxIcon } from "#src/widget/checkbox_icon.js";
 import { makeDeleteButton } from "#src/widget/delete_button.js";
@@ -168,12 +169,15 @@ class LayerColorWidget extends RefCounted {
       if (colors.length === 1) setSingleColor();
       else setMultiColor();
     };
+    const scheduleLayerColorUpdate = this.registerCancellable(
+      animationFrameDebounce(updateLayerColorWidget),
+    );
 
     const listenForColorChange = () => {
       if (!this.layer.isReady()) return;
       this.colorChangeDisposer();
       this.colorChangeDisposer = layer.observeLayerColor(() => {
-        updateLayerColorWidget();
+        scheduleLayerColorUpdate();
       });
     };
     this.registerDisposer(this.colorChangeDisposer);
@@ -184,12 +188,12 @@ class LayerColorWidget extends RefCounted {
     this.registerDisposer(
       layer.layerChanged.add(() => {
         element.dataset.visible = this.layer.visible.toString();
-        updateLayerColorWidget();
+        scheduleLayerColorUpdate();
       }),
     );
     element.dataset.visible = this.layer.visible.toString();
     listenForColorChange();
-    updateLayerColorWidget();
+    scheduleLayerColorUpdate();
   }
 
   private updateTooltip(message: string) {
@@ -304,7 +308,7 @@ class LayerListItem extends RefCounted {
     );
 
     element.addEventListener("click", (event: MouseEvent) => {
-      if (event.ctrlKey) {
+      if (hasCommandOrControl(event)) {
         panel.selectedLayer.toggle(layer);
         event.preventDefault();
       } else if (event.altKey) {
