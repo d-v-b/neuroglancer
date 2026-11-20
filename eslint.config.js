@@ -13,6 +13,8 @@ export default tseslint.config(
       "templates/neuroglancer/sliceview",
       "src/third_party/jpgjs/jpg.js",
       "src/third_party/refkv/refkv_embed.js",
+      "src/sliceview/ndic/ndic_zarr.js",
+      "src/sliceview/ndic/ndic_zarr.d.ts",
       "**/templates",
       "**/build",
       "**/.tox",
