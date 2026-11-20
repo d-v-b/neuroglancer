@@ -31,6 +31,7 @@ declare const TEST_DATA_SERVER: string;
 
 datasourceMetadataSnapshotTests("zarr", [
   "zarr_v3/examples/single_res",
+  "zarr_v3/examples/transpose",
   "ome_zarr/simple_0.4",
   "ome_zarr/simple_0.5",
   "ome_zarr/simple_0.5.zip",

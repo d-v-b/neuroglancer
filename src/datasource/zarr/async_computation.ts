@@ -12,3 +12,4 @@ import "#src/async_computation/decode_ljpeg.js";
 import "#src/async_computation/decode_ndic.js";
 import "#src/async_computation/decode_png.js";
 import "#src/async_computation/decode_webp.js";
+import "#src/async_computation/encode_blosc.js";
